@@ -9,5 +9,5 @@
 - Weeks run Monday through Sunday and calculations include only days through today. Future days never affect status.
 - Weekly completion is accounted items divided by expected non-excused items. Zero expected items are neutral.
 - Green is at least 95 percent, yellow is at least 85 percent and below 95 percent, and red is below 85 percent.
-- At the end of Sunday, at least 85 percent earns allowance. Children never see numeric percentages.
+- At the end of Sunday, at least 85 percent earns allowance. Children see the previous completed week's earned or not earned result, but never numeric percentages.
 - A streak day has at least one expected item and all expected items accounted for. A missed item breaks the streak. Excused and zero-item days are neutral. Today counts only when complete.
