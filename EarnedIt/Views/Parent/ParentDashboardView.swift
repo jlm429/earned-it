@@ -8,8 +8,8 @@ struct ParentDashboardView: View {
     @Query private var excusedDays: [ExcusedDay]
 
     let parent: FamilyUser
+    let today: Date
 
-    @State private var today = Date.now
     @State private var showingNewResponsibility = false
 
     private var children: [FamilyUser] {
@@ -42,7 +42,7 @@ struct ParentDashboardView: View {
                 } else {
                     ForEach(children) { child in
                         NavigationLink {
-                            ParentChildDetailView(parent: parent, child: child)
+                            ParentChildDetailView(parent: parent, child: child, today: today)
                         } label: {
                             ParentChildCard(
                                 child: child,
@@ -171,7 +171,8 @@ private struct ParentChildCard: View {
 
     private func state(for responsibility: Responsibility) -> DailyStateKind {
         records.first {
-            $0.responsibilityID == responsibility.id && AppCalendar.current.isDate($0.day, inSameDayAs: today)
+            $0.responsibilityID == responsibility.id
+                && AppCalendar.isPersistedDay($0.day, sameDayAs: today)
         }?.state ?? .unmarked
     }
 }

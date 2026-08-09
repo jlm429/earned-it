@@ -4,15 +4,16 @@ import SwiftUI
 struct MainRoleView: View {
     @Environment(\.modelContext) private var modelContext
     let user: FamilyUser
+    let today: Date
 
     var body: some View {
         NavigationStack {
             Group {
                 switch user.role {
                 case .parent:
-                    ParentDashboardView(parent: user)
+                    ParentDashboardView(parent: user, today: today)
                 case .child:
-                    ChildHomeView(child: user)
+                    ChildHomeView(child: user, today: today)
                 }
             }
             .toolbar {

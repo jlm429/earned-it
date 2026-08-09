@@ -14,14 +14,27 @@ final class BusinessRulesTests: XCTestCase {
     }
 
     func testNewCurrentDayRecordBeginsUnmarked() {
+        let responsibilityID = UUID()
         let record = DailyRecord(
-            responsibilityID: UUID(),
+            responsibilityID: responsibilityID,
             childID: UUID(),
             day: date(2026, 8, 9),
             calendar: calendar
         )
 
+        var tokyoCalendar = calendar!
+        tokyoCalendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let tokyoDate = tokyoCalendar.date(from: DateComponents(year: 2026, month: 8, day: 9))!
+        let sameLocalDay = DailyRecord(
+            responsibilityID: responsibilityID,
+            childID: UUID(),
+            day: tokyoDate,
+            calendar: tokyoCalendar
+        )
+
         XCTAssertEqual(record.state, .unmarked)
+        XCTAssertEqual(record.uniqueKey, sameLocalDay.uniqueKey)
+        XCTAssertEqual(record.day, sameLocalDay.day)
     }
 
     func testDoneAndNotNeededCountEquallyAsAccountedFor() {
@@ -87,8 +100,10 @@ final class BusinessRulesTests: XCTestCase {
             isExcused: false
         )
 
-        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: [earns], asOf: sunday, calendar: calendar), true)
-        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: [below], asOf: sunday, calendar: calendar), false)
+        let monday = date(2026, 8, 10)
+        XCTAssertNil(WeeklyScoringService.allowanceEarned(days: [earns], asOf: sunday, calendar: calendar))
+        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: [earns], asOf: monday, calendar: calendar), true)
+        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: [below], asOf: monday, calendar: calendar), false)
         XCTAssertNil(WeeklyScoringService.allowanceEarned(days: [earns], asOf: date(2026, 8, 8), calendar: calendar))
     }
 
@@ -131,6 +146,18 @@ final class BusinessRulesTests: XCTestCase {
         )
 
         XCTAssertFalse(PermissionService.canManageDefinition(user: child, responsibility: item))
+        XCTAssertFalse(PermissionService.canRemoveUser(
+            child,
+            allUsers: [child, FamilyUser(displayName: "Parent", role: .parent, avatar: .sun)],
+            responsibilities: [item]
+        ))
+        item.isActive = false
+        item.archivedAt = date(2026, 8, 9)
+        XCTAssertTrue(PermissionService.canRemoveUser(
+            child,
+            allUsers: [child, FamilyUser(displayName: "Parent", role: .parent, avatar: .sun)],
+            responsibilities: [item]
+        ))
         XCTAssertTrue(PermissionService.canSetState(
             user: child,
             responsibility: item,
@@ -178,6 +205,14 @@ final class BusinessRulesTests: XCTestCase {
             ))
             record.state = .unmarked
             XCTAssertEqual(record.state, .unmarked)
+            XCTAssertFalse(PermissionService.canSetState(
+                user: parent,
+                responsibility: item,
+                state: .unmarked,
+                date: date(2026, 8, 8),
+                today: date(2026, 8, 9),
+                calendar: calendar
+            ))
         }
     }
 

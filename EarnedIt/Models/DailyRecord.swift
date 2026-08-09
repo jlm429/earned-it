@@ -20,12 +20,12 @@ final class DailyRecord {
         calendar: Calendar = AppCalendar.current,
         updatedAt: Date = .now
     ) {
-        let normalizedDay = calendar.startOfDay(for: day)
+        let dayIdentifier = AppCalendar.dayIdentifier(for: day, calendar: calendar)
         self.id = id
-        uniqueKey = Self.key(responsibilityID: responsibilityID, day: normalizedDay)
+        uniqueKey = Self.key(responsibilityID: responsibilityID, dayIdentifier: dayIdentifier)
         self.responsibilityID = responsibilityID
         self.childID = childID
-        self.day = normalizedDay
+        self.day = AppCalendar.persistedDay(for: day, calendar: calendar)
         stateRawValue = state.rawValue
         self.updatedAt = updatedAt
     }
@@ -38,7 +38,21 @@ final class DailyRecord {
         }
     }
 
-    static func key(responsibilityID: UUID, day: Date) -> String {
-        "\(responsibilityID.uuidString)|\(Int(day.timeIntervalSinceReferenceDate))"
+    static func key(
+        responsibilityID: UUID,
+        day: Date,
+        calendar: Calendar = AppCalendar.current
+    ) -> String {
+        key(responsibilityID: responsibilityID, dayIdentifier: AppCalendar.dayIdentifier(for: day, calendar: calendar))
+    }
+
+    static func key(responsibilityID: UUID, dayIdentifier: String) -> String {
+        "\(responsibilityID.uuidString)|\(dayIdentifier)"
+    }
+
+    static func dayIdentifier(from uniqueKey: String) -> String? {
+        guard let identifier = uniqueKey.split(separator: "|").last.map(String.init),
+              AppCalendar.persistedDay(for: identifier) != nil else { return nil }
+        return identifier
     }
 }

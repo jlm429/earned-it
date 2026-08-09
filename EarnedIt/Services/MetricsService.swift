@@ -40,10 +40,13 @@ enum MetricsService {
             let expected = childResponsibilities.filter { $0.isExpected(on: day, calendar: calendar) }
             let states = expected.map { responsibility in
                 childRecords.first {
-                    $0.responsibilityID == responsibility.id && calendar.isDate($0.day, inSameDayAs: day)
+                    $0.responsibilityID == responsibility.id
+                        && AppCalendar.isPersistedDay($0.day, sameDayAs: day, calendar: calendar)
                 }?.state ?? .unmarked
             }
-            let isExcused = childExcuses.contains { calendar.isDate($0.day, inSameDayAs: day) }
+            let isExcused = childExcuses.contains {
+                AppCalendar.isPersistedDay($0.day, sameDayAs: day, calendar: calendar)
+            }
             return DayFacts(date: day, states: states, isExcused: isExcused)
         }
     }

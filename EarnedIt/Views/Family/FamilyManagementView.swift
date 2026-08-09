@@ -5,8 +5,6 @@ struct FamilyManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
     @Query private var responsibilities: [Responsibility]
-    @Query private var records: [DailyRecord]
-    @Query private var excusedDays: [ExcusedDay]
 
     let parent: FamilyUser
 
@@ -38,7 +36,7 @@ struct FamilyManagementView: View {
             }
 
             Section {
-                Text("A user can be removed only when no responsibility is assigned to or created by that person. The last parent cannot be removed.")
+                Text("A user can be removed only when no active responsibility is assigned to or created by that person. Historical records remain local. The last parent cannot be removed.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -114,12 +112,10 @@ struct FamilyManagementView: View {
             return
         }
         guard PermissionService.canRemoveUser(user, allUsers: users, responsibilities: responsibilities) else {
-            removalMessage = "Archive or reassign every responsibility connected to this user first. At least one parent must remain."
+            removalMessage = "Archive or reassign every active responsibility connected to this user first. At least one parent must remain."
             return
         }
         do {
-            records.filter { $0.childID == user.id }.forEach(modelContext.delete)
-            excusedDays.filter { $0.childID == user.id }.forEach(modelContext.delete)
             modelContext.delete(user)
             try modelContext.save()
         } catch {

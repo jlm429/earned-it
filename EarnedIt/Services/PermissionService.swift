@@ -20,6 +20,9 @@ enum PermissionService {
         today: Date,
         calendar: Calendar = AppCalendar.current
     ) -> Bool {
+        if state == .unmarked && calendar.startOfDay(for: date) < calendar.startOfDay(for: today) {
+            return false
+        }
         if user.role == .parent { return true }
         return responsibility.assignedChildID == user.id
             && calendar.isDate(date, inSameDayAs: today)
@@ -34,8 +37,10 @@ enum PermissionService {
         if user.role == .parent && allUsers.filter({ $0.role == .parent }).count <= 1 {
             return false
         }
-        return !responsibilities.contains {
-            $0.creatorID == user.id || $0.assignedChildID == user.id
+        return !responsibilities.contains { responsibility in
+            responsibility.isActive && (
+                responsibility.creatorID == user.id || responsibility.assignedChildID == user.id
+            )
         }
     }
 }

@@ -1,13 +1,16 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
     @Query private var settings: [AppSetting]
 
     @State private var isPreparing = true
     @State private var preparationError: String?
+    @State private var today = Date.now
 
     private var setupComplete: Bool {
         SettingsStore.bool(for: SettingsStore.setupCompleteKey, in: settings)
@@ -27,25 +30,25 @@ struct RootView: View {
             } else if !setupComplete {
                 SetupView()
             } else if let selectedUser {
-                MainRoleView(user: selectedUser)
+                MainRoleView(user: selectedUser, today: today)
             } else {
                 UserSelectionView()
             }
         }
         .task {
-            guard isPreparing else { return }
-            do {
-                if ProcessInfo.processInfo.arguments.contains("--clear-all-data") {
-                    try SampleDataService.clearAll(context: modelContext)
-                } else if ProcessInfo.processInfo.arguments.contains("--reset-sample-data") {
-                    try SampleDataService.seed(context: modelContext)
-                } else {
-                    try DataCoordinator.prepareDailyData(context: modelContext)
-                }
-            } catch {
-                preparationError = error.localizedDescription
-            }
-            isPreparing = false
+            prepareForLaunch()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, !isPreparing else { return }
+            refreshDailyData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            guard !isPreparing else { return }
+            refreshDailyData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            guard !isPreparing else { return }
+            refreshDailyData()
         }
         .alert("Local Data Error", isPresented: Binding(
             get: { preparationError != nil },
@@ -54,6 +57,32 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(preparationError ?? "Please try again.")
+        }
+    }
+
+    private func prepareForLaunch() {
+        guard isPreparing else { return }
+        do {
+            if ProcessInfo.processInfo.arguments.contains("--clear-all-data") {
+                try SampleDataService.clearAll(context: modelContext)
+            } else if ProcessInfo.processInfo.arguments.contains("--reset-sample-data") {
+                try SampleDataService.seed(context: modelContext)
+            } else {
+                try DataCoordinator.prepareDailyData(context: modelContext, today: today)
+            }
+        } catch {
+            preparationError = error.localizedDescription
+        }
+        isPreparing = false
+    }
+
+    private func refreshDailyData() {
+        let now = Date.now
+        today = now
+        do {
+            try DataCoordinator.prepareDailyData(context: modelContext, today: now)
+        } catch {
+            preparationError = error.localizedDescription
         }
     }
 }

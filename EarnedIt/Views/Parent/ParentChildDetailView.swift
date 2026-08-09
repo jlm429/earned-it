@@ -3,17 +3,22 @@ import SwiftUI
 
 struct ParentChildDetailView: View {
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
     @Query private var responsibilities: [Responsibility]
     @Query private var records: [DailyRecord]
     @Query private var excusedDays: [ExcusedDay]
 
     let parent: FamilyUser
     let child: FamilyUser
+    let today: Date
 
-    @State private var today = Date.now
     @State private var selectedDate = Date.now
     @State private var presentedForm: PresentedResponsibility?
     @State private var errorMessage: String?
+
+    private var children: [FamilyUser] {
+        users.filter { $0.role == .child }
+    }
 
     private var selectedItems: [Responsibility] {
         responsibilities
@@ -50,7 +55,7 @@ struct ParentChildDetailView: View {
 
     private var isSelectedDayExcused: Bool {
         excusedDays.contains {
-            $0.childID == child.id && AppCalendar.current.isDate($0.day, inSameDayAs: selectedDate)
+            $0.childID == child.id && AppCalendar.isPersistedDay($0.day, sameDayAs: selectedDate)
         }
     }
 
@@ -85,7 +90,7 @@ struct ParentChildDetailView: View {
                             ResponsibilityRow(
                                 responsibility: responsibility,
                                 state: state(for: responsibility),
-                                availableStates: DailyStateKind.allCases,
+                                availableStates: availableStates,
                                 isExcused: false,
                                 canManageDefinition: true,
                                 onStateChange: { update($0, for: responsibility) },
@@ -114,7 +119,7 @@ struct ParentChildDetailView: View {
         .sheet(item: $presentedForm) { presentation in
             ResponsibilityFormView(
                 actor: parent,
-                children: [child],
+                children: children,
                 existing: presentation.responsibility
             )
         }
@@ -125,6 +130,11 @@ struct ParentChildDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "Please try again.")
+        }
+        .onChange(of: today) { oldDay, newDay in
+            if AppCalendar.current.isDate(selectedDate, inSameDayAs: oldDay) {
+                selectedDate = newDay
+            }
         }
         .accessibilityIdentifier("parent-child-detail")
     }
@@ -182,8 +192,16 @@ struct ParentChildDetailView: View {
 
     private func state(for responsibility: Responsibility) -> DailyStateKind {
         records.first {
-            $0.responsibilityID == responsibility.id && AppCalendar.current.isDate($0.day, inSameDayAs: selectedDate)
+            $0.responsibilityID == responsibility.id
+                && AppCalendar.isPersistedDay($0.day, sameDayAs: selectedDate)
         }?.state ?? .unmarked
+    }
+
+    private var availableStates: [DailyStateKind] {
+        if AppCalendar.current.startOfDay(for: selectedDate) < AppCalendar.current.startOfDay(for: today) {
+            return DailyStateKind.allCases.filter { $0 != .unmarked }
+        }
+        return DailyStateKind.allCases
     }
 
     private func update(_ state: DailyStateKind, for responsibility: Responsibility) {

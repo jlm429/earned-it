@@ -62,11 +62,14 @@ struct ResponsibilityFormView: View {
                 }
 
                 Section("Assigned Child") {
-                    if existing != nil {
-                        if let child = children.first(where: { $0.id == assignedChildID }) {
-                            LabeledContent("Child", value: child.displayName)
+                    if existing != nil && actor.role == .parent {
+                        Picker("Child", selection: $assignedChildID) {
+                            ForEach(availableChildren) { child in
+                                Text(child.displayName).tag(child.id)
+                            }
                         }
-                        Text("Assignment stays fixed so existing daily history remains with the same child.")
+                        .accessibilityIdentifier("assigned-child")
+                        Text("Reassignment starts a new responsibility and keeps the previous child’s history.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else if actor.role == .child {
@@ -115,11 +118,26 @@ struct ResponsibilityFormView: View {
     private func save() {
         guard canSave, PermissionService.canAssign(user: actor, childID: assignedChildID) else { return }
         do {
+            var didReassign = false
             if let existing {
                 guard PermissionService.canManageDefinition(user: actor, responsibility: existing) else { return }
-                existing.title = trimmedTitle
-                existing.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-                existing.category = category
+                let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                if existing.assignedChildID != assignedChildID {
+                    try DataCoordinator.reassign(
+                        existing,
+                        to: assignedChildID,
+                        actor: actor,
+                        title: trimmedTitle,
+                        notes: trimmedNotes,
+                        category: category,
+                        context: modelContext
+                    )
+                    didReassign = true
+                } else {
+                    existing.title = trimmedTitle
+                    existing.notes = trimmedNotes
+                    existing.category = category
+                }
             } else {
                 modelContext.insert(Responsibility(
                     title: trimmedTitle,
@@ -130,8 +148,10 @@ struct ResponsibilityFormView: View {
                     assignedChildID: assignedChildID
                 ))
             }
-            try modelContext.save()
-            try DataCoordinator.prepareDailyData(context: modelContext)
+            if !didReassign {
+                try modelContext.save()
+                try DataCoordinator.prepareDailyData(context: modelContext)
+            }
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

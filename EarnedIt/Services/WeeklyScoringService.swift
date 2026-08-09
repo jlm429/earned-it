@@ -31,8 +31,12 @@ enum WeeklyScoringService {
         asOf date: Date,
         calendar: Calendar = AppCalendar.current
     ) -> Bool? {
-        guard calendar.component(.weekday, from: date) == 1 else { return nil }
-        let weekly = summary(days: days, today: date, calendar: calendar)
+        guard let firstDay = days.map(\.date).min() else { return nil }
+        let start = AppCalendar.weekStart(containing: firstDay, calendar: calendar)
+        guard let periodEnd = calendar.date(byAdding: .day, value: 7, to: start),
+              calendar.startOfDay(for: date) >= periodEnd else { return nil }
+        let lastDay = calendar.date(byAdding: .day, value: 6, to: start) ?? start
+        let weekly = summary(days: days, today: lastDay, calendar: calendar)
         guard let completion = weekly.completion else { return nil }
         return completion >= 0.85
     }

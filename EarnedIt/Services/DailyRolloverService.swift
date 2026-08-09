@@ -7,7 +7,7 @@ enum DailyRolloverService {
         today: Date,
         calendar: Calendar = AppCalendar.current
     ) -> Int {
-        let normalizedToday = calendar.startOfDay(for: today)
+        let normalizedToday = AppCalendar.persistedDay(for: today, calendar: calendar)
         var changed = 0
         for record in records where record.day < normalizedToday && record.state == .unmarked {
             record.state = .missed

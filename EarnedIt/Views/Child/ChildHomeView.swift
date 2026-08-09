@@ -8,8 +8,8 @@ struct ChildHomeView: View {
     @Query private var excusedDays: [ExcusedDay]
 
     let child: FamilyUser
+    let today: Date
 
-    @State private var today = Date.now
     @State private var presentedForm: PresentedResponsibility?
     @State private var errorMessage: String?
 
@@ -47,7 +47,9 @@ struct ChildHomeView: View {
     }
 
     private var isTodayExcused: Bool {
-        excusedDays.contains { $0.childID == child.id && AppCalendar.current.isDate($0.day, inSameDayAs: today) }
+        excusedDays.contains {
+            $0.childID == child.id && AppCalendar.isPersistedDay($0.day, sameDayAs: today)
+        }
     }
 
     var body: some View {
@@ -193,7 +195,8 @@ struct ChildHomeView: View {
 
     private func state(for responsibility: Responsibility) -> DailyStateKind {
         records.first {
-            $0.responsibilityID == responsibility.id && AppCalendar.current.isDate($0.day, inSameDayAs: today)
+            $0.responsibilityID == responsibility.id
+                && AppCalendar.isPersistedDay($0.day, sameDayAs: today)
         }?.state ?? .unmarked
     }
 
