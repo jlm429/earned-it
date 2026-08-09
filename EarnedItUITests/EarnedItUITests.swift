@@ -7,10 +7,14 @@ final class EarnedItUITests: XCTestCase {
         super.setUp()
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["--reset-sample-data"]
+        app.launchArguments = name.contains("testParentAddsResponsibilityVisibleToChild")
+            ? ["--clear-all-data"]
+            : ["--reset-sample-data"]
         app.launch()
-        XCTAssertTrue(app.buttons["user-card-parent"].waitForExistence(timeout: 8))
-        keepScreenshot(named: "user-selection")
+        if app.launchArguments.contains("--reset-sample-data") {
+            XCTAssertTrue(app.buttons["user-card-parent"].waitForExistence(timeout: 8))
+            keepScreenshot(named: "user-selection")
+        }
     }
 
     func testChildMarksDoneAndNotNeededToday() {
@@ -29,6 +33,18 @@ final class EarnedItUITests: XCTestCase {
         app.buttons["Not Needed Today"].tap()
         XCTAssertTrue(waitForLabel(practiceReading, containing: "Not Needed Today"))
         keepScreenshot(named: "child-today")
+
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
+
+        let persistedFeedPet = screen("state-control-feed-pet")
+        reveal(persistedFeedPet, swiping: .up)
+        XCTAssertTrue(waitForLabel(persistedFeedPet, containing: "Done"))
+        let persistedPracticeReading = screen("state-control-practice-reading")
+        reveal(persistedPracticeReading, swiping: .up)
+        XCTAssertTrue(waitForLabel(persistedPracticeReading, containing: "Not Needed Today"))
     }
 
     func testParentInspectsChildAndResetsItem() {
@@ -54,6 +70,24 @@ final class EarnedItUITests: XCTestCase {
     }
 
     func testParentAddsResponsibilityVisibleToChild() {
+        XCTAssertTrue(app.buttons["finish-setup"].waitForExistence(timeout: 8))
+        keepScreenshot(named: "first-run-setup")
+
+        let nameFields = app.textFields
+        XCTAssertGreaterThanOrEqual(nameFields.count, 2)
+        nameFields.element(boundBy: 0).tap()
+        nameFields.element(boundBy: 0).typeText("Parent")
+        nameFields.element(boundBy: 1).tap()
+        nameFields.element(boundBy: 1).typeText("Child One")
+        if app.keyboards.buttons["Return"].exists {
+            app.keyboards.buttons["Return"].tap()
+        }
+        let finishSetup = app.buttons["finish-setup"]
+        reveal(finishSetup, swiping: .up)
+        finishSetup.tap()
+
+        XCTAssertTrue(app.buttons["user-card-parent"].waitForExistence(timeout: 5))
+        keepScreenshot(named: "user-selection")
         app.buttons["user-card-parent"].tap()
         XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
         app.buttons["add-responsibility"].tap()

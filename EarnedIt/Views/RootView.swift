@@ -35,7 +35,9 @@ struct RootView: View {
         .task {
             guard isPreparing else { return }
             do {
-                if ProcessInfo.processInfo.arguments.contains("--reset-sample-data") {
+                if ProcessInfo.processInfo.arguments.contains("--clear-all-data") {
+                    try SampleDataService.clearAll(context: modelContext)
+                } else if ProcessInfo.processInfo.arguments.contains("--reset-sample-data") {
                     try SampleDataService.seed(context: modelContext)
                 } else {
                     try DataCoordinator.prepareDailyData(context: modelContext)
