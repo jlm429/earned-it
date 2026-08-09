@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 
 struct ParentDashboardView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
     @Query private var responsibilities: [Responsibility]
     @Query private var records: [DailyRecord]
@@ -60,7 +61,7 @@ struct ParentDashboardView: View {
             .padding()
         }
         .background(Color(uiColor: .systemGroupedBackground))
-        .navigationTitle("Parent Dashboard")
+        .navigationTitle(dynamicTypeSize.isAccessibilitySize ? "Dashboard" : "Parent Dashboard")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 NavigationLink {
@@ -87,6 +88,8 @@ struct ParentDashboardView: View {
 }
 
 private struct ParentChildCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let child: FamilyUser
     let today: Date
     let responsibilities: [Responsibility]
@@ -146,15 +149,26 @@ private struct ParentChildCard: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                HStack(spacing: 18) {
-                    metric("Today", value: "\(accountedToday)/\(currentItems.count)", systemImage: "checkmark.circle")
-                    metric("Unmarked", value: "\(unmarkedToday)", systemImage: "circle.dotted")
-                    metric("Streak", value: "\(streak)", systemImage: "flame")
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 12) {
+                        metrics
+                    }
+                } else {
+                    HStack(spacing: 18) {
+                        metrics
+                    }
                 }
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(child.displayName), \(accountedToday) of \(currentItems.count) accounted today, \(unmarkedToday) unmarked, \(streak) day streak")
+    }
+
+    @ViewBuilder
+    private var metrics: some View {
+        metric("Today", value: "\(accountedToday)/\(currentItems.count)", systemImage: "checkmark.circle")
+        metric("Unmarked", value: "\(unmarkedToday)", systemImage: "circle.dotted")
+        metric("Streak", value: "\(streak)", systemImage: "flame")
     }
 
     private func metric(_ label: String, value: String, systemImage: String) -> some View {
