@@ -113,6 +113,42 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot(named: "child-today-with-new-responsibility")
     }
 
+    func testEditedDisplayNamePersistsWithoutReplacingUserData() {
+        app.buttons["user-card-parent"].tap()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        app.buttons["family-management"].tap()
+        XCTAssertTrue(screen("family-management-screen").waitForExistence(timeout: 5))
+
+        app.buttons["manage-user-child-one"].tap()
+        app.buttons["Edit Name"].tap()
+        let nameField = app.textFields["family-display-name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        nameField.press(forDuration: 1)
+        app.menuItems["Select All"].tap()
+        nameField.typeText("Alex")
+        app.buttons["save-family-user"].tap()
+
+        XCTAssertTrue(app.buttons["manage-user-alex"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["switch-user"].tap()
+        XCTAssertTrue(app.buttons["user-card-alex"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForLabel(app.buttons["user-card-alex"], containing: "Child"))
+
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+
+        XCTAssertTrue(app.buttons["user-card-alex"].waitForExistence(timeout: 8))
+        app.buttons["user-card-alex"].tap()
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Hi, Alex!"].exists)
+        let existingResponsibility = app.descendants(matching: .any)["responsibility-row-feed-pet"]
+        reveal(existingResponsibility, swiping: .up)
+        XCTAssertTrue(existingResponsibility.exists)
+        keepScreenshot(named: "edited-display-name-persisted")
+    }
+
     private enum SwipeDirection {
         case up
         case down
