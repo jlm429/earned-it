@@ -1,3 +1,20 @@
+# macOS
 .DS_Store
+
+# Xcode workspace / user state
+EarnedIt.xcodeproj/project.xcworkspace/
+*.xcuserstate
+xcuserdata/
+
+# Build output
+build/
 DerivedData/
 .artifacts/
+
+# Swift Package Manager
+.build/
+
+# Secrets / local configuration
+.env
+.env.*
+!.env.example
