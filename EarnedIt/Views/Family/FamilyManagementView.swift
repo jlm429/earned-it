@@ -91,7 +91,7 @@ struct FamilyManagementView: View {
             }
             Spacer()
             Menu {
-                Button("Edit", systemImage: "pencil") {
+                Button("Edit Name", systemImage: "pencil") {
                     presentedForm = .edit(user)
                 }
                 Button("Remove", systemImage: "trash", role: .destructive) {

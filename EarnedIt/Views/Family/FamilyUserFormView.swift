@@ -30,16 +30,18 @@ struct FamilyUserFormView: View {
                     TextField("Display name", text: $displayName)
                         .textContentType(.name)
                         .accessibilityIdentifier("family-display-name")
-                    Picker("Avatar", selection: $avatar) {
-                        ForEach(AvatarOption.allCases) { option in
-                            Text(option.rawValue).tag(option)
+                    if existing == nil {
+                        Picker("Avatar", selection: $avatar) {
+                            ForEach(AvatarOption.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
                         }
+                        .pickerStyle(.inline)
+                        .accessibilityIdentifier("family-avatar")
                     }
-                    .pickerStyle(.inline)
-                    .accessibilityIdentifier("family-avatar")
                 }
             }
-            .navigationTitle(existing == nil ? "Add \(role.title)" : "Edit \(role.title)")
+            .navigationTitle(existing == nil ? "Add \(role.title)" : "Edit Name")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -67,7 +69,6 @@ struct FamilyUserFormView: View {
         do {
             if let existing {
                 existing.displayName = trimmedName
-                existing.avatar = avatar
             } else {
                 modelContext.insert(FamilyUser(displayName: trimmedName, role: role, avatar: avatar))
             }
