@@ -59,7 +59,45 @@ enum MetricsService {
         excusedDays: [ExcusedDay],
         calendar: Calendar = AppCalendar.current
     ) -> [DayFacts] {
-        let start = AppCalendar.weekStart(containing: today, calendar: calendar)
+        weekFacts(
+            childID: childID,
+            containing: today,
+            responsibilities: responsibilities,
+            records: records,
+            excusedDays: excusedDays,
+            calendar: calendar
+        )
+    }
+
+    static func previousCompletedWeekFacts(
+        childID: UUID,
+        today: Date,
+        responsibilities: [Responsibility],
+        records: [DailyRecord],
+        excusedDays: [ExcusedDay],
+        calendar: Calendar = AppCalendar.current
+    ) -> [DayFacts] {
+        let currentStart = AppCalendar.weekStart(containing: today, calendar: calendar)
+        guard let previousDay = calendar.date(byAdding: .day, value: -1, to: currentStart) else { return [] }
+        return weekFacts(
+            childID: childID,
+            containing: previousDay,
+            responsibilities: responsibilities,
+            records: records,
+            excusedDays: excusedDays,
+            calendar: calendar
+        )
+    }
+
+    private static func weekFacts(
+        childID: UUID,
+        containing date: Date,
+        responsibilities: [Responsibility],
+        records: [DailyRecord],
+        excusedDays: [ExcusedDay],
+        calendar: Calendar
+    ) -> [DayFacts] {
+        let start = AppCalendar.weekStart(containing: date, calendar: calendar)
         let dates = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
         return facts(
             childID: childID,

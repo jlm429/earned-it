@@ -105,6 +105,39 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: [earns], asOf: monday, calendar: calendar), true)
         XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: [below], asOf: monday, calendar: calendar), false)
         XCTAssertNil(WeeklyScoringService.allowanceEarned(days: [earns], asOf: date(2026, 8, 8), calendar: calendar))
+
+        let childID = UUID()
+        let responsibility = Responsibility(
+            title: "Weekly item",
+            category: .home,
+            creatorID: UUID(),
+            creatorRole: .parent,
+            assignedChildID: childID,
+            createdAt: date(2026, 8, 3)
+        )
+        let records = (3...9).map {
+            DailyRecord(
+                responsibilityID: responsibility.id,
+                childID: childID,
+                day: date(2026, 8, $0),
+                state: .done,
+                calendar: calendar
+            )
+        }
+        let completedWeek = MetricsService.previousCompletedWeekFacts(
+            childID: childID,
+            today: monday,
+            responsibilities: [responsibility],
+            records: records,
+            excusedDays: [],
+            calendar: calendar
+        )
+        XCTAssertEqual(completedWeek.map(\.date), (3...9).map { date(2026, 8, $0) })
+        XCTAssertEqual(WeeklyScoringService.allowanceEarned(
+            days: completedWeek,
+            asOf: monday,
+            calendar: calendar
+        ), true)
     }
 
     func testExcusedDaysAreExcludedFromDenominator() {

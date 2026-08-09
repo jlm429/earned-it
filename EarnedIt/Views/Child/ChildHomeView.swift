@@ -33,6 +33,17 @@ struct ChildHomeView: View {
         WeeklyScoringService.summary(days: weekFacts, today: today)
     }
 
+    private var previousAllowanceEarned: Bool? {
+        let completedWeek = MetricsService.previousCompletedWeekFacts(
+            childID: child.id,
+            today: today,
+            responsibilities: responsibilities,
+            records: records,
+            excusedDays: excusedDays
+        )
+        return WeeklyScoringService.allowanceEarned(days: completedWeek, asOf: today)
+    }
+
     private var streak: Int {
         StreakService.currentStreak(
             days: MetricsService.streakFacts(
@@ -133,6 +144,15 @@ struct ChildHomeView: View {
                         .foregroundStyle(.orange)
                 }
                 WeekStrip(days: weekFacts, today: today, compact: true)
+                if let previousAllowanceEarned {
+                    Label(
+                        previousAllowanceEarned ? "Allowance earned last week" : "Allowance was not earned last week",
+                        systemImage: previousAllowanceEarned ? "checkmark.seal.fill" : "calendar.badge.clock"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("previous-week-allowance")
+                }
                 NavigationLink {
                     WeeklySummaryView(
                         child: child,
