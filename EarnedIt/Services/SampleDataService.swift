@@ -82,8 +82,7 @@ enum SampleDataService {
 
                 let childTwoMissedDay = calendar.date(byAdding: .day, value: 1, to: weekStart) ?? weekStart
                 if item.assignedChildID == childTwoID
-                    && calendar.isDate(day, inSameDayAs: childTwoMissedDay)
-                    && item.title == "Tidy room" {
+                    && calendar.isDate(day, inSameDayAs: childTwoMissedDay) {
                     state = .unmarked
                 }
 

@@ -79,4 +79,15 @@ enum DayStatus: String, Identifiable {
     case future = "Future"
 
     var id: String { rawValue }
+
+    var shortLabel: String {
+        switch self {
+        case .green: "Done"
+        case .yellow: "Partial"
+        case .red: "Missed"
+        case .excused: "Excused"
+        case .neutral: "Neutral"
+        case .future: "Future"
+        }
+    }
 }
