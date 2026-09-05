@@ -14,6 +14,12 @@ enum DataCoordinator {
     ) throws {
         let responsibilities = try context.fetch(FetchDescriptor<Responsibility>())
         if let draft = responsibilities.first(where: { $0.id == id }) {
+            let records = try context.fetch(FetchDescriptor<DailyRecord>(
+                predicate: #Predicate { $0.responsibilityID == id }
+            ))
+            for record in records {
+                record.childID = assignedChildID
+            }
             draft.title = title
             draft.notes = notes
             draft.category = category

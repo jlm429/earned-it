@@ -122,12 +122,19 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Responsibility>()), 1)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyRecord>()), 0)
 
+        try DataCoordinator.prepareDailyData(context: context, today: createdAt)
+        let refreshedRecord = try XCTUnwrap(context.fetch(FetchDescriptor<DailyRecord>()).first)
+        XCTAssertEqual(refreshedRecord.childID, firstChild.id)
+        let recordID = refreshedRecord.id
+        let recordPersistentID = refreshedRecord.persistentModelID
+        let recordKey = refreshedRecord.uniqueKey
+
         try DataCoordinator.updateResponsibilityDraft(
             id: draftID, title: "Revised title", notes: "Revised notes", category: .school,
             actor: parent, assignedChildID: secondChild.id, context: context
         )
         try context.save()
-        try DataCoordinator.prepareDailyData(context: context)
+        try DataCoordinator.prepareDailyData(context: context, today: createdAt)
 
         let reloaded = ModelContext(store)
         let drafts = try reloaded.fetch(FetchDescriptor<Responsibility>())
@@ -148,6 +155,29 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(records.count, 1)
         XCTAssertEqual(records.first?.responsibilityID, draftID)
         XCTAssertEqual(records.first?.childID, secondChild.id)
+        XCTAssertEqual(records.first?.id, recordID)
+        XCTAssertEqual(records.first?.persistentModelID, recordPersistentID)
+        XCTAssertEqual(records.first?.uniqueKey, recordKey)
+        try DataCoordinator.setState(
+            .done, actor: secondChild, responsibility: saved, date: createdAt,
+            today: createdAt, records: records, context: reloaded
+        )
+        let completedContext = ModelContext(store)
+        let completedResponsibilities = try completedContext.fetch(FetchDescriptor<Responsibility>())
+        let completedRecords = try completedContext.fetch(FetchDescriptor<DailyRecord>())
+        let facts = MetricsService.currentWeekFacts(
+            childID: secondChild.id, today: createdAt, responsibilities: completedResponsibilities,
+            records: completedRecords, excusedDays: []
+        )
+        let summary = WeeklyScoringService.summary(days: facts, today: createdAt)
+        XCTAssertEqual(summary.expectedCount, 1)
+        XCTAssertEqual(summary.accountedCount, 1)
+        XCTAssertEqual(summary.completion, 1)
+        let previousChildFacts = MetricsService.currentWeekFacts(
+            childID: firstChild.id, today: createdAt, responsibilities: completedResponsibilities,
+            records: completedRecords, excusedDays: []
+        )
+        XCTAssertEqual(WeeklyScoringService.summary(days: previousChildFacts, today: createdAt).expectedCount, 0)
     }
 
     func testLegacyCompletedHouseholdIsPreservedAndRestartDoesNotResetIt() throws {
