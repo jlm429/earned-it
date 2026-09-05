@@ -35,7 +35,15 @@
 
 - Build and test with the selected full Xcode installation and an available iPhone Simulator runtime.
 - Run unit tests, no more than three focused UI flows, and manual checks for critical product rules.
-- Confirm launch, relaunch persistence, first-run setup, sample-data reset, and role-specific experiences.
+- Confirm launch, relaunch persistence, first-run setup, confirmed local-data reset, and role-specific experiences.
+- Production never seeds households. See `OnboardingService.swift` for persisted setup state and legacy completion compatibility. UI tests use the separate debug-only store configured in `EarnedItApp.swift`.
 - Use automatic signing only when needed for a physical device. Simulator work must not require a paid developer account.
 - Commit focused milestones on a feature branch.
 - Run the configured no-mistakes pipeline after implementation, stop at a review-ready PR, and never merge without captain approval.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

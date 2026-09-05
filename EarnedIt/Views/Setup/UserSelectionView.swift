@@ -4,9 +4,8 @@ import SwiftUI
 struct UserSelectionView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
-    @Query private var settings: [AppSetting]
 
-    @State private var confirmation: DevelopmentAction?
+    @State private var addingParent = false
     @State private var errorMessage: String?
 
     private let columns = [GridItem(.adaptive(minimum: 140), spacing: 16)]
@@ -56,34 +55,28 @@ struct UserSelectionView: View {
                         }
                     }
 
-                    DevelopmentDataView(
-                        isSampleMode: SettingsStore.value(for: SettingsStore.dataModeKey, in: settings) == "sample",
-                        onLoad: { confirmation = .loadSample },
-                        onReset: { confirmation = .resetSample },
-                        onClear: { confirmation = .clearAll }
-                    )
+                    if users.isEmpty {
+                        ContentUnavailableView("No family members yet", systemImage: "person.2",
+                            description: Text("Add a parent to start managing your family, or resume setup in Settings."))
+                    }
+                    if !users.contains(where: { $0.role == .parent }) {
+                        Button("Add Parent") { addingParent = true }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("add-parent")
+                    }
+                    NavigationLink {
+                        HouseholdSettingsView()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("household-settings")
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 32)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationBarHidden(true)
-            .confirmationDialog(
-                confirmation?.title ?? "Development Data",
-                isPresented: Binding(
-                    get: { confirmation != nil },
-                    set: { if !$0 { confirmation = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                if let confirmation {
-                    Button(confirmation.buttonTitle, role: .destructive) {
-                        perform(confirmation)
-                    }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: {
-                Text("This replaces all local family and responsibility data on this Simulator.")
+            .sheet(isPresented: $addingParent) {
+                FamilyUserFormView(role: .parent)
             }
             .alert("Unable to Update Data", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -105,68 +98,4 @@ struct UserSelectionView: View {
         }
     }
 
-    private func perform(_ action: DevelopmentAction) {
-        do {
-            switch action {
-            case .loadSample, .resetSample:
-                try SampleDataService.seed(context: modelContext)
-            case .clearAll:
-                try SampleDataService.clearAll(context: modelContext)
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        confirmation = nil
-    }
-}
-
-private enum DevelopmentAction {
-    case loadSample
-    case resetSample
-    case clearAll
-
-    var title: String {
-        switch self {
-        case .loadSample: "Load Generic Sample Data?"
-        case .resetSample: "Reset Generic Sample Data?"
-        case .clearAll: "Clear All Local Data?"
-        }
-    }
-
-    var buttonTitle: String {
-        switch self {
-        case .loadSample: "Load Sample Data"
-        case .resetSample: "Reset Sample Data"
-        case .clearAll: "Clear All Data"
-        }
-    }
-}
-
-private struct DevelopmentDataView: View {
-    let isSampleMode: Bool
-    let onLoad: () -> Void
-    let onReset: () -> Void
-    let onClear: () -> Void
-
-    var body: some View {
-        DisclosureGroup("Development Data") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Generic data for Simulator review. Never mixed into a normal family automatically.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button("Load Generic Sample Data", action: onLoad)
-                    .accessibilityIdentifier("load-sample-data")
-                if isSampleMode {
-                    Button("Reset Generic Sample Data", action: onReset)
-                        .accessibilityIdentifier("reset-sample-data")
-                }
-                Button("Clear All Local Data", role: .destructive, action: onClear)
-                    .accessibilityIdentifier("clear-all-data")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 12)
-        }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
-    }
 }

@@ -85,6 +85,8 @@ struct ParentChildDetailView: View {
                             systemImage: "minus.circle",
                             description: Text("This day is neutral.")
                         )
+                        Button("Add Chore") { presentedForm = .new }
+                            .accessibilityIdentifier("empty-add-chore")
                     } else {
                         ForEach(selectedItems) { responsibility in
                             ResponsibilityRow(
@@ -120,6 +122,7 @@ struct ParentChildDetailView: View {
             ResponsibilityFormView(
                 actor: parent,
                 children: children,
+                preferredChildID: child.id,
                 existing: presentation.responsibility
             )
         }

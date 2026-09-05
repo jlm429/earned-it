@@ -11,6 +11,7 @@ struct FamilyManagementView: View {
     @State private var presentedForm: PresentedUserForm?
     @State private var removalMessage: String?
     @State private var errorMessage: String?
+    @State private var pendingRemoval: FamilyUser?
 
     private var parents: [FamilyUser] {
         users.filter { $0.role == .parent }
@@ -30,6 +31,11 @@ struct FamilyManagementView: View {
             }
 
             Section("Children") {
+                if children.isEmpty {
+                    Text("No children yet. Add a child to start their daily list.")
+                        .foregroundStyle(.secondary)
+                    Button("Add Child") { presentedForm = .new(.child) }
+                }
                 ForEach(children) { user in
                     userRow(user)
                 }
@@ -59,6 +65,17 @@ struct FamilyManagementView: View {
         }
         .sheet(item: $presentedForm) { presentation in
             FamilyUserFormView(role: presentation.role, existing: presentation.user)
+        }
+        .confirmationDialog("Remove family member?", isPresented: Binding(
+            get: { pendingRemoval != nil },
+            set: { if !$0 { pendingRemoval = nil } }
+        ), titleVisibility: .visible) {
+            if let user = pendingRemoval {
+                Button("Remove \(user.displayName)", role: .destructive) { remove(user) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the profile from your family. Historical records stay on this device.")
         }
         .alert("Cannot Remove User", isPresented: Binding(
             get: { removalMessage != nil },
@@ -95,7 +112,7 @@ struct FamilyManagementView: View {
                     presentedForm = .edit(user)
                 }
                 Button("Remove", systemImage: "trash", role: .destructive) {
-                    remove(user)
+                    pendingRemoval = user
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")

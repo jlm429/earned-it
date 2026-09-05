@@ -14,6 +14,7 @@ struct ResponsibilityFormView: View {
     @State private var category: ResponsibilityCategory
     @State private var assignedChildID: UUID
     @State private var errorMessage: String?
+    @State private var draftID = UUID()
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -30,7 +31,7 @@ struct ResponsibilityFormView: View {
             && availableChildren.contains { $0.id == assignedChildID }
     }
 
-    init(actor: FamilyUser, children: [FamilyUser], existing: Responsibility? = nil) {
+    init(actor: FamilyUser, children: [FamilyUser], preferredChildID: UUID? = nil, existing: Responsibility? = nil) {
         self.actor = actor
         self.children = children
         self.existing = existing
@@ -38,6 +39,7 @@ struct ResponsibilityFormView: View {
         _notes = State(initialValue: existing?.notes ?? "")
         _category = State(initialValue: existing?.category ?? .home)
         let initialChild = existing?.assignedChildID
+            ?? preferredChildID
             ?? (actor.role == .child ? actor.id : children.first?.id)
             ?? UUID()
         _assignedChildID = State(initialValue: initialChild)
@@ -62,7 +64,9 @@ struct ResponsibilityFormView: View {
                 }
 
                 Section("Assigned Child") {
-                    if existing != nil && actor.role == .parent {
+                    if availableChildren.isEmpty {
+                        Text("Add a child in Family Management before assigning a chore.")
+                    } else if existing != nil && actor.role == .parent {
                         Picker("Child", selection: $assignedChildID) {
                             ForEach(availableChildren) { child in
                                 Text(child.displayName).tag(child.id)
@@ -139,14 +143,15 @@ struct ResponsibilityFormView: View {
                     existing.category = category
                 }
             } else {
-                modelContext.insert(Responsibility(
+                try DataCoordinator.updateResponsibilityDraft(
+                    id: draftID,
                     title: trimmedTitle,
                     notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
                     category: category,
-                    creatorID: actor.id,
-                    creatorRole: actor.role,
-                    assignedChildID: assignedChildID
-                ))
+                    actor: actor,
+                    assignedChildID: assignedChildID,
+                    context: modelContext
+                )
             }
             if !didReassign {
                 try modelContext.save()
@@ -154,6 +159,7 @@ struct ResponsibilityFormView: View {
             }
             dismiss()
         } catch {
+            modelContext.rollback()
             errorMessage = error.localizedDescription
         }
     }

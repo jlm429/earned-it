@@ -8,6 +8,7 @@ struct FamilyUserFormView: View {
     let role: UserRole
     let existing: FamilyUser?
 
+    @State private var draftID = UUID()
     @State private var displayName: String
     @State private var avatar: AvatarOption
     @State private var errorMessage: String?
@@ -40,6 +41,11 @@ struct FamilyUserFormView: View {
                         .accessibilityIdentifier("family-avatar")
                     }
                 }
+                Section {
+                    Text("Use 1 to 50 characters. Saved family members stay on this device. Cancel discards this unsaved form.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
             .navigationTitle(existing == nil ? "Add \(role.title)" : "Edit Name")
             .navigationBarTitleDisplayMode(.inline)
@@ -67,12 +73,13 @@ struct FamilyUserFormView: View {
     private func save() {
         guard !trimmedName.isEmpty, trimmedName.count <= 50 else { return }
         do {
-            if let existing {
-                existing.displayName = trimmedName
-            } else {
-                modelContext.insert(FamilyUser(displayName: trimmedName, role: role, avatar: avatar))
-            }
-            try modelContext.save()
+            try FamilyUserService.save(
+                id: existing?.id ?? draftID,
+                name: trimmedName,
+                role: role,
+                avatar: avatar,
+                context: modelContext
+            )
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

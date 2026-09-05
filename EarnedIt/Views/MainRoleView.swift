@@ -5,6 +5,7 @@ struct MainRoleView: View {
     @Environment(\.modelContext) private var modelContext
     let user: FamilyUser
     let today: Date
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -19,12 +20,25 @@ struct MainRoleView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        try? SettingsStore.remove(SettingsStore.selectedUserIDKey, context: modelContext)
+                        do {
+                            try SettingsStore.remove(SettingsStore.selectedUserIDKey, context: modelContext)
+                        } catch {
+                            modelContext.rollback()
+                            errorMessage = error.localizedDescription
+                        }
                     } label: {
                         Label("Switch User", systemImage: "person.2")
                     }
                     .accessibilityIdentifier("switch-user")
                 }
+            }
+            .alert("Unable to Switch User", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "Please try again.")
             }
         }
     }
