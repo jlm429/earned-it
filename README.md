@@ -59,18 +59,30 @@ Excused days do not count against progress.
 
 The app currently stores family data locally on the device.
 
-## Development
+## Getting Started
 
 First launch offers a short family setup guide. Add a parent and at least one
 child, optionally assign chores, then continue to the parent dashboard. Chores
 use the existing weekly allowance eligibility rule; the app does not configure
 or pay an allowance amount.
 
-Skip Setup for Now keeps saved family members and chores. After switching users,
-open Settings to resume or restart setup. Restart keeps household data; Delete
-All Local Data requires confirmation and returns to welcome. Production never
-loads sample households. Saved setup progress survives relaunch; unsaved forms
-are discarded when cancelled or the app is closed.
+Family names must be distinct within each role, ignoring capitalization and
+leading or trailing spaces. You can manage names and add people later in Family
+Management from the parent dashboard.
+
+Skip Setup for Now permits an empty household and keeps saved family members,
+chores, and the current setup step. With no parent, use Add Parent on the user
+picker, then open that profile and use Add Child. Add Chore is available from
+an empty child's list.
+
+Use Switch User to reach Settings, where skipped setup can be resumed or setup
+can be restarted. Restart keeps household data; Delete All Local Data requires
+confirmation and returns to welcome. Production never loads sample households
+or automatically removes existing ones. Saved setup progress survives relaunch;
+completed or skipped setup does not reopen automatically. Unsaved forms are
+discarded when cancelled or the app process ends.
+
+## Development
 
 Run the unit tests and three UI flows with a dedicated iPhone Simulator:
 
