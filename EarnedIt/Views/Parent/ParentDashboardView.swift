@@ -12,6 +12,7 @@ struct ParentDashboardView: View {
     let today: Date
 
     @State private var showingNewResponsibility = false
+    @State private var showingNewChild = false
 
     private var children: [FamilyUser] {
         users
@@ -38,8 +39,11 @@ struct ParentDashboardView: View {
                     ContentUnavailableView(
                         "No children yet",
                         systemImage: "person.badge.plus",
-                        description: Text("Add a child from Family Management.")
+                        description: Text("Add a child to start their daily list and weekly progress.")
                     )
+                    Button("Add Child") { showingNewChild = true }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("dashboard-add-child")
                 } else {
                     ForEach(children) { child in
                         NavigationLink {
@@ -82,6 +86,9 @@ struct ParentDashboardView: View {
         }
         .sheet(isPresented: $showingNewResponsibility) {
             ResponsibilityFormView(actor: parent, children: children)
+        }
+        .sheet(isPresented: $showingNewChild) {
+            FamilyUserFormView(role: .child)
         }
         .accessibilityIdentifier("parent-dashboard")
     }

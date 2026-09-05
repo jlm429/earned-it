@@ -7,167 +7,214 @@ final class EarnedItUITests: XCTestCase {
         super.setUp()
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = name.contains("testParentAddsResponsibilityVisibleToChild")
-            ? ["--clear-all-data"]
-            : ["--reset-sample-data"]
-        app.launch()
-        if app.launchArguments.contains("--reset-sample-data") {
-            XCTAssertTrue(app.buttons["user-card-parent"].waitForExistence(timeout: 8))
-            keepScreenshot(named: "user-selection")
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset"]
+        if name.contains("testSkippedEmpty") {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
-    }
-
-    func testChildMarksDoneAndNotNeededToday() {
-        app.buttons["user-card-child-one"].tap()
-        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
-
-        let feedPet = screen("state-control-feed-pet")
-        reveal(feedPet, swiping: .up)
-        feedPet.tap()
-        app.buttons["Done"].tap()
-        XCTAssertTrue(waitForLabel(feedPet, containing: "Done"))
-
-        let practiceReading = screen("state-control-practice-reading")
-        reveal(practiceReading, swiping: .up)
-        practiceReading.tap()
-        app.buttons["Not Needed Today"].tap()
-        XCTAssertTrue(waitForLabel(practiceReading, containing: "Not Needed Today"))
-        keepScreenshot(named: "child-today")
-
-        app.terminate()
-        app.launchArguments = []
         app.launch()
-        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
-
-        let persistedFeedPet = screen("state-control-feed-pet")
-        reveal(persistedFeedPet, swiping: .up)
-        XCTAssertTrue(waitForLabel(persistedFeedPet, containing: "Done"))
-        let persistedPracticeReading = screen("state-control-practice-reading")
-        reveal(persistedPracticeReading, swiping: .up)
-        XCTAssertTrue(waitForLabel(persistedPracticeReading, containing: "Not Needed Today"))
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
     }
 
-    func testParentInspectsChildAndResetsItem() {
-        app.buttons["user-card-parent"].tap()
+    func testCompletedSetupChildCompletionParentReviewAndRelaunch() throws {
+        keepScreenshot("welcome")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+        tap("setup-continue")
+        addPerson(button: "setup-add-parent", name: "Test Parent")
+        tap("setup-continue")
+        addPerson(button: "setup-add-child", name: "Test Child")
+        addPerson(button: "setup-add-child", name: "Second Child")
+        tap("setup-continue")
+        tap("setup-add-chore")
+        XCTAssertFalse(app.buttons["save-responsibility"].isEnabled)
+        fill("responsibility-title", with: "Water plants")
+        tap("save-responsibility")
+        XCTAssertTrue(app.staticTexts["Water plants"].waitForExistence(timeout: 5))
+        tap("setup-continue")
+        keepScreenshot("workflow-guide")
+        tap("setup-continue")
         XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
-        keepScreenshot(named: "parent-dashboard")
-
-        app.descendants(matching: .any)["parent-child-child-one"].tap()
+        keepScreenshot("completed-parent-dashboard")
+        relaunch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["setup-continue"].exists)
+        tap("switch-user")
+        tap("user-card-test-child")
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
+        tap("state-control-water-plants")
+        tap("Done")
+        XCTAssertTrue(waitForLabel(screen("state-control-water-plants"), containing: "Done"))
+        keepScreenshot("child-completion")
+        relaunch()
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
+        reveal(screen("state-control-water-plants"))
+        XCTAssertTrue(waitForLabel(screen("state-control-water-plants"), containing: "Done"))
+        tap("switch-user")
+        tap("user-card-test-parent")
+        tap("parent-child-test-child")
         XCTAssertTrue(screen("parent-child-detail").waitForExistence(timeout: 5))
-
-        let makeBed = screen("state-control-make-bed")
-        reveal(makeBed, swiping: .up)
-        makeBed.tap()
-        app.buttons["Unmarked"].tap()
-        XCTAssertTrue(waitForLabel(makeBed, containing: "Unmarked"))
-        keepScreenshot(named: "parent-child-detail")
-
-        let weeklySummary = app.descendants(matching: .any)["view-weekly-summary"]
-        reveal(weeklySummary, swiping: .down)
-        weeklySummary.tap()
+        tap("state-control-water-plants")
+        tap("Not Needed Today")
+        XCTAssertTrue(waitForLabel(screen("state-control-water-plants"), containing: "Not Needed Today"))
+        reveal(screen("view-weekly-summary"), upward: false)
+        tap("view-weekly-summary")
         XCTAssertTrue(screen("weekly-summary").waitForExistence(timeout: 5))
-        keepScreenshot(named: "weekly-summary")
+        keepScreenshot("parent-weekly-review")
     }
 
-    func testParentAddsResponsibilityVisibleToChild() {
-        XCTAssertTrue(app.buttons["finish-setup"].waitForExistence(timeout: 8))
-        keepScreenshot(named: "first-run-setup")
-
-        let nameFields = app.textFields
-        XCTAssertGreaterThanOrEqual(nameFields.count, 2)
-        nameFields.element(boundBy: 0).tap()
-        nameFields.element(boundBy: 0).typeText("Parent")
-        nameFields.element(boundBy: 1).tap()
-        nameFields.element(boundBy: 1).typeText("Child One")
-        if app.keyboards.buttons["Return"].exists {
-            app.keyboards.buttons["Return"].tap()
-        }
-        let finishSetup = app.buttons["finish-setup"]
-        reveal(finishSetup, swiping: .up)
-        finishSetup.tap()
-
-        XCTAssertTrue(app.buttons["user-card-parent"].waitForExistence(timeout: 5))
-        keepScreenshot(named: "user-selection")
-        app.buttons["user-card-parent"].tap()
-        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
-        app.buttons["add-responsibility"].tap()
-
-        let titleField = app.textFields["responsibility-title"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
-        titleField.tap()
-        titleField.typeText("Water plants")
-        if app.keyboards.buttons["Return"].exists {
-            app.keyboards.buttons["Return"].tap()
-        }
-        keepScreenshot(named: "responsibility-creation")
-        app.buttons["save-responsibility"].tap()
-
-        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
-        app.buttons["switch-user"].tap()
-        XCTAssertTrue(app.buttons["user-card-child-one"].waitForExistence(timeout: 5))
-        app.buttons["user-card-child-one"].tap()
-
-        let newItem = app.descendants(matching: .any)["responsibility-row-water-plants"]
-        reveal(newItem, swiping: .up)
-        XCTAssertTrue(newItem.exists)
-        keepScreenshot(named: "child-today-with-new-responsibility")
-    }
-
-    func testEditedDisplayNamePersistsWithoutReplacingUserData() {
-        app.buttons["user-card-parent"].tap()
-        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
-        app.buttons["family-management"].tap()
-        XCTAssertTrue(screen("family-management-screen").waitForExistence(timeout: 5))
-
-        app.buttons["manage-user-child-one"].tap()
-        app.buttons["Edit Name"].tap()
-        let nameField = app.textFields["family-display-name"]
-        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
-        nameField.tap()
-        nameField.press(forDuration: 1)
-        app.menuItems["Select All"].tap()
-        nameField.typeText("Alex")
-        app.buttons["save-family-user"].tap()
-
-        XCTAssertTrue(app.buttons["manage-user-alex"].waitForExistence(timeout: 5))
+    func testSkippedEmptyStoreNormalNavigationAndConfirmedResetAtLargeType() throws {
+        keepScreenshot("welcome-largest-dynamic-type")
+        tap("setup-skip")
+        tap("Cancel")
+        XCTAssertTrue(app.buttons["setup-continue"].exists)
+        tap("setup-skip")
+        tap("Skip Setup")
+        XCTAssertTrue(app.buttons["add-parent"].waitForExistence(timeout: 5))
+        XCTAssertEqual(userCardCount, 0)
+        relaunch(largeType: true)
+        XCTAssertTrue(app.buttons["add-parent"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["setup-continue"].exists)
+        keepScreenshot("empty-user-picker-largest-dynamic-type")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+        addPerson(button: "add-parent", name: "Test Parent")
+        tap("user-card-test-parent")
+        XCTAssertTrue(app.buttons["dashboard-add-child"].waitForExistence(timeout: 5))
+        keepScreenshot("empty-parent-dashboard-largest-dynamic-type")
+        addPerson(button: "dashboard-add-child", name: "Test Child")
+        tap("parent-child-test-child")
+        tap("empty-add-chore")
+        tap("cancel-responsibility")
+        reveal(screen("view-weekly-summary"), upward: false)
+        tap("view-weekly-summary")
+        XCTAssertTrue(screen("weekly-summary").waitForExistence(timeout: 5))
+        keepScreenshot("empty-weekly-summary-largest-dynamic-type")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.buttons["switch-user"].tap()
-        XCTAssertTrue(app.buttons["user-card-alex"].waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForLabel(app.buttons["user-card-alex"], containing: "Child"))
-
-        app.terminate()
-        app.launchArguments = []
-        app.launch()
-
-        XCTAssertTrue(app.buttons["user-card-alex"].waitForExistence(timeout: 8))
-        app.buttons["user-card-alex"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("switch-user")
+        tap("user-card-test-child")
         XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Hi, Alex!"].exists)
-        let existingResponsibility = app.descendants(matching: .any)["responsibility-row-feed-pet"]
-        reveal(existingResponsibility, swiping: .up)
-        XCTAssertTrue(existingResponsibility.exists)
-        keepScreenshot(named: "edited-display-name-persisted")
+        tap("empty-add-chore")
+        tap("cancel-responsibility")
+        tap("switch-user")
+        tap("household-settings")
+        tap("clear-all-data")
+        tap("Cancel")
+        XCTAssertTrue(app.navigationBars["Settings"].exists)
+        tap("clear-all-data")
+        tap("Delete All Data")
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
+        relaunch()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        tap("setup-skip")
+        tap("Skip Setup")
+        XCTAssertTrue(app.buttons["add-parent"].waitForExistence(timeout: 5))
+        XCTAssertEqual(userCardCount, 0)
     }
 
-    private enum SwipeDirection {
-        case up
-        case down
+    func testPartialSetupBackCancelDuplicatePreventionSkipResumeAndRestart() {
+        tap("setup-continue")
+        tap("setup-add-parent")
+        XCTAssertFalse(app.buttons["save-family-user"].isEnabled)
+        fill("family-display-name", with: "Discarded Parent")
+        tap("Cancel")
+        XCTAssertFalse(app.buttons["setup-continue"].isEnabled)
+        addPerson(button: "setup-add-parent", name: "Test Parent")
+        tap("setup-continue")
+        relaunch()
+        XCTAssertTrue(app.navigationBars["Add Children"].waitForExistence(timeout: 8))
+        tap("setup-back")
+        tap("setup-add-parent")
+        fill("family-display-name", with: " test parent ")
+        tap("save-family-user")
+        XCTAssertTrue(app.alerts["Unable to Save"].waitForExistence(timeout: 5))
+        tap("OK")
+        tap("Cancel")
+        tap("setup-continue")
+        tap("setup-add-child")
+        fill("family-display-name", with: "Discarded Child")
+        tap("Cancel")
+        XCTAssertFalse(app.buttons["setup-continue"].isEnabled)
+        tap("setup-skip")
+        tap("Skip Setup")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        relaunch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("switch-user")
+        XCTAssertEqual(userCardCount, 1)
+        tap("household-settings")
+        tap("resume-setup")
+        XCTAssertTrue(app.navigationBars["Add Children"].waitForExistence(timeout: 5))
+        addPerson(button: "setup-add-child", name: "Test Child")
+        tap("setup-continue")
+        tap("setup-continue")
+        tap("setup-continue")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        tap("switch-user")
+        tap("household-settings")
+        tap("restart-setup")
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
+        tap("setup-continue")
+        XCTAssertTrue(screen("setup-user-test-parent").exists)
+        tap("setup-continue")
+        XCTAssertTrue(screen("setup-user-test-child").exists)
+        tap("setup-continue")
+        tap("setup-continue")
+        tap("setup-continue")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        tap("switch-user")
+        XCTAssertEqual(userCardCount, 2)
+        keepScreenshot("restart-preserves-family-without-duplicates")
     }
 
-    private func reveal(_ element: XCUIElement, swiping direction: SwipeDirection) {
-        for _ in 0..<8 where !element.isHittable {
-            switch direction {
-            case .up: app.swipeUp()
-            case .down: app.swipeDown()
-            }
+    private var userCardCount: Int {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'user-card-'")).count
+    }
+
+    private func addPerson(button: String, name: String) {
+        tap(button)
+        fill("family-display-name", with: name)
+        tap("save-family-user")
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: app.textFields["family-display-name"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+    }
+
+    private func fill(_ identifier: String, with text: String) {
+        let field = app.textFields[identifier]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(text)
+        if app.keyboards.buttons["Return"].exists {
+            app.keyboards.buttons["Return"].tap()
         }
-        XCTAssertTrue(element.waitForExistence(timeout: 2))
+    }
+
+    private func relaunch(largeType: Bool = false) {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store"]
+        if largeType {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        }
+        app.launch()
+    }
+
+    private func tap(_ identifier: String) {
+        let element = app.buttons[identifier]
+        reveal(element)
+        element.tap()
+    }
+
+    private func reveal(_ element: XCUIElement, upward: Bool = true) {
+        _ = element.waitForExistence(timeout: 2)
+        for _ in 0..<10 where !element.exists || !element.isHittable {
+            if upward { app.swipeUp() } else { app.swipeDown() }
+        }
+        XCTAssertTrue(element.exists)
         XCTAssertTrue(element.isHittable)
     }
 
     private func waitForLabel(_ element: XCUIElement, containing text: String) -> Bool {
-        let predicate = NSPredicate(format: "label CONTAINS %@", text)
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", text), object: element)
         return XCTWaiter.wait(for: [expectation], timeout: 3) == .completed
     }
 
@@ -175,7 +222,7 @@ final class EarnedItUITests: XCTestCase {
         app.descendants(matching: .any)[identifier]
     }
 
-    private func keepScreenshot(named name: String) {
+    private func keepScreenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways

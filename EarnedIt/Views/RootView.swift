@@ -13,7 +13,7 @@ struct RootView: View {
     @State private var today = Date.now
 
     private var setupComplete: Bool {
-        SettingsStore.bool(for: SettingsStore.setupCompleteKey, in: settings)
+        OnboardingService.disposition(in: settings) != .inProgress
     }
 
     private var selectedUser: FamilyUser? {
@@ -63,13 +63,7 @@ struct RootView: View {
     private func prepareForLaunch() {
         guard isPreparing else { return }
         do {
-            if ProcessInfo.processInfo.arguments.contains("--clear-all-data") {
-                try SampleDataService.clearAll(context: modelContext)
-            } else if ProcessInfo.processInfo.arguments.contains("--reset-sample-data") {
-                try SampleDataService.seed(context: modelContext)
-            } else {
-                try DataCoordinator.prepareDailyData(context: modelContext, today: today)
-            }
+            try DataCoordinator.prepareDailyData(context: modelContext, today: today)
         } catch {
             preparationError = error.localizedDescription
         }

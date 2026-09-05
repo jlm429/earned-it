@@ -196,6 +196,8 @@ struct ChildHomeView: View {
                     systemImage: "checkmark.circle",
                     description: Text("You can add a responsibility whenever you’re ready.")
                 )
+                Button("Add Chore") { presentedForm = .new }
+                    .accessibilityIdentifier("empty-add-chore")
             } else {
                 ForEach(todayItems) { responsibility in
                     ResponsibilityRow(

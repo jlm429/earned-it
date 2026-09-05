@@ -15,13 +15,24 @@ enum SettingsStore {
     }
 
     static func set(_ value: String, for key: String, context: ModelContext) throws {
-        let all = try context.fetch(FetchDescriptor<AppSetting>())
-        if let setting = all.first(where: { $0.key == key }) {
-            setting.value = value
-        } else {
-            context.insert(AppSetting(key: key, value: value))
+        try setValues([key: value], context: context)
+    }
+
+    static func setValues(_ values: [String: String], context: ModelContext) throws {
+        do {
+            let all = try context.fetch(FetchDescriptor<AppSetting>())
+            for (key, value) in values {
+                if let setting = all.first(where: { $0.key == key }) {
+                    setting.value = value
+                } else {
+                    context.insert(AppSetting(key: key, value: value))
+                }
+            }
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
         }
-        try context.save()
     }
 
     static func remove(_ key: String, context: ModelContext) throws {

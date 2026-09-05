@@ -61,6 +61,28 @@ The app currently stores family data locally on the device.
 
 ## Development
 
+First launch offers a short family setup guide. Add a parent and at least one
+child, optionally assign chores, then continue to the parent dashboard. Chores
+use the existing weekly allowance eligibility rule; the app does not configure
+or pay an allowance amount.
+
+Skip Setup for Now keeps saved family members and chores. After switching users,
+open Settings to resume or restart setup. Restart keeps household data; Delete
+All Local Data requires confirmation and returns to welcome. Production never
+loads sample households. Saved setup progress survives relaunch; unsaved forms
+are discarded when cancelled or the app is closed.
+
+Run the unit tests and three UI flows with a dedicated iPhone Simulator:
+
+```sh
+xcodebuild test -project EarnedIt.xcodeproj -scheme EarnedIt \
+  -destination 'platform=iOS Simulator,id=<dedicated-simulator-uuid>' \
+  -derivedDataPath .artifacts/DerivedData CODE_SIGNING_ALLOWED=NO
+```
+
+The UI tests use a separate persistent store enabled only in Debug builds.
+Their reset argument never clears the normal household store.
+
 Earned It is being developed using an agent-first software engineering workflow
 with repository-level agent guidance, task-specific skills, automated testing,
 and human verification in the iOS Simulator.
