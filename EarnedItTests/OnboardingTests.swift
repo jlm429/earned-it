@@ -101,6 +101,55 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(user.displayName, "Renamed Parent")
     }
 
+    func testPersistedResponsibilityDraftRetrySavesCurrentValuesWithoutDuplicating() throws {
+        let store = try container()
+        let context = store.mainContext
+        context.autosaveEnabled = false
+        let parent = try FamilyUserService.save(id: UUID(), name: "Test Parent", role: .parent, avatar: .sun, context: context)
+        let firstChild = try FamilyUserService.save(id: UUID(), name: "First Child", role: .child, avatar: .star, context: context)
+        let secondChild = try FamilyUserService.save(id: UUID(), name: "Second Child", role: .child, avatar: .fox, context: context)
+        let draftID = UUID()
+        try DataCoordinator.updateResponsibilityDraft(
+            id: draftID, title: "Original title", notes: "Original notes", category: .home,
+            actor: parent, assignedChildID: firstChild.id, context: context
+        )
+        try context.save()
+        let original = try XCTUnwrap(context.fetch(FetchDescriptor<Responsibility>()).first)
+        let persistentID = original.persistentModelID
+        let createdAt = original.createdAt
+        context.insert(DailyRecord(responsibilityID: draftID, childID: firstChild.id, day: .now))
+        context.rollback()
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Responsibility>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyRecord>()), 0)
+
+        try DataCoordinator.updateResponsibilityDraft(
+            id: draftID, title: "Revised title", notes: "Revised notes", category: .school,
+            actor: parent, assignedChildID: secondChild.id, context: context
+        )
+        try context.save()
+        try DataCoordinator.prepareDailyData(context: context)
+
+        let reloaded = ModelContext(store)
+        let drafts = try reloaded.fetch(FetchDescriptor<Responsibility>())
+        XCTAssertEqual(drafts.count, 1)
+        let saved = try XCTUnwrap(drafts.first)
+        XCTAssertEqual(saved.id, draftID)
+        XCTAssertEqual(saved.persistentModelID, persistentID)
+        XCTAssertEqual(saved.createdAt, createdAt)
+        XCTAssertEqual(saved.creatorID, parent.id)
+        XCTAssertEqual(saved.creatorRole, .parent)
+        XCTAssertTrue(saved.isActive)
+        XCTAssertNil(saved.archivedAt)
+        XCTAssertEqual(saved.title, "Revised title")
+        XCTAssertEqual(saved.notes, "Revised notes")
+        XCTAssertEqual(saved.category, .school)
+        XCTAssertEqual(saved.assignedChildID, secondChild.id)
+        let records = try reloaded.fetch(FetchDescriptor<DailyRecord>())
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.responsibilityID, draftID)
+        XCTAssertEqual(records.first?.childID, secondChild.id)
+    }
+
     func testLegacyCompletedHouseholdIsPreservedAndRestartDoesNotResetIt() throws {
         let store = try container()
         let context = store.mainContext

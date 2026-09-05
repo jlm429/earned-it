@@ -143,18 +143,15 @@ struct ResponsibilityFormView: View {
                     existing.category = category
                 }
             } else {
-                let saved = try modelContext.fetch(FetchDescriptor<Responsibility>())
-                if !saved.contains(where: { $0.id == draftID }) {
-                    modelContext.insert(Responsibility(
-                        id: draftID,
-                        title: trimmedTitle,
-                        notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
-                        category: category,
-                        creatorID: actor.id,
-                        creatorRole: actor.role,
-                        assignedChildID: assignedChildID
-                    ))
-                }
+                try DataCoordinator.updateResponsibilityDraft(
+                    id: draftID,
+                    title: trimmedTitle,
+                    notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+                    category: category,
+                    actor: actor,
+                    assignedChildID: assignedChildID,
+                    context: modelContext
+                )
             }
             if !didReassign {
                 try modelContext.save()
