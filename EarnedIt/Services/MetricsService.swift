@@ -4,7 +4,6 @@ struct DayFacts: Equatable {
     let date: Date
     let states: [DailyStateKind]
     let isExcused: Bool
-
     var expectedCount: Int { isExcused ? 0 : states.count }
     var accountedCount: Int { isExcused ? 0 : states.filter(\.isAccountedFor).count }
 }
@@ -12,120 +11,36 @@ struct DayFacts: Equatable {
 struct WeeklySummary: Equatable {
     let accountedCount: Int
     let expectedCount: Int
-
-    var completion: Double? {
-        expectedCount == 0 ? nil : Double(accountedCount) / Double(expectedCount)
-    }
-
-    var status: ProgressStatus {
-        WeeklyScoringService.status(accounted: accountedCount, expected: expectedCount)
-    }
+    var completion: Double? { expectedCount == 0 ? nil : Double(accountedCount) / Double(expectedCount) }
+    var status: ProgressStatus { WeeklyScoringService.status(accounted: accountedCount, expected: expectedCount) }
 }
 
 enum MetricsService {
-    static func facts(
-        childID: UUID,
-        dates: [Date],
-        responsibilities: [Responsibility],
-        records: [DailyRecord],
-        excusedDays: [ExcusedDay],
-        calendar: Calendar = AppCalendar.current
-    ) -> [DayFacts] {
-        let childResponsibilities = responsibilities.filter { $0.assignedChildID == childID }
-        let childRecords = records.filter { $0.childID == childID }
-        let childExcuses = excusedDays.filter { $0.childID == childID }
-
+    static func facts(childID: UUID, dates: [Date], snapshot: HouseholdSnapshot, today: Date) -> [DayFacts] {
+        guard let household = snapshot.household else { return [] }
+        let calendar = household.calendar
+        let currentDay = CivilDay(today, calendar: calendar)
         return dates.map { date in
-            let day = calendar.startOfDay(for: date)
-            let expected = childResponsibilities.filter { $0.isExpected(on: day, calendar: calendar) }
-            let states = expected.map { responsibility in
-                childRecords.first {
-                    $0.responsibilityID == responsibility.id
-                        && AppCalendar.isPersistedDay($0.day, sameDayAs: day, calendar: calendar)
-                }?.state ?? .unmarked
-            }
-            let isExcused = childExcuses.contains {
-                AppCalendar.isPersistedDay($0.day, sameDayAs: day, calendar: calendar)
-            }
-            return DayFacts(date: day, states: states, isExcused: isExcused)
+            let day = CivilDay(date, calendar: calendar)
+            let chores = ChoreRules.dailyList(snapshot: snapshot, day: day, today: currentDay)
+            let states = chores.compactMap { $0.creditState(for: childID) }
+            let excused = snapshot.excuses.contains { $0.memberID == childID && $0.day == day && $0.isExcused }
+            return DayFacts(date: day.date(in: calendar), states: states, isExcused: excused)
         }
     }
 
-    static func currentWeekFacts(
-        childID: UUID,
-        today: Date,
-        responsibilities: [Responsibility],
-        records: [DailyRecord],
-        excusedDays: [ExcusedDay],
-        calendar: Calendar = AppCalendar.current
-    ) -> [DayFacts] {
-        weekFacts(
-            childID: childID,
-            containing: today,
-            responsibilities: responsibilities,
-            records: records,
-            excusedDays: excusedDays,
-            calendar: calendar
-        )
-    }
-
-    static func previousCompletedWeekFacts(
-        childID: UUID,
-        today: Date,
-        responsibilities: [Responsibility],
-        records: [DailyRecord],
-        excusedDays: [ExcusedDay],
-        calendar: Calendar = AppCalendar.current
-    ) -> [DayFacts] {
-        let currentStart = AppCalendar.weekStart(containing: today, calendar: calendar)
-        guard let previousDay = calendar.date(byAdding: .day, value: -1, to: currentStart) else { return [] }
-        return weekFacts(
-            childID: childID,
-            containing: previousDay,
-            responsibilities: responsibilities,
-            records: records,
-            excusedDays: excusedDays,
-            calendar: calendar
-        )
-    }
-
-    private static func weekFacts(
-        childID: UUID,
-        containing date: Date,
-        responsibilities: [Responsibility],
-        records: [DailyRecord],
-        excusedDays: [ExcusedDay],
-        calendar: Calendar
-    ) -> [DayFacts] {
+    static func weekFacts(childID: UUID, containing date: Date, snapshot: HouseholdSnapshot, today: Date) -> [DayFacts] {
+        guard let calendar = snapshot.household?.calendar else { return [] }
         let start = AppCalendar.weekStart(containing: date, calendar: calendar)
         let dates = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
-        return facts(
-            childID: childID,
-            dates: dates,
-            responsibilities: responsibilities,
-            records: records,
-            excusedDays: excusedDays,
-            calendar: calendar
-        )
+        return facts(childID: childID, dates: dates, snapshot: snapshot, today: today)
     }
 
-    static func streakFacts(
-        childID: UUID,
-        today: Date,
-        responsibilities: [Responsibility],
-        records: [DailyRecord],
-        excusedDays: [ExcusedDay],
-        calendar: Calendar = AppCalendar.current
-    ) -> [DayFacts] {
-        let relevant = responsibilities.filter { $0.assignedChildID == childID }
-        guard let earliest = relevant.map(\.createdAt).min() else { return [] }
-        return facts(
-            childID: childID,
-            dates: AppCalendar.dates(from: earliest, through: today, calendar: calendar),
-            responsibilities: responsibilities,
-            records: records,
-            excusedDays: excusedDays,
-            calendar: calendar
-        )
+    static func streak(childID: UUID, snapshot: HouseholdSnapshot, today: Date) -> Int {
+        guard let household = snapshot.household else { return 0 }
+        let calendar = household.calendar
+        let days = AppCalendar.dates(from: household.createdDay.date(in: calendar), through: today, calendar: calendar)
+        return StreakService.currentStreak(days: facts(childID: childID, dates: days, snapshot: snapshot, today: today),
+                                          today: today, calendar: calendar)
     }
 }

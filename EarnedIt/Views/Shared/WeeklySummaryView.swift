@@ -1,14 +1,15 @@
 import SwiftUI
 
 struct WeeklySummaryView: View {
-    let child: FamilyUser
+    @Environment(\.calendar) private var calendar
+    let child: FamilyMember
     let days: [DayFacts]
     let today: Date
     let isParentView: Bool
     let streak: Int
 
     private var summary: WeeklySummary {
-        WeeklyScoringService.summary(days: days, today: today)
+        WeeklyScoringService.summary(days: days, today: today, calendar: calendar)
     }
 
     var body: some View {
@@ -83,7 +84,7 @@ struct WeeklySummaryView: View {
     }
 
     private var childAllowanceMessage: String {
-        if let earned = WeeklyScoringService.allowanceEarned(days: days, asOf: today) {
+        if let earned = WeeklyScoringService.allowanceEarned(days: days, asOf: today, calendar: calendar) {
             return earned ? "Allowance earned this week" : "Keep going next week"
         }
         switch summary.status {

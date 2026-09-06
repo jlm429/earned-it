@@ -1,23 +1,16 @@
-import SwiftData
 import SwiftUI
 
 struct FamilyUserFormView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-
+    @Environment(HouseholdStore.self) private var store
     let role: UserRole
-    let existing: FamilyUser?
-
+    let existing: FamilyMember?
     @State private var draftID = UUID()
     @State private var displayName: String
     @State private var avatar: AvatarOption
     @State private var errorMessage: String?
 
-    private var trimmedName: String {
-        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    init(role: UserRole, existing: FamilyUser? = nil) {
+    init(role: UserRole, existing: FamilyMember? = nil) {
         self.role = role
         self.existing = existing
         _displayName = State(initialValue: existing?.displayName ?? "")
@@ -28,61 +21,38 @@ struct FamilyUserFormView: View {
         NavigationStack {
             Form {
                 Section(role.title) {
-                    TextField("Display name", text: $displayName)
-                        .textContentType(.name)
+                    TextField("Display name", text: $displayName).textContentType(.name)
                         .accessibilityIdentifier("family-display-name")
-                    if existing == nil {
-                        Picker("Avatar", selection: $avatar) {
-                            ForEach(AvatarOption.allCases) { option in
-                                Text(option.rawValue).tag(option)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        .accessibilityIdentifier("family-avatar")
+                    Picker("Avatar", selection: $avatar) {
+                        ForEach(AvatarOption.allCases) { option in Text(option.rawValue).tag(option) }
                     }
+                    .pickerStyle(.inline)
                 }
                 Section {
-                    Text("Use 1 to 50 characters. Saved family members stay on this device. Cancel discards this unsaved form.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    Text(store.household?.isSetupComplete == true && existing == nil
+                         ? "New members join the lists tomorrow. Today’s expectations and history stay intact."
+                         : "Members can have a profile before they have a device. Cancel discards this unsaved form.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle(existing == nil ? "Add \(role.title)" : "Edit Name")
+            .navigationTitle(existing == nil ? "Add \(role.title)" : "Edit Member")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(trimmedName.isEmpty || trimmedName.count > 50)
-                        .accessibilityIdentifier("save-family-user")
+                    Button("Save") {
+                        do {
+                            try store.saveMember(id: existing?.id ?? draftID, name: displayName, role: role, avatar: avatar)
+                            dismiss()
+                        } catch { errorMessage = error.localizedDescription }
+                    }
+                    .disabled(displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || displayName.count > 50)
+                    .accessibilityIdentifier("save-family-user")
                 }
             }
             .alert("Unable to Save", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "Please try again.")
-            }
-        }
-    }
-
-    private func save() {
-        guard !trimmedName.isEmpty, trimmedName.count <= 50 else { return }
-        do {
-            try FamilyUserService.save(
-                id: existing?.id ?? draftID,
-                name: trimmedName,
-                role: role,
-                avatar: avatar,
-                context: modelContext
-            )
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
+                get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+            )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
         }
     }
 }

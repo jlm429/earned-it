@@ -1,246 +1,78 @@
-import SwiftData
 import SwiftUI
 
 struct ParentChildDetailView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
-    @Query private var responsibilities: [Responsibility]
-    @Query private var records: [DailyRecord]
-    @Query private var excusedDays: [ExcusedDay]
-
-    let parent: FamilyUser
-    let child: FamilyUser
+    @Environment(HouseholdStore.self) private var store
+    let parent: FamilyMember
+    let child: FamilyMember
     let today: Date
+    @State private var selectedDate: Date?
+    @State private var weekOffset = 0
 
-    @State private var selectedDate = Date.now
-    @State private var presentedForm: PresentedResponsibility?
-    @State private var errorMessage: String?
-
-    private var children: [FamilyUser] {
-        users.filter { $0.role == .child }
-    }
-
-    private var selectedItems: [Responsibility] {
-        responsibilities
-            .filter { $0.assignedChildID == child.id && $0.isExpected(on: selectedDate, calendar: AppCalendar.current) }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-    }
-
-    private var weekFacts: [DayFacts] {
-        MetricsService.currentWeekFacts(
-            childID: child.id,
-            today: today,
-            responsibilities: responsibilities,
-            records: records,
-            excusedDays: excusedDays
-        )
-    }
-
+    private var date: Date { selectedDate ?? today }
+    private var weekDate: Date { store.calendar.date(byAdding: .day, value: 7 * weekOffset, to: today) ?? today }
+    private var days: [DayFacts] { store.weekFacts(for: child.id, containing: weekDate) }
     private var summary: WeeklySummary {
-        WeeklyScoringService.summary(days: weekFacts, today: today)
+        WeeklyScoringService.summary(days: days, today: min(today, days.last?.date ?? today), calendar: store.calendar)
     }
-
-    private var streak: Int {
-        StreakService.currentStreak(
-            days: MetricsService.streakFacts(
-                childID: child.id,
-                today: today,
-                responsibilities: responsibilities,
-                records: records,
-                excusedDays: excusedDays
-            ),
-            today: today
-        )
-    }
-
-    private var isSelectedDayExcused: Bool {
-        excusedDays.contains {
-            $0.childID == child.id && AppCalendar.isPersistedDay($0.day, sameDayAs: selectedDate)
-        }
+    private var isExcused: Bool {
+        store.snapshot.excuses.contains { $0.memberID == child.id && $0.day == CivilDay(date, calendar: store.calendar) && $0.isExcused }
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                summaryCard
-                dayPickerCard
-
-                if isSelectedDayExcused {
-                    Label("This day is excused and excluded from scoring and streak changes.", systemImage: "heart.fill")
-                        .foregroundStyle(.blue)
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-                        .accessibilityIdentifier("excused-day-banner")
-                }
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Responsibilities")
-                        .font(.title2.bold())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if selectedItems.isEmpty {
-                        ContentUnavailableView(
-                            "No expected items",
-                            systemImage: "minus.circle",
-                            description: Text("This day is neutral.")
-                        )
-                        Button("Add Chore") { presentedForm = .new }
-                            .accessibilityIdentifier("empty-add-chore")
-                    } else {
-                        ForEach(selectedItems) { responsibility in
-                            ResponsibilityRow(
-                                responsibility: responsibility,
-                                state: state(for: responsibility),
-                                availableStates: availableStates,
-                                isExcused: false,
-                                canManageDefinition: true,
-                                onStateChange: { update($0, for: responsibility) },
-                                onEdit: { presentedForm = .edit(responsibility) },
-                                onArchive: { archive(responsibility) }
-                            )
+                SectionCard {
+                    HStack(spacing: 12) {
+                        AvatarView(user: child)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(child.displayName).font(.title2.bold())
+                            Label("\(MetricsService.streak(childID: child.id, snapshot: store.snapshot, today: today)) day streak", systemImage: "flame.fill")
                         }
                     }
                 }
-            }
-            .padding()
+                SectionCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Button("Previous Week", systemImage: "chevron.left") { weekOffset -= 1 }
+                            Spacer()
+                            Text(weekOffset == 0 ? "This week" : weekDate.formatted(.dateTime.month().day())).font(.subheadline)
+                            Spacer()
+                            Button("Next Week", systemImage: "chevron.right") { weekOffset += 1 }.disabled(weekOffset == 0)
+                        }.labelStyle(.iconOnly)
+                        WeekStrip(days: days, today: today, compact: false)
+                        StatusBadge(status: summary.status)
+                        Text("\(summary.accountedCount) of \(summary.expectedCount) expected items accounted for")
+                            .accessibilityIdentifier("parent-weekly-count")
+                        if let completion = summary.completion {
+                            Text(completion, format: .percent.precision(.fractionLength(0))).font(.title.bold())
+                        }
+                        if let earned = WeeklyScoringService.allowanceEarned(days: days, asOf: today, calendar: store.calendar) {
+                            Label(earned ? "Allowance earned" : "Allowance not earned", systemImage: earned ? "checkmark.seal.fill" : "calendar.badge.clock")
+                        }
+                        Text("Required chores count for each required child. Any-one chores add credit only for the child who contributes. Excused days are excluded.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if child.joinedDay <= store.day {
+                    SectionCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Excuse a day").font(.headline)
+                            Text("Day").font(.subheadline.weight(.medium))
+                        DatePicker("Day", selection: Binding(get: { date }, set: { selectedDate = $0 }),
+                                       in: child.joinedDay.date(in: store.calendar)...today, displayedComponents: .date)
+                                .labelsHidden()
+                            Toggle("Excused from scoring", isOn: Binding(get: { isExcused }, set: { value in
+                                store.perform { try store.setExcused(memberID: child.id, date: date, excused: value) }
+                            }))
+                            .accessibilityIdentifier("excuse-day")
+                            Text("An excused day neither extends nor breaks a streak.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }.padding()
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(child.displayName)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    presentedForm = .new
-                } label: {
-                    Label("Add Responsibility", systemImage: "plus")
-                }
-                .accessibilityIdentifier("add-responsibility-child-detail")
-            }
-        }
-        .sheet(item: $presentedForm) { presentation in
-            ResponsibilityFormView(
-                actor: parent,
-                children: children,
-                preferredChildID: child.id,
-                existing: presentation.responsibility
-            )
-        }
-        .alert("Unable to Update", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorMessage ?? "Please try again.")
-        }
-        .onChange(of: today) { oldDay, newDay in
-            if AppCalendar.current.isDate(selectedDate, inSameDayAs: oldDay) {
-                selectedDate = newDay
-            }
-        }
         .accessibilityIdentifier("parent-child-detail")
-    }
-
-    private var summaryCard: some View {
-        SectionCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    AvatarView(user: child)
-                    VStack(alignment: .leading, spacing: 4) {
-                        StatusBadge(status: summary.status)
-                        Text("\(summary.accountedCount) of \(summary.expectedCount) this week")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Label("\(streak)", systemImage: "flame.fill")
-                        .foregroundStyle(.orange)
-                        .accessibilityLabel("\(streak) day streak")
-                }
-                WeekStrip(days: weekFacts, today: today, compact: false)
-                NavigationLink {
-                    WeeklySummaryView(
-                        child: child,
-                        days: weekFacts,
-                        today: today,
-                        isParentView: true,
-                        streak: streak
-                    )
-                } label: {
-                    Label("Open Weekly Summary", systemImage: "chart.bar.fill")
-                }
-                .accessibilityIdentifier("view-weekly-summary")
-            }
-        }
-    }
-
-    private var dayPickerCard: some View {
-        SectionCard {
-            VStack(alignment: .leading, spacing: 12) {
-                DatePicker("Day", selection: $selectedDate, in: ...today, displayedComponents: .date)
-                    .accessibilityIdentifier("parent-day-picker")
-                Button {
-                    toggleExcused()
-                } label: {
-                    Label(
-                        isSelectedDayExcused ? "Remove Excused Day" : "Excuse Entire Day",
-                        systemImage: isSelectedDayExcused ? "heart.slash" : "heart"
-                    )
-                }
-                .accessibilityIdentifier("toggle-excused-day")
-            }
-        }
-    }
-
-    private func state(for responsibility: Responsibility) -> DailyStateKind {
-        records.first {
-            $0.responsibilityID == responsibility.id
-                && AppCalendar.isPersistedDay($0.day, sameDayAs: selectedDate)
-        }?.state ?? .unmarked
-    }
-
-    private var availableStates: [DailyStateKind] {
-        if AppCalendar.current.startOfDay(for: selectedDate) < AppCalendar.current.startOfDay(for: today) {
-            return DailyStateKind.allCases.filter { $0 != .unmarked }
-        }
-        return DailyStateKind.allCases
-    }
-
-    private func update(_ state: DailyStateKind, for responsibility: Responsibility) {
-        do {
-            try DataCoordinator.setState(
-                state,
-                actor: parent,
-                responsibility: responsibility,
-                date: selectedDate,
-                today: today,
-                records: records,
-                context: modelContext
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func toggleExcused() {
-        do {
-            try DataCoordinator.toggleExcused(
-                childID: child.id,
-                date: selectedDate,
-                excusedDays: excusedDays,
-                context: modelContext
-            )
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func archive(_ responsibility: Responsibility) {
-        do {
-            try DataCoordinator.archive(responsibility, actor: parent, context: modelContext)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
     }
 }

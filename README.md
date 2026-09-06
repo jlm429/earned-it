@@ -1,128 +1,62 @@
 # Earned It
 
-**A simple allowance and responsibility tracker for families.**
+A native iPhone app that helps parents see what their children did without asking or nagging.
 
-Earned It is a native iOS app designed to help kids take ownership of their
-daily responsibilities while giving parents an easy way to see how things are
-going without constant reminders.
+## A shared view of the day
 
-![Earned It preview](assets/earned-it-preview.png)
+One family has one recurring chore list for each weekday, Sunday through Saturday. Every member uses those same lists. A Monday chore returns next Monday with no completions carried forward.
 
-## About
+A chore can require one child, any one eligible child, specific children, or all children. Each child records their own Done or Not Needed Today entry. Parents see expected people, completed people, and who remains directly on the daily list. Removing an entry asks for confirmation and changes only that person’s contribution for that date.
 
-Each child has a simple daily list of responsibilities. Items can be marked as
-**Done** or **Not Needed Today**, making it easy to account for everything that
-was expected that day.
+## Create or join a family
 
-Parents get a dashboard showing each child's progress, outstanding items,
-weekly status, and current streak.
+Choose **Create Family**, enter a family name and parent name, then add children. Children can exist before they have a device. Configure the seven weekday lists during setup or later. Saved setup survives closing the app.
 
-The goal is intentionally simple: encourage consistency and accountability
-without turning chores into an elaborate game.
+From **Family & Sharing**, connect to iCloud and use **Invite or Manage Sharing** to send a private Apple invitation. On another device, open that invitation or choose **Join Existing Family** and paste its link. **Find Connected Families** also finds families already connected to the current iCloud account.
 
-## Features
+An invited installation requests its preexisting family profiles. A parent reviews and approves those profiles. One installation can use multiple profiles, and one child can use multiple installations. An installation connected as the family’s iCloud owner can select any family profile. An iCloud account is not a family member.
 
-- Daily responsibility lists
-- Separate parent and child experiences
-- Parent visibility and overrides
-- Weekly allowance progress
-- Daily streak tracking
-- Excused days
-- Custom family member names and avatars
-- Daily motivational quotes
-- Local persistence
-- Accessible, native iOS interface
-- No ads
+The app keeps a local SwiftData journal and exchanges its facts through CloudKit private/shared databases. Foreground, local changes, and manual refresh trigger sync. There is no custom backend or push notification dependency. Offline changes are retained for retry. Synchronization is eventual, not instantaneous.
 
-## How Allowance Progress Works
+**Trust boundary:** CloudKit read/write participants can modify or delete any records in a share. App parent/child restrictions are centralized client checks, not server-enforced protection against a modified client. Invite only trusted family participants.
 
-Earned It tracks how consistently responsibilities are accounted for throughout
-the week.
+## Progress, streaks, and allowance
 
-- **Green**: 95% or better
-- **Yellow**: 85% to under 95%
-- **Red**: below 85%
-- **85% or better** at the end of the week earns the allowance
+Weeks run Monday through Sunday. Green starts at 95%, yellow at 85%, and red is below 85%. At least 85% accounted for earns allowance after Sunday. Zero expected items are neutral. Children see status and streaks, without numeric percentages. The app does not configure amounts or make payments.
 
-Both **Done** and **Not Needed Today** count as accounted for. Items left
-unmarked after the day has passed are recorded as missed.
+- Required chores count once for each required child. Only that child’s own Done or Not Needed Today state earns credit.
+- Any-one chores are optional individual contributions. A contributor gets one accounted item and one expected item; other eligible children get neither credit nor a penalty.
+- Excused days are excluded. They neither extend nor break streaks. Days without scored chores are also neutral.
+- Past unmarked obligations derive Missed. Parents can correct dated entries and excuse days.
 
-Excused days do not count against progress.
+For example, if Hanna and Alek must both water plants and Hanna finishes, Hanna has 1/1 and Alek has 0/1. If watering plants is any-one, Hanna has 1/1 and Alek has no scored item. Alek does not get Hanna’s credit and is not penalized for leaving a finished shared chore alone.
 
-## Built With
+## Dates and history
 
-- **Swift**
-- **SwiftUI**
-- **SwiftData**
-- **XCTest / XCUITest**
-- Native iOS accessibility and Dynamic Type support
+The family’s Gregorian timezone is fixed when created. Traveling devices keep the same family dates. New chores start today. Edits, archives, and membership changes after setup start tomorrow so today’s responsibilities and contributions stay intact. History remains available after configuration changes or member archival.
 
-The app currently stores family data locally on the device.
+This preproduction refactor uses a new named store, `shared-household-v1.store`. Old beta stores are left untouched; their incompatible per-child data is not migrated or automatically deleted. Production never seeds sample families. Settings requires confirmation to remove local data. Disconnecting a shared installation does not delete CloudKit or other devices’ data and requires pending changes to sync first.
 
-## Getting Started
+## Development and verification
 
-First launch offers a short family setup guide. Add a parent and at least one
-child, optionally assign chores, then continue to the parent dashboard. Chores
-use the existing weekly allowance eligibility rule; the app does not configure
-or pay an allowance amount.
-
-Family names must be distinct within each role, ignoring capitalization and
-leading or trailing spaces. You can manage names and add people later in Family
-Management from the parent dashboard.
-
-Skip Setup for Now permits an empty household and keeps saved family members,
-chores, and the current setup step. With no parent, use Add Parent on the user
-picker, then open that profile and use Add Child. Add Chore is available from
-an empty child's list.
-
-Use Switch User to reach Settings, where skipped setup can be resumed or setup
-can be restarted. Restart keeps household data; Delete All Local Data requires
-confirmation and returns to welcome. Production never loads sample households
-or automatically removes existing ones. Saved setup progress survives relaunch;
-completed or skipped setup does not reopen automatically. Unsaved forms are
-discarded when cancelled or the app process ends.
-
-## Development
-
-Run the unit tests and three UI flows with a dedicated iPhone Simulator:
+Use the selected full Xcode installation and a task-isolated iPhone Simulator:
 
 ```sh
 xcodebuild test -project EarnedIt.xcodeproj -scheme EarnedIt \
-  -destination 'platform=iOS Simulator,id=<dedicated-simulator-uuid>' \
-  -derivedDataPath .artifacts/DerivedData CODE_SIGNING_ALLOWED=NO
+  -destination 'platform=iOS Simulator,id=<isolated-simulator-uuid>' \
+  -derivedDataPath .artifacts/DerivedData \
+  -resultBundlePath .artifacts/tests.xcresult \
+  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
 ```
 
-The UI tests use a separate persistent store enabled only in Debug builds.
-Their reset argument never clears the normal household store.
+Debug UI tests use a separate store and explicit reset flags. Unsigned Simulator builds do not activate CloudKit. Domain tests inject an in-memory transport server to verify shared identity, profile approval, convergence, retries, and credit. These tests are not live iCloud verification.
 
-Earned It is being developed using an agent-first software engineering workflow
-with repository-level agent guidance, task-specific skills, automated testing,
-and human verification in the iOS Simulator.
+Physical-device sharing requires an Apple development team with the iCloud capability and the container declared in `Configuration/EarnedIt.entitlements`. Provision `iCloud.com.jlm429.EarnedIt` for the app’s bundle ID. The explicit CloudKit schema is `HouseholdFact` with `payload` (Bytes) and `formatVersion` (Int64), plus the system CKShare record. Development saves can create the development schema. Production schema deployment is a separate, deliberate release action. The app never initializes or promotes production schema automatically.
 
-The repository includes:
+Before distribution, validate create/invite, cold and warm invitation acceptance, profile approval, two-device completions, relaunch, offline recovery, account changes, read-only access, and share revocation with two signed devices and two iCloud accounts. No live signing, provisioning, or production schema mutation is performed by local tests.
 
-- `AGENTS.md` for canonical agent instructions
-- `CLAUDE.md` as a pointer to the canonical instructions
-- `skills/` for task-specific agent guidance
-
-## Status
-
-Earned It is currently under active development.
-
-The first native iOS prototype is working and being tested locally using the
-iOS Simulator.
-
-**App Store release coming soon.**
+See [architecture decisions and Apple sources](docs/shared-household-architecture.md) and [agent guidance](AGENTS.md).
 
 ## Privacy
 
-Earned It is designed around a simple principle: family data should remain
-private.
-
-The current version stores data locally and does not include advertising,
-tracking, analytics, or third-party AI services.
-
-## License
-
-This project is currently under development. Licensing information will be
-added before public release.
+Family data stays in the installation’s local store and, when connected, the owner’s private CloudKit zone shared only through invited access. There are no ads, analytics, third-party services, or AI features.

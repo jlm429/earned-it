@@ -1,82 +1,51 @@
-import SwiftData
+import CloudKit
 import SwiftUI
 import UIKit
 
 struct RootView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(HouseholdStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
-    @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
-    @Query private var settings: [AppSetting]
-
-    @State private var isPreparing = true
-    @State private var preparationError: String?
-    @State private var today = Date.now
-
-    private var setupComplete: Bool {
-        OnboardingService.disposition(in: settings) != .inProgress
-    }
-
-    private var selectedUser: FamilyUser? {
-        guard let rawID = SettingsStore.value(for: SettingsStore.selectedUserIDKey, in: settings),
-              let id = UUID(uuidString: rawID) else { return nil }
-        return users.first { $0.id == id }
-    }
+    @State private var invitations = ShareAcceptance.shared
 
     var body: some View {
+        @Bindable var store = store
         Group {
-            if isPreparing {
-                ProgressView("Preparing Allowance Tracker")
-                    .accessibilityIdentifier("launch-progress")
-            } else if !setupComplete {
+            if store.household == nil || store.household?.isSetupComplete == false {
                 SetupView()
-            } else if let selectedUser {
-                MainRoleView(user: selectedUser, today: today)
+            } else if let member = store.selectedMember {
+                MainRoleView(user: member, today: store.today)
             } else {
                 UserSelectionView()
             }
         }
-        .task {
-            prepareForLaunch()
+        .environment(\.calendar, store.calendar)
+        .environment(\.timeZone, store.calendar.timeZone)
+        .task { store.refreshDate(); await acceptInvitation() }
+        .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)-\(store.midnightTimerRevision)") {
+            guard scenePhase == .active else { return }
+            let delay = max(0, store.nextHouseholdMidnight.timeIntervalSinceNow)
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            store.refreshDate()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, !isPreparing else { return }
-            refreshDailyData()
+            if phase == .active { store.refreshDate() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
-            guard !isPreparing else { return }
-            refreshDailyData()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
-            guard !isPreparing else { return }
-            refreshDailyData()
-        }
-        .alert("Local Data Error", isPresented: Binding(
-            get: { preparationError != nil },
-            set: { if !$0 { preparationError = nil } }
+        .onChange(of: invitations.pending) { _, _ in Task { await acceptInvitation() } }
+        .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in store.refreshDate() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in store.refreshDate() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in store.significantTimeChanged() }
+        .alert("Unable to Update", isPresented: Binding(
+            get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } }
         )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(preparationError ?? "Please try again.")
+            Text(store.errorMessage ?? "Please try again.")
         }
     }
 
-    private func prepareForLaunch() {
-        guard isPreparing else { return }
-        do {
-            try DataCoordinator.prepareDailyData(context: modelContext, today: today)
-        } catch {
-            preparationError = error.localizedDescription
-        }
-        isPreparing = false
-    }
-
-    private func refreshDailyData() {
-        let now = Date.now
-        today = now
-        do {
-            try DataCoordinator.prepareDailyData(context: modelContext, today: now)
-        } catch {
-            preparationError = error.localizedDescription
-        }
+    private func acceptInvitation() async {
+        guard let metadata = invitations.pending else { return }
+        invitations.pending = nil
+        await store.accept(metadata: metadata)
     }
 }
