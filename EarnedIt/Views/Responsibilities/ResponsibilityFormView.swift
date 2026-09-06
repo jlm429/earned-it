@@ -46,7 +46,7 @@ struct ResponsibilityFormView: View {
                     if mode == .all {
                         Text("Every child on this family’s list for that date completes it independently.")
                     } else {
-                        ForEach(store.children) { member in
+                        ForEach(store.eligibleChildren(choreID: choreID)) { member in
                             Toggle(member.displayName, isOn: Binding(
                                 get: { memberIDs.contains(member.id) },
                                 set: {

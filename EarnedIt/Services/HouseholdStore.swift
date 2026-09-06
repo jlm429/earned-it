@@ -57,6 +57,15 @@ final class HouseholdStore {
         ChoreRules.dailyList(snapshot: snapshot, day: CivilDay(date ?? today, calendar: calendar), today: day)
     }
 
+    func choreAssignmentDay(choreID: UUID) -> CivilDay {
+        snapshot.revisions.contains { $0.choreID == choreID } ? tomorrow : day
+    }
+
+    func eligibleChildren(choreID: UUID) -> [FamilyMember] {
+        let effective = choreAssignmentDay(choreID: choreID)
+        return snapshot.members.filter { $0.role == .child && snapshot.isActive($0, on: effective) }
+    }
+
     func weekFacts(for memberID: UUID, containing date: Date? = nil) -> [DayFacts] {
         MetricsService.weekFacts(childID: memberID, containing: date ?? today, snapshot: snapshot, today: today)
     }
@@ -156,9 +165,8 @@ final class HouseholdStore {
         guard let household else { throw HouseholdError.noHousehold }
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 80, notes.count <= 300 else { throw HouseholdError.invalidAssignment }
-        let existing = snapshot.revisions.contains { $0.choreID == choreID }
-        let effective = existing ? tomorrow : day
-        let eligible = snapshot.members.filter { $0.role == .child && $0.isActive(on: effective) }.map(\.id)
+        let effective = choreAssignmentDay(choreID: choreID)
+        let eligible = eligibleChildren(choreID: choreID).map(\.id)
         let ids = Set(memberIDs)
         guard mode == .all || ids.isSubset(of: Set(eligible)) else { throw HouseholdError.invalidAssignment }
         switch mode {
@@ -400,8 +408,9 @@ final class HouseholdStore {
     }
 
     func resetLocalData() throws {
+        today = clock()
         guard !isSyncing else { throw HouseholdError.pendingChanges }
-        if !profiles.isEmpty { try requireParent() }
+        if !profiles.isEmpty { try PermissionService.requireParent(selectedMember) }
         if session.location != nil && pendingCount > 0 { throw HouseholdError.pendingChanges }
         syncTask?.cancel()
         try repository.clearLocalData(retainingRejected: session.location != nil)

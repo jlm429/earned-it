@@ -65,6 +65,7 @@ final class TestTransport: HouseholdTransport {
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
     var beforeCreateZone: (() async -> Void)?
+    var beforeFetch: (() async -> Void)?
 
     init(server: TestCloudServer, account: String) { self.server = server; self.account = account }
     func participantID() async throws -> String { account }
@@ -88,6 +89,7 @@ final class TestTransport: HouseholdTransport {
     }
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation { throw HouseholdError.invitation }
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
+        await beforeFetch?()
         if let fetchError { throw fetchError }
         guard let zone = server.zones[location.zoneName], zone.owner == account || zone.participants.contains(account) else {
             throw CKError(.permissionFailure)
