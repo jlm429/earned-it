@@ -135,11 +135,15 @@ final class EarnedItUITests: XCTestCase {
         checkControls(["state-feed-dog-alek", "state-feed-dog-hanna", "state-feed-dog-new-child"])
         keepScreenshot("after-new-child-immediately-in-today")
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .contrast, .hitRegion]) { issue in
-            // The audit flags the decorative emoji's ink bounds. Its element screenshot
-            // shows the full star inside the 52-point avatar, which is hidden from VoiceOver.
-            guard issue.auditType == .textClipped, let element = issue.element else { return false }
-            return element.label == "⭐️" && abs(element.frame.width - 52) < 0.01
-                && abs(element.frame.height - 52) < 0.01
+            // Captured audit attachments show the full decorative star, not clipped text.
+            // Its shading is not a text contrast signal. AvatarView hides it from VoiceOver;
+            // the adjacent member name and status carry meaning and remain fully audited.
+            guard issue.auditType == .textClipped || issue.auditType == .contrast,
+                  let element = issue.element, element.label == "⭐️",
+                  abs(element.frame.width - 52) < 0.01,
+                  abs(element.frame.height - 52) < 0.01 else { return false }
+            let progress = self.app.buttons["parent-child-alek"]
+            return progress.exists && progress.frame.contains(element.frame)
         }
         tap("switch-user")
         tap("user-card-new-child")

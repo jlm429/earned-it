@@ -7,7 +7,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 ### Fixed
 
 - New children immediately join existing all-children chores that apply today. Particular-child assignments, future chore starts, earlier history, and other children’s completions are preserved across reload and sync.
-- Daily chore cards now show compact, wrapping child controls with individual status symbols and colors. Tap once to complete or undo your permitted entries; touch and hold for other states. Names stay readable with Dynamic Type and controls have at least 44-point touch targets.
+- Daily chore cards now show compact, wrapping child controls with individual status symbols and colors. Tap once to complete or undo your permitted entries; touch and hold for other states. Names stay readable with Dynamic Type, controls have at least 44-point touch targets, and supporting daily text has stronger contrast.
 
 - An approved local parent can disconnect an installation after its iCloud share becomes read-only or access is revoked. Disconnect still requires confirmation, blocks ordinary pending changes and active synchronization, preserves rejected-change evidence, and leaves iCloud and other installations untouched.
 - Chore assignment choices now match the date used when saving. New chores use today's children; edits use tomorrow's children. A child joining tomorrow can be selected for an edit, while a child archived from tomorrow remains eligible for a new chore today.
