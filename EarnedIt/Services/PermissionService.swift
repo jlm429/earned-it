@@ -36,7 +36,7 @@ enum PermissionService {
         let granted = snapshot.grants.first {
             $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID
         }?.memberIDs ?? []
-        return snapshot.members.filter { $0.isActive(on: day) && (hasOwnerAccess || granted.contains($0.id)) }
+        return snapshot.members.filter { snapshot.isActive($0, on: day) && (hasOwnerAccess || granted.contains($0.id)) }
     }
 
     static func requireParent(_ actor: FamilyMember?) throws {

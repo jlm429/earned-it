@@ -14,14 +14,14 @@ struct FamilyManagementView: View {
     var body: some View {
         List {
             Section("Family members") {
-                ForEach(store.snapshot.members.filter { $0.archivedFrom == nil || $0.isActive(on: store.day) }) { member in
+                ForEach(store.snapshot.members.filter { $0.archivedFrom == nil || store.snapshot.isActive($0, on: store.day) }) { member in
                     HStack(spacing: 12) {
                         AvatarView(user: member, size: 44)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(member.displayName).font(.headline)
                             Text(member.role.title).font(.caption).foregroundStyle(.secondary)
                             if member.joinedDay > store.day { Text("Joins lists tomorrow").font(.caption) }
-                            if member.archivedFrom != nil { Text("Archived from tomorrow").font(.caption) }
+                            if member.archivedFrom != nil && !store.snapshot.isActive(member, on: store.tomorrow) { Text("Archived from tomorrow").font(.caption) }
                         }
                         Spacer()
                         Menu {

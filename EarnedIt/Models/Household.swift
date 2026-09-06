@@ -196,6 +196,7 @@ struct HouseholdSnapshot: Equatable {
     var revisions: [ChoreRevision] = []
     var completions: [DatedCompletion] = []
     var recordedAssignments: [DatedCompletion] = []
+    private var parentCreationOrder: [UUID] = []
     var excuses: [Excuse] = []
     var requests: [ProfileRequest] = []
     var grants: [ProfileGrant] = []
@@ -216,7 +217,7 @@ struct HouseholdSnapshot: Equatable {
             case .chore(let value): revisions.append(value)
             case .completion(let value):
                 completionsByKey[value.key] = value
-                if value.state.isAccountedFor { recordedAssignments.append(value) }
+                recordedAssignments.append(value)
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
             case .grant(let value): grantsByKey[value.key] = value
@@ -227,10 +228,7 @@ struct HouseholdSnapshot: Equatable {
             let rhs = creationSequence[$1.id] ?? 0
             return lhs == rhs ? $0.id.uuidString < $1.id.uuidString : lhs < rhs
         }
-        if parents.allSatisfy({ $0.archivedFrom != nil }), var survivor = parents.first {
-            survivor.archivedFrom = nil
-            membersByID[survivor.id] = survivor
-        }
+        parentCreationOrder = parents.map(\.id)
         members = membersByID.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         completions = completionsByKey.values.sorted { $0.key < $1.key }
         excuses = excusesByKey.values.sorted { $0.key < $1.key }
@@ -245,6 +243,14 @@ struct HouseholdSnapshot: Equatable {
                 $0.element.effectiveDay == $1.element.effectiveDay
                     ? $0.offset < $1.offset : $0.element.effectiveDay < $1.element.effectiveDay
             }?.element
+    }
+
+    func isActive(_ member: FamilyMember, on day: CivilDay) -> Bool {
+        guard let member = self.member(member.id) else { return false }
+        if member.isActive(on: day) { return true }
+        guard member.role == .parent, member.joinedDay <= day,
+              !members.contains(where: { $0.role == .parent && $0.isActive(on: day) }) else { return false }
+        return parentCreationOrder.first { id in members.contains { $0.id == id && $0.joinedDay <= day } } == member.id
     }
 
     func member(_ id: UUID) -> FamilyMember? { members.first { $0.id == id } }

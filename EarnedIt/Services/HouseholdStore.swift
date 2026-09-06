@@ -43,7 +43,7 @@ final class HouseholdStore {
     var tomorrow: CivilDay { day.adding(days: 1, calendar: calendar) }
     var profiles: [FamilyMember] { PermissionService.availableProfiles(snapshot: snapshot, session: session, day: day) }
     var selectedMember: FamilyMember? { profiles.first { $0.id == session.selectedMemberID } }
-    var children: [FamilyMember] { snapshot.members.filter { $0.role == .child && $0.isActive(on: tomorrow) } }
+    var children: [FamilyMember] { snapshot.members.filter { $0.role == .child && snapshot.isActive($0, on: tomorrow) } }
     var pendingCount: Int { (try? session.householdID.map { try repository.pending(householdID: $0).count }) ?? 0 }
     var pendingRequests: [ProfileRequest] {
         snapshot.requests.filter { request in !snapshot.grants.contains { $0.requestID == request.id } }
@@ -136,7 +136,7 @@ final class HouseholdStore {
     func archiveMember(_ id: UUID) throws {
         try requireParent()
         guard var member = snapshot.member(id), member.id != selectedMember?.id else { throw HouseholdError.lastParent }
-        if member.role == .parent && snapshot.members.filter({ $0.role == .parent && $0.isActive(on: tomorrow) }).count <= 1 {
+        if member.role == .parent && snapshot.members.filter({ $0.role == .parent && snapshot.isActive($0, on: tomorrow) }).count <= 1 {
             throw HouseholdError.lastParent
         }
         member.archivedFrom = tomorrow
@@ -201,7 +201,7 @@ final class HouseholdStore {
     func requestProfiles(_ ids: [UUID], deviceName: String) throws {
         try requireWriteAccess()
         guard let participant = session.cloudParticipantID, session.location != nil,
-              !ids.isEmpty, Set(ids).isSubset(of: Set(snapshot.members.filter { $0.isActive(on: day) }.map(\.id))) else {
+              !ids.isEmpty, Set(ids).isSubset(of: Set(snapshot.members.filter { snapshot.isActive($0, on: day) }.map(\.id))) else {
             throw HouseholdError.missingProfile
         }
         try append(.request(ProfileRequest(id: UUID(), deviceID: session.deviceID, cloudParticipantID: participant,
@@ -337,9 +337,21 @@ final class HouseholdStore {
             today = clock()
             let candidates = try repository.pending(householdID: location.householdID, includingRejected: true)
             var reasons: [UUID: String] = [:]
-            let pending = candidates.filter { fact in
+            var pending = candidates.filter { fact in
                 do { try authorizePending([fact]); return true }
                 catch { reasons[fact.id] = error.localizedDescription; return false }
+            }
+            while true {
+                let available = HouseholdSnapshot(facts: remote + pending)
+                let retained = pending.filter { fact in
+                    guard hasUploadReferences(fact, in: available) else {
+                        reasons[fact.id] = "Referenced family data is not shared yet. Ask a parent to review the retained changes, then refresh."
+                        return false
+                    }
+                    return true
+                }
+                if retained.count == pending.count { break }
+                pending = retained
             }
             try repository.setRejections(reasons, householdID: location.householdID)
             rejectedChanges = reasons
@@ -432,6 +444,24 @@ final class HouseholdStore {
                 guard author.role == .parent || completion.memberID == author.id else { throw HouseholdError.permission }
             default: try PermissionService.requireParent(author)
             }
+        }
+    }
+
+    private func hasUploadReferences(_ fact: HouseholdFact, in available: HouseholdSnapshot) -> Bool {
+        guard available.household?.id == fact.householdID else { return false }
+        if let author = fact.authorMemberID, available.member(author) == nil { return false }
+        func hasMembers(_ ids: [UUID]) -> Bool { ids.allSatisfy { available.member($0) != nil } }
+        switch fact.body {
+        case .household, .member: return true
+        case .chore(let value): return hasMembers(value.memberIDs)
+        case .completion(let value):
+            return hasMembers(value.eligibleMemberIDs + [value.memberID, value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+        case .excuse(let value): return hasMembers([value.memberID])
+        case .request(let value): return hasMembers(value.memberIDs)
+        case .grant(let value):
+            return hasMembers(value.memberIDs + [value.approvedBy])
+                && available.requests.contains { $0.id == value.requestID }
         }
     }
 

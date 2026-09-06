@@ -49,7 +49,7 @@ struct UserSelectionView: View {
                 Text("Connect your profiles").font(.title2.bold())
                 Text("Choose the people who use this installation. A parent will approve your request in Family & Sharing.")
                 TextField("Device label", text: $deviceName).textFieldStyle(.roundedBorder)
-                ForEach(store.snapshot.members.filter { $0.isActive(on: store.day) }) { member in
+                ForEach(store.snapshot.members.filter { store.snapshot.isActive($0, on: store.day) }) { member in
                     Toggle("\(member.displayName) · \(member.role.title)", isOn: Binding(
                         get: { requestedIDs.contains(member.id) },
                         set: { if $0 { requestedIDs.insert(member.id) } else { requestedIDs.remove(member.id) } }
