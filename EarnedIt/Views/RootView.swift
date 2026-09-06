@@ -21,6 +21,12 @@ struct RootView: View {
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
         .task { store.refreshDate(); await acceptInvitation() }
+        .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)") {
+            guard scenePhase == .active else { return }
+            let delay = max(0, store.nextHouseholdMidnight.timeIntervalSinceNow)
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            store.refreshDate()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { store.refreshDate() }
         }

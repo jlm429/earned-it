@@ -32,9 +32,27 @@ final class HouseholdRepository {
         try context.fetch(FetchDescriptor<StoredFact>()).filter { $0.householdID == householdID }.map { try $0.fact() }
     }
 
-    func pending(householdID: UUID) throws -> [HouseholdFact] {
-        try context.fetch(FetchDescriptor<StoredFact>()).filter { $0.householdID == householdID && !$0.uploaded }
+    func pending(householdID: UUID, includingRejected: Bool = false) throws -> [HouseholdFact] {
+        try context.fetch(FetchDescriptor<StoredFact>()).filter { $0.householdID == householdID && !$0.uploaded && (includingRejected || $0.rejectionReason == nil) }
             .map { try $0.fact() }.sorted(by: HouseholdFact.precedes)
+    }
+
+    func rejections(householdID: UUID) throws -> [UUID: String] {
+        let stored = try context.fetch(FetchDescriptor<StoredFact>())
+        return Dictionary(uniqueKeysWithValues: stored.filter { $0.householdID == householdID && !$0.uploaded }
+            .compactMap { fact in fact.rejectionReason.map { (fact.id, $0) } })
+    }
+
+    func setRejections(_ reasons: [UUID: String], householdID: UUID) throws {
+        do {
+            for stored in try context.fetch(FetchDescriptor<StoredFact>()) where stored.householdID == householdID {
+                stored.rejectionReason = reasons[stored.id]
+            }
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
     }
 
     func commit(facts: [HouseholdFact], session: DeviceSession? = nil, uploaded: Bool = false) throws {
@@ -65,9 +83,11 @@ final class HouseholdRepository {
         }
     }
 
-    func clearLocalData() throws {
+    func clearLocalData(retainingRejected: Bool = false) throws {
         do {
-            try context.fetch(FetchDescriptor<StoredFact>()).forEach(context.delete)
+            let stored = try context.fetch(FetchDescriptor<StoredFact>())
+            let retainedHouseholds = Set(stored.filter { $0.rejectionReason != nil }.map(\.householdID))
+            stored.filter { !retainingRejected || !retainedHouseholds.contains($0.householdID) }.forEach(context.delete)
             try context.fetch(FetchDescriptor<StoredSession>()).forEach(context.delete)
             try context.save()
         } catch {

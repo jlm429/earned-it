@@ -7,6 +7,7 @@ final class StoredFact {
     var householdID: UUID
     var payload: Data
     var uploaded: Bool
+    var rejectionReason: String?
 
     init(_ fact: HouseholdFact, uploaded: Bool = false) throws {
         id = fact.id

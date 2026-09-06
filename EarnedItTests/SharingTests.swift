@@ -194,4 +194,141 @@ final class SharingTests: XCTestCase {
         let facts = try family.repository.facts(householdID: family.store.household!.id)
         XCTAssertEqual(HouseholdSnapshot(facts: facts), HouseholdSnapshot(facts: facts.reversed()))
     }
+    func testRecordedRequiredAssignmentSurvivesOfflineAnyOneRevision() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let id = try family.chore(.multiple, ids: [family.hanna.id, family.alek.id])
+        try await family.store.connect()
+        let peer = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                      transport: TestTransport(server: server, account: "owner"),
+                                      clock: { family.clock.now }, automaticSync: false)
+        try await peer.joinExisting(family.store.session.location!)
+        family.move(to: "2026-09-13T16:00:00Z")
+        try family.store.saveChore(choreID: id, weekday: .monday, title: "Water plants",
+                                  mode: .anyOne, memberIDs: [family.hanna.id, family.alek.id])
+        family.move(to: "2026-09-14T16:00:00Z")
+        try peer.selectProfile(family.hanna.id)
+        try peer.setCompletion(choreID: id, memberID: family.hanna.id, date: family.clock.now, state: .done)
+        try await family.store.synchronize()
+        try await peer.synchronize()
+        try await family.store.synchronize()
+        XCTAssertEqual(peer.snapshot, family.store.snapshot)
+        let chore = try XCTUnwrap(peer.dailyList().first)
+        XCTAssertEqual(chore.configuration.mode, .anyOne)
+        XCTAssertEqual(chore.requiredCompletionCount, 2)
+        XCTAssertFalse(chore.isFullyComplete)
+        XCTAssertEqual(chore.remainingMembers.map(\.id), [family.alek.id])
+        XCTAssertEqual(peer.weekFacts(for: family.hanna.id)[0].accountedCount, 1)
+        XCTAssertEqual(peer.weekFacts(for: family.alek.id)[0].expectedCount, 1)
+        XCTAssertEqual(peer.weekFacts(for: family.alek.id)[0].accountedCount, 0)
+        try peer.setCompletion(choreID: id, memberID: family.hanna.id, date: family.clock.now, state: .unmarked)
+        XCTAssertEqual(peer.dailyList()[0].requiredCompletionCount, 2)
+        XCTAssertEqual(peer.dailyList()[0].creditState(for: family.hanna.id), .unmarked)
+    }
+
+    func testRejectedOfflineCompletionAllowsRequestsAndRecoversAfterApproval() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let id = try family.chore()
+        try await family.store.connect()
+        let repository = try HouseholdRepository(inMemory: true)
+        let transport = TestTransport(server: server, account: "guest")
+        let guest = try HouseholdStore(repository: repository, transport: transport,
+                                       clock: { family.clock.now }, automaticSync: false)
+        try await guest.join(url: URL(string: "https://test.invalid/\(family.store.session.location!.zoneName)")!)
+        try guest.requestProfiles([family.hanna.id], deviceName: "Tablet")
+        try await guest.synchronize()
+        try await family.store.synchronize()
+        try family.store.approve(family.store.pendingRequests[0], memberIDs: [family.hanna.id])
+        try await family.store.synchronize()
+        try await guest.synchronize()
+        try guest.selectProfile(family.hanna.id)
+        try guest.setCompletion(choreID: id, memberID: family.hanna.id, date: family.clock.now, state: .done)
+        let completion = try XCTUnwrap(repository.pending(householdID: family.store.household!.id).first)
+        try family.store.revoke(family.store.snapshot.grants[0])
+        try await family.store.synchronize()
+        try guest.requestProfiles([family.hanna.id], deviceName: "Tablet")
+        try await guest.synchronize()
+        XCTAssertEqual(guest.pendingCount, 0)
+        XCTAssertNotNil(guest.rejectedChanges[completion.id])
+        XCTAssertFalse(transport.uploadedIDs.contains(completion.id))
+        XCTAssertEqual(guest.snapshot.completions.first?.state, .done)
+        let reopened = try HouseholdStore(repository: repository, transport: transport,
+                                          clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.rejectedChanges, guest.rejectedChanges)
+        try await family.store.synchronize()
+        XCTAssertEqual(family.store.pendingRequests.count, 1)
+        try family.store.approve(family.store.pendingRequests[0], memberIDs: [family.hanna.id])
+        try await family.store.synchronize()
+        try await reopened.synchronize()
+        XCTAssertTrue(reopened.rejectedChanges.isEmpty)
+        XCTAssertTrue(transport.uploadedIDs.contains(completion.id))
+    }
+
+    func testConcurrentParentArchivesRetainOriginalParentInBothMergeOrders() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let second = try family.store.saveMember(name: "Second Parent", role: .parent, avatar: .star)
+        family.move(to: "2026-09-08T16:00:00Z")
+        try await family.store.connect()
+        let peerRepository = try HouseholdRepository(inMemory: true)
+        let peer = try HouseholdStore(repository: peerRepository,
+                                      transport: TestTransport(server: server, account: "owner"),
+                                      clock: { family.clock.now }, automaticSync: false)
+        try await peer.joinExisting(family.store.session.location!)
+        try peer.selectProfile(second.id)
+        try peer.archiveMember(family.parent.id)
+        try family.store.archiveMember(second.id)
+        let householdID = family.store.household!.id
+        let local = try family.repository.facts(householdID: householdID)
+        let remote = try peerRepository.facts(householdID: householdID)
+        let combined = Array(Dictionary((local + remote).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }).values)
+        let forward = HouseholdSnapshot(facts: combined)
+        XCTAssertEqual(forward, HouseholdSnapshot(facts: combined.reversed()))
+        XCTAssertNil(forward.member(family.parent.id)?.archivedFrom)
+        XCTAssertNotNil(forward.member(second.id)?.archivedFrom)
+        XCTAssertTrue(combined.contains { fact in
+            if case .member(let member) = fact.body { return member.id == family.parent.id && member.archivedFrom != nil }
+            return false
+        })
+        try await family.store.synchronize()
+        try await peer.synchronize()
+        try await family.store.synchronize()
+        family.move(to: "2026-09-09T16:00:00Z")
+        XCTAssertEqual(family.store.profiles.filter { $0.role == .parent }.map(\.id), [family.parent.id])
+        XCTAssertEqual(family.store.snapshot, peer.snapshot)
+    }
+
+    func testArchivedAuthorRejectionRetainsEvidenceAcrossDisconnect() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let chore = try family.chore()
+        try await family.store.connect()
+        let repository = try HouseholdRepository(inMemory: true)
+        let transport = TestTransport(server: server, account: "owner")
+        let peer = try HouseholdStore(repository: repository, transport: transport,
+                                      clock: { family.clock.now }, automaticSync: false)
+        let location = family.store.session.location!
+        try await peer.joinExisting(location)
+        try peer.selectProfile(family.hanna.id)
+        try peer.setCompletion(choreID: chore, memberID: family.hanna.id, date: family.clock.now, state: .done)
+        let completion = try XCTUnwrap(repository.pending(householdID: location.householdID).first)
+        try family.store.archiveMember(family.hanna.id)
+        try await family.store.synchronize()
+        family.clock.set("2026-09-08T16:00:00Z")
+        try await peer.synchronize()
+        XCTAssertNotNil(peer.rejectedChanges[completion.id])
+        XCTAssertFalse(transport.uploadedIDs.contains(completion.id))
+        try peer.selectProfile(family.parent.id)
+        try peer.saveMember(name: "New Child", role: .child, avatar: .star)
+        try await peer.synchronize()
+        XCTAssertEqual(peer.pendingCount, 0)
+        try peer.resetLocalData()
+        XCTAssertNil(peer.household)
+        XCTAssertTrue(try repository.facts(householdID: location.householdID).contains(completion))
+        try await peer.joinExisting(location)
+        XCTAssertNotNil(peer.rejectedChanges[completion.id])
+        XCTAssertEqual(peer.snapshot.completions.first?.state, .done)
+    }
+
 }

@@ -16,7 +16,7 @@ struct ResponsibilityRow: View {
                         .foregroundStyle(.secondary).padding(.top, 3)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(chore.configuration.title).font(.headline)
-                        Text(chore.configuration.mode.title).font(.caption).foregroundStyle(.secondary)
+                        Text(chore.requiredMembers.isEmpty ? RequirementMode.anyOne.title : "Required: " + chore.requiredMembers.map(\.displayName).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }
@@ -32,7 +32,7 @@ struct ResponsibilityRow: View {
                 }
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.secondary)
-                } else if chore.configuration.mode == .anyOne && !chore.isFullyComplete {
+                } else if chore.requiredMembers.isEmpty && !chore.isFullyComplete {
                     Text("One eligible child is needed.").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -55,7 +55,7 @@ struct ResponsibilityRow: View {
         if chore.isFullyComplete {
             return chore.notNeededMembers.isEmpty ? "Complete" : "Accounted for"
         }
-        return chore.configuration.mode == .anyOne ? "One person still needed" : "\(chore.remainingMembers.count) still needed"
+        return chore.requiredMembers.isEmpty ? "One person still needed" : "\(chore.remainingMembers.count) still needed"
     }
 
     private func memberRow(_ member: FamilyMember) -> some View {
@@ -68,7 +68,7 @@ struct ResponsibilityRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(member.id == actor.id ? "\(member.displayName) (you)" : member.displayName)
                     .font(.subheadline.weight(.medium))
-                if chore.configuration.mode == .anyOne && !state.isAccountedFor && chore.isFullyComplete {
+                if chore.requiredMembers.isEmpty && !state.isAccountedFor && chore.isFullyComplete {
                     Text("Someone else helped").font(.caption).foregroundStyle(.secondary)
                 }
             }

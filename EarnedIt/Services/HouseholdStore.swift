@@ -17,6 +17,7 @@ final class HouseholdStore {
     private(set) var lastSyncedAt: Date?
     private(set) var cloudAccessBlocked = false
     private(set) var cloudIsReadOnly = false
+    private(set) var rejectedChanges: [UUID: String] = [:]
     var errorMessage: String?
     private var syncTask: Task<Void, Never>?
     private var activeSync: Task<Void, Error>?
@@ -38,6 +39,7 @@ final class HouseholdStore {
     var household: Household? { snapshot.household }
     var calendar: Calendar { household?.calendar ?? AppCalendar.current }
     var day: CivilDay { CivilDay(today, calendar: calendar) }
+    var nextHouseholdMidnight: Date { tomorrow.date(in: calendar) }
     var tomorrow: CivilDay { day.adding(days: 1, calendar: calendar) }
     var profiles: [FamilyMember] { PermissionService.availableProfiles(snapshot: snapshot, session: session, day: day) }
     var selectedMember: FamilyMember? { profiles.first { $0.id == session.selectedMemberID } }
@@ -68,6 +70,7 @@ final class HouseholdStore {
     }
 
     func selectProfile(_ id: UUID?) throws {
+        today = clock()
         if let id, !profiles.contains(where: { $0.id == id }) { throw HouseholdError.permission }
         var updated = session
         updated.selectedMemberID = id
@@ -76,6 +79,7 @@ final class HouseholdStore {
     }
 
     func createFamily(name: String, parentName: String, timeZone: TimeZone = .current) throws {
+        today = clock()
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         let name = try validatedName(name)
         let parentName = try validatedName(parentName)
@@ -181,7 +185,8 @@ final class HouseholdStore {
         }
         try append(.completion(DatedCompletion(choreID: choreID, revisionID: chore.configuration.id,
                                               memberID: memberID, day: chore.day, state: state,
-                                              eligibleMemberIDs: chore.eligibleMembers.map(\.id),
+                                              eligibleMemberIDs: (chore.configuration.mode == .anyOne
+                                                  ? chore.eligibleMembers : chore.requiredMembers).map(\.id),
                                               mode: chore.configuration.mode, recordedByMemberID: actor.id)))
     }
 
@@ -329,10 +334,17 @@ final class HouseholdStore {
             session = updated
             try reload()
             cloudAccessBlocked = false
-            let pending = try repository.pending(householdID: location.householdID)
+            today = clock()
+            let candidates = try repository.pending(householdID: location.householdID, includingRejected: true)
+            var reasons: [UUID: String] = [:]
+            let pending = candidates.filter { fact in
+                do { try authorizePending([fact]); return true }
+                catch { reasons[fact.id] = error.localizedDescription; return false }
+            }
+            try repository.setRejections(reasons, householdID: location.householdID)
+            rejectedChanges = reasons
             if !pending.isEmpty {
                 guard !cloudIsReadOnly else { throw HouseholdError.readOnly }
-                try authorizePending(pending)
                 try await transport.upload(pending, to: location)
                 try repository.commit(facts: pending, uploaded: true)
             }
@@ -365,9 +377,10 @@ final class HouseholdStore {
         if !profiles.isEmpty { try requireParent() }
         if session.location != nil && pendingCount > 0 { throw HouseholdError.pendingChanges }
         syncTask?.cancel()
-        try repository.clearLocalData()
+        try repository.clearLocalData(retainingRejected: session.location != nil)
         session = try repository.session()
         facts = []
+        rejectedChanges = [:]
         snapshot = HouseholdSnapshot()
         syncMessage = "On this device"
         cloudAccessBlocked = false
@@ -375,6 +388,7 @@ final class HouseholdStore {
     }
 
     private func requireWriteAccess() throws {
+        today = clock()
         if cloudAccessBlocked { throw HouseholdError.cloudUnavailable }
         if cloudIsReadOnly { throw HouseholdError.readOnly }
     }
@@ -399,6 +413,7 @@ final class HouseholdStore {
     private func reload() throws {
         facts = try session.householdID.map { try repository.facts(householdID: $0) } ?? []
         snapshot = HouseholdSnapshot(facts: facts)
+        rejectedChanges = try session.householdID.map { try repository.rejections(householdID: $0) } ?? [:]
     }
 
     private func authorizePending(_ pending: [HouseholdFact]) throws {

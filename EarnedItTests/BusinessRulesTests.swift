@@ -261,4 +261,30 @@ final class BusinessRulesTests: XCTestCase {
                     DayFacts(date: wednesday, states: [], isExcused: false)]
         XCTAssertEqual(StreakService.currentStreak(days: days, today: wednesday, calendar: calendar), 1)
     }
+    func testMutationRefreshesHouseholdMidnightWithoutDeviceDayNotification() throws {
+        let family = try TestFamily()
+        family.move(to: "2026-09-08T03:59:59Z")
+        let monday = try family.chore()
+        let tuesday = try family.chore(.all, weekday: .tuesday)
+        let staleDate = family.store.today
+        let midnight = family.store.nextHouseholdMidnight
+        XCTAssertEqual(midnight, ISO8601DateFormatter().date(from: "2026-09-08T04:00:00Z"))
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        try family.store.selectProfile(family.hanna.id)
+        family.clock.set("2026-09-08T04:00:01Z")
+        XCTAssertEqual(CivilDay(staleDate, calendar: tokyo), CivilDay(family.clock.now, calendar: tokyo))
+        XCTAssertThrowsError(try family.store.setCompletion(choreID: monday, memberID: family.hanna.id,
+                                                            date: staleDate, state: .done))
+        try family.store.setCompletion(choreID: tuesday, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .done)
+        XCTAssertEqual(family.store.snapshot.completions.first?.day.rawValue, "2026-09-08")
+        try family.store.selectProfile(family.parent.id)
+        family.clock.set("2026-09-09T04:00:01Z")
+        try family.store.archiveChore(tuesday)
+        XCTAssertEqual(family.store.snapshot.revisions.last?.effectiveDay.rawValue, "2026-09-10")
+        XCTAssertEqual(family.store.day.rawValue, "2026-09-09")
+        XCTAssertGreaterThan(family.store.nextHouseholdMidnight, family.clock.now)
+    }
+
 }

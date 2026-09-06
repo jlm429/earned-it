@@ -78,6 +78,11 @@ struct SyncStatusView: View {
                 Label(store.syncMessage, systemImage: store.cloudAccessBlocked ? "exclamationmark.icloud" : "icloud")
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("sync-status")
+                if !store.rejectedChanges.isEmpty {
+                    Text("\(store.rejectedChanges.count) changes kept on this device but not shared. Ask a parent to restore profile access, then refresh. Archived profiles need parent review.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("rejected-changes")
+                }
                 if store.pendingCount > 0 { Text("\(store.pendingCount) changes waiting to sync").font(.caption).foregroundStyle(.secondary) }
                 Button("Refresh Family", systemImage: "arrow.clockwise") {
                     Task { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }

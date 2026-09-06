@@ -195,12 +195,14 @@ struct HouseholdSnapshot: Equatable {
     var members: [FamilyMember] = []
     var revisions: [ChoreRevision] = []
     var completions: [DatedCompletion] = []
+    var recordedAssignments: [DatedCompletion] = []
     var excuses: [Excuse] = []
     var requests: [ProfileRequest] = []
     var grants: [ProfileGrant] = []
 
     init(facts: [HouseholdFact] = []) {
         var membersByID: [UUID: FamilyMember] = [:]
+        var creationSequence: [UUID: Int64] = [:]
         var completionsByKey: [String: DatedCompletion] = [:]
         var excusesByKey: [String: Excuse] = [:]
         var requestsByID: [UUID: ProfileRequest] = [:]
@@ -208,13 +210,26 @@ struct HouseholdSnapshot: Equatable {
         for fact in facts.sorted(by: HouseholdFact.precedes) {
             switch fact.body {
             case .household(let value): household = value
-            case .member(let value): membersByID[value.id] = value
+            case .member(let value):
+                if creationSequence[value.id] == nil { creationSequence[value.id] = fact.sequence }
+                membersByID[value.id] = value
             case .chore(let value): revisions.append(value)
-            case .completion(let value): completionsByKey[value.key] = value
+            case .completion(let value):
+                completionsByKey[value.key] = value
+                if value.state.isAccountedFor { recordedAssignments.append(value) }
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
             case .grant(let value): grantsByKey[value.key] = value
             }
+        }
+        let parents = membersByID.values.filter { $0.role == .parent }.sorted {
+            let lhs = creationSequence[$0.id] ?? 0
+            let rhs = creationSequence[$1.id] ?? 0
+            return lhs == rhs ? $0.id.uuidString < $1.id.uuidString : lhs < rhs
+        }
+        if parents.allSatisfy({ $0.archivedFrom != nil }), var survivor = parents.first {
+            survivor.archivedFrom = nil
+            membersByID[survivor.id] = survivor
         }
         members = membersByID.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         completions = completionsByKey.values.sorted { $0.key < $1.key }

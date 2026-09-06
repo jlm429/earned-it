@@ -15,7 +15,7 @@ struct HouseholdSettingsView: View {
                 SyncStatusView()
                 Text(store.session.location == nil
                      ? "This family is saved on this device. Connect iCloud from Family & Sharing to invite others."
-                     : "Disconnect removes this installation’s local family data. It does not delete the family from iCloud or other devices.")
+                     : "Disconnect removes synced local data unless rejected changes need it as evidence. Reconnect to the same family to review retained changes. iCloud and other devices keep their data.")
                 Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Installation", role: .destructive) {
                     confirmingReset = true
                 }
