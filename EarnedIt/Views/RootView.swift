@@ -21,7 +21,7 @@ struct RootView: View {
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
         .task { store.refreshDate(); await acceptInvitation() }
-        .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)") {
+        .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)-\(store.midnightTimerRevision)") {
             guard scenePhase == .active else { return }
             let delay = max(0, store.nextHouseholdMidnight.timeIntervalSinceNow)
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
@@ -33,7 +33,7 @@ struct RootView: View {
         .onChange(of: invitations.pending) { _, _ in Task { await acceptInvitation() } }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in store.refreshDate() }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in store.refreshDate() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in store.refreshDate() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in store.significantTimeChanged() }
         .alert("Unable to Update", isPresented: Binding(
             get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } }
         )) {

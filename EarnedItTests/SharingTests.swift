@@ -398,4 +398,77 @@ final class SharingTests: XCTestCase {
         XCTAssertFalse(fresh.snapshot.revisions.contains { $0.choreID == rejectedChore })
     }
 
+    func testConfirmedCloudKitSavesStopBeforeDependentAcrossOldBatchBoundary() async throws {
+        let family = try TestFamily()
+        for index in 0..<101 {
+            _ = try family.store.saveChore(weekday: .monday, title: "Chore \(index)", mode: .all, memberIDs: [])
+        }
+        let chore = try family.chore()
+        try family.complete(chore, as: family.hanna)
+        let facts = try family.repository.facts(householdID: family.store.household!.id)
+        let revision = try XCTUnwrap(facts.first { fact in
+            if case .chore(let value) = fact.body { return value.choreID == chore }
+            return false
+        })
+        let completion = try XCTUnwrap(facts.first { fact in
+            if case .completion(let value) = fact.body { return value.choreID == chore }
+            return false
+        })
+        let location = CloudLocation(householdID: family.store.household!.id, zoneName: "Test", ownerName: "Owner", isOwner: true)
+        var saved: [CKRecord.ID: CKRecord] = [:]
+        var rejectRevision = true
+        var attempted: [String] = []
+        func save(_ record: CKRecord) async throws -> CKRecord {
+            attempted.append(record.recordID.recordName)
+            if record.recordID.recordName == revision.id.uuidString && rejectRevision { throw CKError(.networkFailure) }
+            if let existing = saved[record.recordID] {
+                throw CKError(.serverRecordChanged, userInfo: [CKRecordChangedErrorServerRecordKey: existing])
+            }
+            saved[record.recordID] = record
+            return record
+        }
+        do {
+            try await CloudKitHouseholdTransport.uploadConfirmed(facts.reversed(), to: location, save: save)
+            XCTFail("Expected prerequisite save failure")
+        } catch { XCTAssertEqual((error as? CKError)?.code, .networkFailure) }
+        XCTAssertGreaterThan(saved.count, 100)
+        XCTAssertFalse(attempted.contains(completion.id.uuidString))
+        XCTAssertFalse(saved.values.contains { $0.recordID.recordName == completion.id.uuidString })
+        rejectRevision = false
+        try await CloudKitHouseholdTransport.uploadConfirmed(facts.reversed(), to: location, save: save)
+        XCTAssertEqual(saved.count, facts.count)
+        try await CloudKitHouseholdTransport.uploadConfirmed(facts, to: location, save: save)
+        XCTAssertEqual(saved.count, facts.count)
+        let remoteFacts = try saved.values.map { try JSONDecoder().decode(HouseholdFact.self, from: $0["payload"] as! Data) }
+        XCTAssertEqual(HouseholdSnapshot(facts: remoteFacts), family.store.snapshot)
+    }
+
+    func testSuspendedConnectionCannotAttachAfterResetAndNewFamily() async throws {
+        for createReplacement in [false, true] {
+            let server = TestCloudServer()
+            let transport = TestTransport(server: server, account: "owner")
+            let family = try TestFamily(transport: transport)
+            let suspended = expectation(description: "Zone creation suspended")
+            var resume: CheckedContinuation<Void, Never>?
+            transport.beforeCreateZone = {
+                await withCheckedContinuation { continuation in
+                    resume = continuation
+                    suspended.fulfill()
+                }
+            }
+            let connection = Task { try await family.store.connect() }
+            await fulfillment(of: [suspended], timeout: 5)
+            try family.store.resetLocalData()
+            if createReplacement { try family.store.createFamily(name: "Replacement", parentName: "New Parent") }
+            let expectedSession = family.store.session
+            resume?.resume()
+            do { try await connection.value; XCTFail("Stale connection must fail") }
+            catch { XCTAssertEqual(error as? HouseholdError, .noHousehold) }
+            XCTAssertEqual(family.store.session, expectedSession)
+            XCTAssertNil(family.store.session.location)
+            XCTAssertTrue(transport.uploadedIDs.isEmpty)
+            XCTAssertEqual(family.store.household?.name, createReplacement ? "Replacement" : nil)
+        }
+    }
+
 }

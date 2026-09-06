@@ -11,6 +11,7 @@ final class HouseholdStore {
     private let automaticSync: Bool
     private(set) var snapshot = HouseholdSnapshot()
     private(set) var session: DeviceSession
+    private(set) var midnightTimerRevision = UUID()
     private(set) var today: Date
     private(set) var isSyncing = false
     private(set) var syncMessage = "On this device"
@@ -62,6 +63,11 @@ final class HouseholdStore {
 
     func perform(_ action: () throws -> Void) {
         do { try action() } catch { errorMessage = error.localizedDescription }
+    }
+
+    func significantTimeChanged() {
+        midnightTimerRevision = UUID()
+        refreshDate()
     }
 
     func refreshDate() {
@@ -228,8 +234,17 @@ final class HouseholdStore {
         try requireParent()
         guard let household, let transport else { throw HouseholdError.cloudUnavailable }
         guard session.location == nil else { try await synchronize(); return }
+        let connectingSession = session
         let participant = try await transport.participantID()
+        guard session.deviceID == connectingSession.deviceID,
+              session.householdID == connectingSession.householdID, session.location == nil else {
+            throw HouseholdError.noHousehold
+        }
         let location = try await transport.createZone(for: household)
+        guard session.deviceID == connectingSession.deviceID,
+              session.householdID == connectingSession.householdID, session.location == nil else {
+            throw HouseholdError.noHousehold
+        }
         var updated = session
         updated.location = location
         updated.cloudParticipantID = participant

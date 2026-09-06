@@ -287,4 +287,21 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertGreaterThan(family.store.nextHouseholdMidnight, family.clock.now)
     }
 
+    func testSignificantClockChangeInvalidatesSameDayMidnightSchedule() throws {
+        let family = try TestFamily()
+        family.move(to: "2026-09-08T01:00:00Z")
+        let midnight = family.store.nextHouseholdMidnight
+        let revision = family.store.midnightTimerRevision
+        let originalDelay = midnight.timeIntervalSince(family.clock.now)
+        family.clock.set("2026-09-08T03:00:00Z")
+        family.store.significantTimeChanged()
+        XCTAssertEqual(family.store.nextHouseholdMidnight, midnight)
+        XCTAssertNotEqual(family.store.midnightTimerRevision, revision)
+        XCTAssertEqual(family.store.today, family.clock.now)
+        XCTAssertEqual(family.store.nextHouseholdMidnight.timeIntervalSince(family.store.today), originalDelay - 7200)
+        family.clock.set("2026-09-08T04:00:00Z")
+        family.store.refreshDate()
+        XCTAssertEqual(family.store.day.rawValue, "2026-09-08")
+    }
+
 }

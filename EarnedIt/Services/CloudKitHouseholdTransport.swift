@@ -74,7 +74,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             for (_, result) in changes.modificationResultsByID {
                 let record = try result.get().record
                 guard record.recordType == recordType else { continue }
-                let fact = try decode(record)
+                let fact = try Self.decode(record)
                 guard fact.householdID == location.householdID else { throw HouseholdError.malformedData }
                 facts[fact.id] = fact
             }
@@ -86,27 +86,28 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws {
         let database = database(for: location)
-        for offset in stride(from: 0, to: facts.count, by: 100) {
-            let batch = Array(facts[offset..<min(offset + 100, facts.count)])
-            let records = try batch.map { fact in
-                guard fact.householdID == location.householdID else { throw HouseholdError.malformedData }
-                let record = CKRecord(recordType: recordType,
-                                      recordID: CKRecord.ID(recordName: fact.id.uuidString, zoneID: zoneID(for: location)))
-                let data = try JSONEncoder().encode(fact)
-                guard data.count < 900_000 else { throw HouseholdError.malformedData }
-                record["payload"] = data as CKRecordValue
-                record["formatVersion"] = 1 as CKRecordValue
-                return record
-            }
-            let results = try await database.modifyRecords(saving: records, deleting: [],
-                                                           savePolicy: .ifServerRecordUnchanged, atomically: false)
-            for (index, record) in records.enumerated() {
-                guard let result = results.saveResults[record.recordID] else { throw HouseholdError.malformedData }
-                do { _ = try result.get() } catch let error as CKError {
-                    // Retrying an already accepted immutable fact must not replace its contents.
-                    guard error.code == .serverRecordChanged,
-                          let server = error.serverRecord, try decode(server) == batch[index] else { throw error }
-                }
+        try await Self.uploadConfirmed(facts, to: location) { record in
+            let results = try await database.modifyRecords(saving: [record], deleting: [],
+                                                           savePolicy: .ifServerRecordUnchanged, atomically: true)
+            guard let result = results.saveResults[record.recordID] else { throw HouseholdError.malformedData }
+            return try result.get()
+        }
+    }
+
+    static func uploadConfirmed(_ facts: [HouseholdFact], to location: CloudLocation,
+                                save: (CKRecord) async throws -> CKRecord) async throws {
+        let zoneID = CKRecordZone.ID(zoneName: location.zoneName, ownerName: location.ownerName)
+        for fact in facts.sorted(by: HouseholdFact.precedes) {
+            guard fact.householdID == location.householdID else { throw HouseholdError.malformedData }
+            let record = CKRecord(recordType: "HouseholdFact",
+                                  recordID: CKRecord.ID(recordName: fact.id.uuidString, zoneID: zoneID))
+            let data = try JSONEncoder().encode(fact)
+            guard data.count < 900_000 else { throw HouseholdError.malformedData }
+            record["payload"] = data as CKRecordValue
+            record["formatVersion"] = 1 as CKRecordValue
+            do { _ = try await save(record) } catch let error as CKError {
+                guard error.code == .serverRecordChanged,
+                      let server = error.serverRecord, try decode(server) == fact else { throw error }
             }
         }
     }
@@ -139,7 +140,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         return share.currentUserParticipant?.permission == .readWrite
     }
 
-    private func decode(_ record: CKRecord) throws -> HouseholdFact {
+    private static func decode(_ record: CKRecord) throws -> HouseholdFact {
         guard (record["formatVersion"] as? Int) == 1, let payload = record["payload"] as? Data else {
             throw HouseholdError.malformedData
         }

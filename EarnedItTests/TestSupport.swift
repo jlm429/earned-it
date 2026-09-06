@@ -64,10 +64,12 @@ final class TestTransport: HouseholdTransport {
     var account: String
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
+    var beforeCreateZone: (() async -> Void)?
 
     init(server: TestCloudServer, account: String) { self.server = server; self.account = account }
     func participantID() async throws -> String { account }
     func createZone(for household: Household) async throws -> CloudLocation {
+        await beforeCreateZone?()
         server.createCalls += 1
         let zoneName = "EarnedIt-\(household.id)"
         server.zones[zoneName] = TestCloudServer.Zone(householdID: household.id, name: household.name, owner: account)
