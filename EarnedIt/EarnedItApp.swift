@@ -1,50 +1,52 @@
-import SwiftData
 import SwiftUI
 
 @main
 struct EarnedItApp: App {
-    private let modelContainer: ModelContainer
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var store: HouseholdStore?
+    private let startupError: String?
 
     init() {
         do {
-            let schema = Schema([
-                FamilyUser.self,
-                Responsibility.self,
-                DailyRecord.self,
-                ExcusedDay.self,
-                AppSetting.self
-            ])
-            let configuration: ModelConfiguration
+            let url: URL
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-test-store") {
-                let url = URL.documentsDirectory.appending(path: "isolated-ui-tests.store")
-                configuration = ModelConfiguration(schema: schema, url: url)
+            let isUITest = ProcessInfo.processInfo.arguments.contains("--ui-test-store")
+            if isUITest {
+                url = URL.documentsDirectory.appending(path: "shared-household-ui-tests.store")
             } else {
-                configuration = ModelConfiguration(schema: schema)
+                url = URL.applicationSupportDirectory.appending(path: "shared-household-v1.store")
             }
             #else
-            configuration = ModelConfiguration(schema: schema)
+            url = URL.applicationSupportDirectory.appending(path: "shared-household-v1.store")
             #endif
-            try FileManager.default.createDirectory(
-                at: configuration.url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+            let repository = try HouseholdRepository(url: url)
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--ui-test-store")
-                && ProcessInfo.processInfo.arguments.contains("--ui-test-reset") {
-                try OnboardingService.clearAll(context: modelContainer.mainContext)
+            if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-reset") {
+                try repository.clearLocalData()
             }
             #endif
+            let transport: (any HouseholdTransport)?
+            #if targetEnvironment(simulator)
+            // Unsigned simulator builds cannot use the CloudKit container. Tests inject a transport explicitly.
+            transport = nil
+            #else
+            transport = CloudKitHouseholdTransport()
+            #endif
+            _store = State(initialValue: try HouseholdStore(repository: repository, transport: transport))
+            startupError = nil
         } catch {
-            fatalError("Unable to create local data store: \(error.localizedDescription)")
+            startupError = error.localizedDescription
         }
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            if let store {
+                RootView().environment(store)
+            } else {
+                ContentUnavailableView("Unable to Open Family Data", systemImage: "externaldrive.badge.exclamationmark",
+                    description: Text(startupError ?? "Your stored data has been kept. Try reopening the app."))
+            }
         }
-        .modelContainer(modelContainer)
     }
 }

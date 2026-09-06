@@ -64,7 +64,7 @@ extension String {
 }
 
 struct AvatarView: View {
-    let user: FamilyUser
+    let user: FamilyMember
     var size: CGFloat = 52
 
     var body: some View {
@@ -80,9 +80,12 @@ struct StatusBadge: View {
     let status: ProgressStatus
 
     var body: some View {
-        Label(status.rawValue, systemImage: status.symbolName)
+        Label {
+            Text(status.rawValue).foregroundStyle(.primary)
+        } icon: {
+            Image(systemName: status.symbolName).foregroundStyle(status.tint)
+        }
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(status.tint)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(status.tint.opacity(0.12), in: Capsule())

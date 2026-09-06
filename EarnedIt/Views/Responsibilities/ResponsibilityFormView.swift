@@ -1,166 +1,99 @@
-import SwiftData
 import SwiftUI
 
 struct ResponsibilityFormView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-
-    let actor: FamilyUser
-    let children: [FamilyUser]
-    let existing: Responsibility?
-
+    @Environment(HouseholdStore.self) private var store
+    let existing: ChoreRevision?
+    @State private var choreID: UUID
+    @State private var weekday: Weekday
     @State private var title: String
     @State private var notes: String
     @State private var category: ResponsibilityCategory
-    @State private var assignedChildID: UUID
+    @State private var mode: RequirementMode
+    @State private var memberIDs: Set<UUID>
     @State private var errorMessage: String?
-    @State private var draftID = UUID()
 
-    private var trimmedTitle: String {
-        title.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var availableChildren: [FamilyUser] {
-        actor.role == .child ? children.filter { $0.id == actor.id } : children
-    }
-
-    private var canSave: Bool {
-        !trimmedTitle.isEmpty
-            && trimmedTitle.count <= 80
-            && notes.count <= 300
-            && availableChildren.contains { $0.id == assignedChildID }
-    }
-
-    init(actor: FamilyUser, children: [FamilyUser], preferredChildID: UUID? = nil, existing: Responsibility? = nil) {
-        self.actor = actor
-        self.children = children
+    init(weekday: Weekday, existing: ChoreRevision? = nil) {
         self.existing = existing
+        _choreID = State(initialValue: existing?.choreID ?? UUID())
+        _weekday = State(initialValue: existing?.weekday ?? weekday)
         _title = State(initialValue: existing?.title ?? "")
         _notes = State(initialValue: existing?.notes ?? "")
         _category = State(initialValue: existing?.category ?? .home)
-        let initialChild = existing?.assignedChildID
-            ?? preferredChildID
-            ?? (actor.role == .child ? actor.id : children.first?.id)
-            ?? UUID()
-        _assignedChildID = State(initialValue: initialChild)
+        _mode = State(initialValue: existing?.mode ?? .all)
+        _memberIDs = State(initialValue: Set(existing?.memberIDs ?? []))
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Responsibility") {
-                    TextField("Title", text: $title)
-                        .accessibilityIdentifier("responsibility-title")
-                    TextField("Notes (optional)", text: $notes, axis: .vertical)
-                        .lineLimit(2...5)
-                        .accessibilityIdentifier("responsibility-notes")
+                Section("Chore") {
+                    TextField("Title", text: $title).accessibilityIdentifier("responsibility-title")
+                    TextField("Notes (optional)", text: $notes, axis: .vertical).lineLimit(2...5)
+                    Picker("Weekday", selection: $weekday) {
+                        ForEach(Weekday.allCases) { day in Text(day.title).tag(day) }
+                    }.accessibilityIdentifier("chore-weekday")
                     Picker("Category", selection: $category) {
                         ForEach(ResponsibilityCategory.allCases) { category in
-                            Label(category.rawValue, systemImage: category.symbolName)
-                                .tag(category)
+                            Label(category.rawValue, systemImage: category.symbolName).tag(category)
                         }
                     }
-                    .accessibilityIdentifier("responsibility-category")
                 }
-
-                Section("Assigned Child") {
-                    if availableChildren.isEmpty {
-                        Text("Add a child in Family Management before assigning a chore.")
-                    } else if existing != nil && actor.role == .parent {
-                        Picker("Child", selection: $assignedChildID) {
-                            ForEach(availableChildren) { child in
-                                Text(child.displayName).tag(child.id)
-                            }
-                        }
-                        .accessibilityIdentifier("assigned-child")
-                        Text("Reassignment starts a new responsibility and keeps the previous child’s history.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else if actor.role == .child {
-                        LabeledContent("Child", value: actor.displayName)
+                Section("Who is needed?") {
+                    Picker("Requirement", selection: $mode) {
+                        ForEach(RequirementMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }.accessibilityIdentifier("chore-requirement")
+                    if mode == .all {
+                        Text("Every child on this family’s list for that date completes it independently.")
                     } else {
-                        Picker("Child", selection: $assignedChildID) {
-                            ForEach(availableChildren) { child in
-                                Text(child.displayName).tag(child.id)
-                            }
+                        ForEach(store.children) { member in
+                            Toggle(member.displayName, isOn: Binding(
+                                get: { memberIDs.contains(member.id) },
+                                set: {
+                                    if $0 {
+                                        if mode == .particular { memberIDs = [member.id] } else { memberIDs.insert(member.id) }
+                                    } else { memberIDs.remove(member.id) }
+                                }
+                            ))
+                            .accessibilityIdentifier("eligible-\(member.displayName.accessibilitySlug)")
                         }
-                        .accessibilityIdentifier("assigned-child")
+                    }
+                    if mode == .anyOne {
+                        Text("Any eligible child can finish this chore. Only their own contribution earns credit; others receive no credit or penalty.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-
-                if trimmedTitle.count > 80 || notes.count > 300 {
-                    Section {
-                        Text("Use up to 80 characters for the title and 300 for notes.")
-                            .foregroundStyle(.red)
-                    }
+                Section {
+                    Text(existing == nil
+                         ? "Repeats on \(weekday.title)s, starting today. Each date starts with no completions."
+                         : "Changes start tomorrow. Today’s assignment and all dated completions are kept.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle(existing == nil ? "New Responsibility" : "Edit Responsibility")
+            .navigationTitle(existing == nil ? "New Chore" : "Edit Chore")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: mode) { _, mode in
+                if mode == .particular { memberIDs = Set(memberIDs.prefix(1)) }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .accessibilityIdentifier("cancel-responsibility")
+                    Button("Cancel") { dismiss() }.accessibilityIdentifier("cancel-responsibility")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(!canSave)
-                        .accessibilityIdentifier("save-responsibility")
+                    Button("Save") {
+                        do {
+                            try store.saveChore(choreID: choreID, weekday: weekday, title: title, notes: notes,
+                                                category: category, mode: mode, memberIDs: Array(memberIDs))
+                            dismiss()
+                        } catch { errorMessage = error.localizedDescription }
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 80 || notes.count > 300)
+                    .accessibilityIdentifier("save-responsibility")
                 }
             }
             .alert("Unable to Save", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "Please try again.")
-            }
-        }
-    }
-
-    private func save() {
-        guard canSave, PermissionService.canAssign(user: actor, childID: assignedChildID) else { return }
-        do {
-            var didReassign = false
-            if let existing {
-                guard PermissionService.canManageDefinition(user: actor, responsibility: existing) else { return }
-                let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-                if existing.assignedChildID != assignedChildID {
-                    try DataCoordinator.reassign(
-                        existing,
-                        to: assignedChildID,
-                        actor: actor,
-                        title: trimmedTitle,
-                        notes: trimmedNotes,
-                        category: category,
-                        context: modelContext
-                    )
-                    didReassign = true
-                } else {
-                    existing.title = trimmedTitle
-                    existing.notes = trimmedNotes
-                    existing.category = category
-                }
-            } else {
-                try DataCoordinator.updateResponsibilityDraft(
-                    id: draftID,
-                    title: trimmedTitle,
-                    notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
-                    category: category,
-                    actor: actor,
-                    assignedChildID: assignedChildID,
-                    context: modelContext
-                )
-            }
-            if !didReassign {
-                try modelContext.save()
-                try DataCoordinator.prepareDailyData(context: modelContext)
-            }
-            dismiss()
-        } catch {
-            modelContext.rollback()
-            errorMessage = error.localizedDescription
+                get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+            )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
         }
     }
 }

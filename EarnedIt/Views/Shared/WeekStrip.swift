@@ -7,7 +7,7 @@ struct WeekStrip: View {
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private let calendar = AppCalendar.current
+    @Environment(\.calendar) private var calendar
 
     @ViewBuilder
     var body: some View {

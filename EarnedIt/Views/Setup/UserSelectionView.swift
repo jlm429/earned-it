@@ -1,101 +1,90 @@
-import SwiftData
 import SwiftUI
 
 struct UserSelectionView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \FamilyUser.createdAt) private var users: [FamilyUser]
-
-    @State private var addingParent = false
-    @State private var errorMessage: String?
-
-    private let columns = [GridItem(.adaptive(minimum: 140), spacing: 16)]
-
-    private var displayUsers: [FamilyUser] {
-        users.sorted {
-            if $0.role != $1.role { return $0.role == .parent }
-            return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }
-    }
+    @Environment(HouseholdStore.self) private var store
+    @State private var requestedIDs: Set<UUID> = []
+    @State private var deviceName = "Family device"
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    VStack(spacing: 6) {
-                        Text("Who’s using Earned It?")
-                            .font(.title.bold())
-                            .multilineTextAlignment(.center)
-                        Text("Allowance Tracker")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.top, 24)
-
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(displayUsers) { user in
-                            Button {
-                                select(user)
-                            } label: {
+                    Text("Who’s using Earned It?")
+                        .font(.title.bold()).multilineTextAlignment(.center)
+                    Text(store.household?.name ?? "Family").foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], spacing: 16) {
+                        ForEach(store.profiles) { member in
+                            Button { store.perform { try store.selectProfile(member.id) } } label: {
                                 VStack(spacing: 10) {
-                                    AvatarView(user: user, size: 72)
-                                    Text(user.displayName)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                        .multilineTextAlignment(.center)
-                                    Text(user.role.title)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                    AvatarView(user: member, size: 72)
+                                    Text(member.displayName).font(.headline).foregroundStyle(.primary)
+                                    Text(member.role.title).font(.subheadline).foregroundStyle(.secondary)
                                 }
-                                .padding(18)
-                                .frame(maxWidth: .infinity, minHeight: 154)
+                                .multilineTextAlignment(.center)
+                                .padding(18).frame(maxWidth: .infinity, minHeight: 154)
                                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Continue as \(user.displayName), \(user.role.title)")
-                            .accessibilityIdentifier("user-card-\(user.displayName.accessibilitySlug)")
+                            .accessibilityLabel("Continue as \(member.displayName), \(member.role.title)")
+                            .accessibilityIdentifier("user-card-\(member.displayName.accessibilitySlug)")
                         }
                     }
-
-                    if users.isEmpty {
-                        ContentUnavailableView("No family members yet", systemImage: "person.2",
-                            description: Text("Add a parent to start managing your family, or resume setup in Settings."))
+                    if store.profiles.isEmpty {
+                        profileRequest
+                        NavigationLink("Connection Settings") { HouseholdSettingsView() }
                     }
-                    if !users.contains(where: { $0.role == .parent }) {
-                        Button("Add Parent") { addingParent = true }
-                            .buttonStyle(.borderedProminent)
-                            .accessibilityIdentifier("add-parent")
-                    }
-                    NavigationLink {
-                        HouseholdSettingsView()
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .accessibilityIdentifier("household-settings")
+                    SyncStatusView()
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 32)
+                .padding(20)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .sheet(isPresented: $addingParent) {
-                FamilyUserFormView(role: .parent)
-            }
-            .alert("Unable to Update Data", isPresented: Binding(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "Please try again.")
-            }
+            .navigationTitle("Profiles")
+            .accessibilityIdentifier("profile-selection")
         }
     }
 
-    private func select(_ user: FamilyUser) {
-        do {
-            try DataCoordinator.prepareDailyData(context: modelContext)
-            try SettingsStore.set(user.id.uuidString, for: SettingsStore.selectedUserIDKey, context: modelContext)
-        } catch {
-            errorMessage = error.localizedDescription
+    private var profileRequest: some View {
+        SectionCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Connect your profiles").font(.title2.bold())
+                Text("Choose the people who use this installation. A parent will approve your request in Family & Sharing.")
+                TextField("Device label", text: $deviceName).textFieldStyle(.roundedBorder)
+                ForEach(store.snapshot.members.filter { $0.isActive(on: store.day) }) { member in
+                    Toggle("\(member.displayName) · \(member.role.title)", isOn: Binding(
+                        get: { requestedIDs.contains(member.id) },
+                        set: { if $0 { requestedIDs.insert(member.id) } else { requestedIDs.remove(member.id) } }
+                    ))
+                }
+                if store.currentRequest != nil {
+                    Text("Request sent. Refresh after a parent approves.").foregroundStyle(.secondary)
+                }
+                Button("Request Profiles") {
+                    store.perform { try store.requestProfiles(Array(requestedIDs), deviceName: deviceName) }
+                }
+                .disabled(requestedIDs.isEmpty || store.cloudIsReadOnly)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("request-profiles")
+            }
         }
     }
+}
 
+struct SyncStatusView: View {
+    @Environment(HouseholdStore.self) private var store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if store.session.location != nil {
+                Label(store.syncMessage, systemImage: store.cloudAccessBlocked ? "exclamationmark.icloud" : "icloud")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("sync-status")
+                if store.pendingCount > 0 { Text("\(store.pendingCount) changes waiting to sync").font(.caption).foregroundStyle(.secondary) }
+                Button("Refresh Family", systemImage: "arrow.clockwise") {
+                    Task { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }
+                }
+                .disabled(store.isSyncing)
+                .accessibilityIdentifier("refresh-family")
+            }
+        }
+    }
 }

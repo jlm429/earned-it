@@ -1,0 +1,44 @@
+# Shared household architecture
+
+## Findings before implementation
+
+Baseline is default-branch commit `a8dd064`, containing merged PR 3. Inspection covered every SwiftData model, daily preparation, permissions, family saving, setup and settings, role navigation, chore editing, scoring, excuses, and streaks. The old model has no household or weekday. `Responsibility.assignedChildID` permits one child. `DailyRecord.uniqueKey` is chore plus date, so a second child cannot have an independent completion. Parent navigation groups chores behind child detail screens. Reassignment archives the old chore today, which can exclude today's earned history. Creation and archive boundaries are recomputed in the device timezone. The onboarding and settings assume one local family and unrestricted profile selection.
+
+## Chosen relationships
+
+Keep SwiftUI, native cards/forms, SwiftData local persistence, XCTest/XCUITest, and the existing weekly threshold and streak services. Use explicit CloudKit record-zone sharing rather than automatic SwiftData mirroring. Domain source facts are small Codable types: Household, FamilyMember, ChoreRevision, DatedCompletion, Excuse, ProfileRequest, and ProfileGrant. A SwiftData fact journal durably stores these facts and their pending-upload status. The journal is an implementation of the sync boundary, not a separate copy of a joined family. Each fact has its own CloudKit record and stable ID. Immutable revision and completion facts avoid a whole-family last-writer overwrite. Device session and selected profile are local and never shared as household settings.
+
+A household has a fixed Gregorian timezone and exactly seven canonical lists, identified by household ID and weekday, including empty lists. Each recurring chore belongs to one of those lists. Revisions change its title, eligibility, and requirement without changing chore identity. Requirements are one particular child, any one eligible child, multiple specified children, or all children. Eligibility permits a contribution; full completion requires every specified child, or at least one eligible child marking Done in any-one mode. A personal Not Needed entry on an any-one chore leaves the other children eligible; if all eligible children mark Not Needed, the chore is accounted for without an actual completer. Done and Not Needed Today remain distinct source states and both account for an expectation. Views show actual completers separately from exemptions and people still needed.
+
+Completion identity includes household, chore, civil date, and completing member. Changes to that member's state cannot clear a sibling's state. Removal writes a scoped reversal after confirmation. Date keys are Gregorian `YYYY-MM-DD` in the household timezone, never device-dependent midnight instants. New chores start today; configuration edits and archives start tomorrow. Membership changes after setup also start tomorrow. This deliberately preserves today's assignment and completion when a parent reassigns or archives a chore. Dated contributions retain the configuration reference needed to interpret their history, including concurrent configuration changes. Archived members remain identifiable in history. No midnight rollover writes are needed: past unmarked expectations derive Missed.
+
+## Identity and sharing
+
+One custom CloudKit zone per household lives in its creator's private database. A zone-wide CKShare exposes those same records in invitees' shared databases. Create locally first, connect to iCloud explicitly, and invite through Apple's sharing controller. Accept system-delivered metadata and pasted share URLs, fetch the existing zone, then associate the installation with preexisting member profiles. An invitee requests profiles and a parent approves them. An installation can hold multiple approved profiles. Cloud account, installation, and family-member identity are separate. Account changes must suspend uploads to a previously connected household.
+
+CloudKit sharing permissions are coarse. A read/write participant can modify or delete records anywhere in the share. Central app checks restrict parents and children and gate profile requests, but these checks are not server authorization and cannot defend against a modified client with share write access. This architecture assumes trusted invited family participants. Private invitations have no public permission. No custom backend, passwords, or third-party service is needed. [Apple CKShare documentation](https://developer.apple.com/documentation/cloudkit/ckshare).
+
+Transport synchronizes on connection, foreground, local changes, and explicit refresh. It persists an outbox, paginates zone changes, checks individual record results, and reports errors without discarding offline work. No push notification dependency is necessary for this bounded foreground implementation. Real signed two-account device validation remains distinct from transport-double tests.
+
+## Allowance and history
+
+Retain Monday to Sunday weeks, future-day exclusion, 95/85 percent status thresholds, allowance eligibility at 85 percent only after Sunday, neutral zero-item days, and excused-day exclusion. Required modes contribute one denominator item per required child and credit only that child's Done or Not Needed state. Any-one chores are optional individual contributions: an eligible child's own accounted completion contributes one numerator and denominator item for that child; noncontributors have neither credit nor a personal penalty. The household can still show an unfinished any-one chore. Parents should choose a required mode for individual obligations. No amounts or payment system are added.
+
+The timezone-boundary and same-day-reassignment follow-ups are superseded by fixed household civil dates and next-day configuration/member boundaries. Their accepted concerns remain regression requirements. The preproduction schema opens a new explicitly named store; old beta store files are left untouched and are not migrated, deleted, or silently seeded.
+
+## Apple architecture research
+
+- [SwiftData sync](https://developer.apple.com/documentation/swiftdata/syncing-model-data-across-a-persons-devices) documents private automatic mirroring and opting out with `.none`. The documented API does not provide the CKShare lifecycle required here. The new local journal explicitly disables automatic mirroring.
+- [Core Data sharing sample](https://developer.apple.com/documentation/coredata/sharing-core-data-objects-between-icloud-users) demonstrates supported private/shared stores, invitation import, persistent history, and share management. It is a viable alternative. Introducing two Core Data stores and their object/history integration would replace more of this small SwiftData app than a focused explicit CloudKit adapter.
+- [CloudKit sharing sample](https://developer.apple.com/documentation/cloudkit/sharing-cloudkit-data-with-other-icloud-users) documents UICloudSharingController, CKSharingSupported, account/container setup, and two-device acceptance. Entitlements and scene acceptance must be included; schema provisioning is an external release step and is never run automatically here.
+- [Zone changes](https://developer.apple.com/documentation/cloudkit/ckfetchrecordzonechangesoperation) supports private/shared database reads, pagination, and cached change cursors. Immutable small records allow idempotent retries without overwriting another member's completion.
+
+Research checked September 6, 2026 against current Apple documentation and the selected Xcode SDK. Detailed implementation and validation results will be recorded in the task report.
+
+## Accepted task clarifications
+
+The captain confirmed that this is a refactor based on user feedback and that the household model is the new specification. No beta-model compatibility work is required, and no actual stores may be erased. Parent visibility of who did what is the core outcome. Streaks stay. Allowance uses the bounded per-child rule above, with no points economy, payment amounts, or cross-child credit. These requirements belong in the later no-mistakes intent.
+
+Examples: with one required multi-child chore, Hanna Done yields Hanna 1/1 and Alek 0/1. With an any-one chore, Hanna Done yields Hanna 1/1 and Alek 0/0 (neutral). A child with four required items and three Done plus one optional any-one Done has 4/5 for the week. Another child completing that optional chore does not change those counts. Not Needed remains accounted work for scoring, but a single personal exemption does not finish an any-one household chore while another eligible child is still needed.
+
+The final implementation report and validation evidence are recorded at `/Users/jlm429/Documents/gitstuff/firstmate/data/earned-it-shared-household/report.md`. Native share acceptance requires the explicit `Configuration/Info.plist`; a host-bundle unit test guards its capability key.
