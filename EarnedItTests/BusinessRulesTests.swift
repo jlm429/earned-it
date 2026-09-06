@@ -3,6 +3,74 @@ import XCTest
 
 @MainActor
 final class BusinessRulesTests: XCTestCase {
+    func testNewChildImmediatelyJoinsExistingAllChoreWithoutChangingHistoryOrParticularAssignment() throws {
+        let family = try TestFamily()
+        let all = try family.chore()
+        let particular = try family.chore(.particular, ids: [family.hanna.id])
+        let previousMonday = family.clock.now
+        try family.complete(all, as: family.hanna)
+        family.move(to: "2026-09-14T16:00:00Z")
+        try family.complete(all, as: family.alek)
+        try family.store.selectProfile(family.parent.id)
+        let completions = family.store.snapshot.completions
+        let revisions = family.store.snapshot.revisions
+        let child = try family.store.saveMember(name: "New Child", role: .child, avatar: .star)
+
+        XCTAssertEqual(child.joinedDay, family.store.day)
+        let row = try XCTUnwrap(family.store.dailyList().first { $0.id == all })
+        XCTAssertEqual(Set(row.requiredMembers.map(\.id)), [family.hanna.id, family.alek.id, child.id])
+        XCTAssertEqual(row.state(for: family.alek.id), .done)
+        XCTAssertEqual(row.state(for: child.id), .unmarked)
+        XCTAssertEqual(family.store.snapshot.completions, completions)
+        XCTAssertEqual(family.store.snapshot.revisions, revisions)
+        XCTAssertEqual(ChoreRules.visibleList(family.store.dailyList(), to: child).map(\.id), [all])
+        XCTAssertEqual(family.store.dailyList().first { $0.id == particular }?.eligibleMembers.map(\.id), [family.hanna.id])
+        XCTAssertFalse(family.store.dailyList(on: previousMonday).contains { $0.eligibleMembers.contains { $0.id == child.id } })
+        XCTAssertEqual(family.store.dailyList(on: previousMonday).first { $0.id == all }?.state(for: family.hanna.id), .done)
+        try family.store.selectProfile(child.id)
+        try family.store.setCompletion(choreID: all, memberID: child.id, date: family.clock.now, state: .done)
+        try family.store.setCompletion(choreID: all, memberID: child.id, date: family.clock.now, state: .unmarked)
+        XCTAssertThrowsError(try family.store.setCompletion(choreID: all, memberID: family.alek.id, date: family.clock.now, state: .unmarked))
+        XCTAssertThrowsError(try family.store.setCompletion(choreID: all, memberID: child.id, date: previousMonday, state: .done))
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.dailyList(), family.store.dailyList())
+        XCTAssertEqual(reopened.dailyList().first { $0.id == all }?.state(for: family.alek.id), .done)
+    }
+
+    func testNewChildMembershipRespectsFutureStartsRecurrenceAndInactiveMembers() throws {
+        let family = try TestFamily()
+        let all = try family.chore()
+        let tuesday = try family.chore(weekday: .tuesday)
+        try family.store.archiveMember(family.alek.id)
+        family.move(to: "2026-09-14T16:00:00Z")
+        let child = try family.store.saveMember(name: "New Child", role: .child, avatar: .star)
+        let future = ChoreRevision(id: UUID(), householdID: family.store.household!.id, choreID: UUID(),
+                                   weekday: .monday, effectiveDay: CivilDay(rawValue: "2026-09-21")!,
+                                   title: "Future chore", notes: "", category: .home, mode: .all, memberIDs: [], isArchived: false)
+        let futureChild = FamilyMember(id: UUID(), householdID: family.store.household!.id, displayName: "Future Child",
+                                       role: .child, avatar: .star, joinedDay: CivilDay(rawValue: "2026-09-21")!)
+        let sequence = try family.repository.facts(householdID: family.store.household!.id).map(\.sequence).max()!
+        let imported = [HouseholdFactBody.chore(future), .member(futureChild)].enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: family.store.household!.id, sequence: sequence + Int64(index) + 1,
+                          authorDeviceID: family.store.session.deviceID, authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: imported, uploaded: true)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.dailyList().map(\.id), [all])
+        XCTAssertEqual(Set(reopened.dailyList()[0].requiredMembers.map(\.id)), [family.hanna.id, child.id])
+        XCTAssertFalse(reopened.profiles.contains { $0.id == futureChild.id || $0.id == family.alek.id })
+        XCTAssertFalse(reopened.eligibleChildren(choreID: UUID()).contains { $0.id == futureChild.id || $0.id == family.alek.id })
+        XCTAssertThrowsError(try reopened.setCompletion(choreID: future.choreID, memberID: child.id, date: family.clock.now, state: .done))
+        family.clock.set("2026-09-15T16:00:00Z")
+        reopened.refreshDate()
+        XCTAssertEqual(reopened.dailyList().map(\.id), [tuesday])
+        XCTAssertEqual(Set(reopened.dailyList()[0].requiredMembers.map(\.id)), [family.hanna.id, child.id])
+        family.clock.set("2026-09-21T16:00:00Z")
+        reopened.refreshDate()
+        XCTAssertEqual(Set(reopened.dailyList().map(\.id)), [all, future.choreID])
+        XCTAssertTrue(reopened.dailyList().allSatisfy { $0.requiredMembers.contains { $0.id == futureChild.id } })
+    }
+
     func testChoreAssignmentChoicesAndSaveShareCreationAndEditDates() throws {
         let family = try TestFamily()
         let existing = try family.chore()
@@ -10,9 +78,9 @@ final class BusinessRulesTests: XCTestCase {
         try family.store.archiveMember(family.alek.id)
         let newID = UUID()
         XCTAssertEqual(family.store.choreAssignmentDay(choreID: newID), family.store.day)
-        XCTAssertEqual(Set(family.store.eligibleChildren(choreID: newID).map(\.id)), [family.hanna.id, family.alek.id])
-        XCTAssertThrowsError(try family.store.saveChore(choreID: newID, weekday: .monday, title: "New chore",
-                                                      mode: .particular, memberIDs: [nora.id]))
+        XCTAssertEqual(Set(family.store.eligibleChildren(choreID: newID).map(\.id)), [family.hanna.id, family.alek.id, nora.id])
+        try family.store.saveChore(weekday: .monday, title: "Immediate assignment",
+                                   mode: .particular, memberIDs: [nora.id])
         try family.store.saveChore(choreID: newID, weekday: .monday, title: "New chore",
                                    mode: .particular, memberIDs: [family.alek.id])
         let created = try XCTUnwrap(family.store.snapshot.configuration(choreID: newID, on: family.store.day))
@@ -175,6 +243,9 @@ final class BusinessRulesTests: XCTestCase {
         family.move(to: "2026-11-02T04:30:00Z") // Still Sunday in New York after the DST transition.
         let id = try family.chore(.all, weekday: .sunday)
         XCTAssertEqual(family.store.day.rawValue, "2026-11-01")
+        let child = try family.store.saveMember(name: "New Child", role: .child, avatar: .star)
+        XCTAssertEqual(child.joinedDay.rawValue, "2026-11-01")
+        XCTAssertTrue(family.store.dailyList()[0].requiredMembers.contains { $0.id == child.id })
         try family.complete(id, as: family.hanna)
         try family.store.selectProfile(family.parent.id)
         try family.store.archiveChore(id)
@@ -184,6 +255,8 @@ final class BusinessRulesTests: XCTestCase {
         family.move(to: "2026-11-02T05:30:00Z")
         XCTAssertEqual(family.store.day.rawValue, "2026-11-02")
         XCTAssertTrue(family.store.dailyList().isEmpty)
+        let renamed = try family.store.saveMember(id: child.id, name: "Renamed Child", role: .child, avatar: .fox)
+        XCTAssertEqual(renamed.joinedDay, child.joinedDay)
         var tokyo = AppCalendar.current
         tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo")!
         let completionDay = family.store.snapshot.completions[0].day
@@ -198,7 +271,7 @@ final class BusinessRulesTests: XCTestCase {
         try family.store.selectProfile(family.parent.id)
         let extra = try family.store.saveMember(name: "Later Child", role: .child, avatar: .star)
         try family.store.archiveMember(family.alek.id)
-        XCTAssertEqual(Set(family.store.dailyList()[0].eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertEqual(Set(family.store.dailyList()[0].eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id, extra.id])
         family.move(to: "2026-09-14T16:00:00Z")
         XCTAssertEqual(Set(family.store.dailyList()[0].eligibleMembers.map(\.id)), [family.hanna.id, extra.id])
         let previous = ISO8601DateFormatter().date(from: "2026-09-07T16:00:00Z")!

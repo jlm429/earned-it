@@ -29,9 +29,11 @@ struct FamilyUserFormView: View {
                     .pickerStyle(.inline)
                 }
                 Section {
-                    Text(store.household?.isSetupComplete == true && existing == nil
-                         ? "New members join the lists tomorrow. Today’s expectations and history stay intact."
-                         : "Members can have a profile before they have a device. Cancel discards this unsaved form.")
+                    Text(existing == nil && role == .child
+                         ? "New children join applicable all-children chores today. Earlier dates and existing completions stay intact."
+                         : store.household?.isSetupComplete == true && existing == nil
+                            ? "New parents can use their profiles from tomorrow."
+                            : "Members can have a profile before they have a device. Cancel discards this unsaved form.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

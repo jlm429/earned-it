@@ -15,70 +15,6 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
     }
 
-    func testCreateSharedChoreIndependentCompletionsParentVisibilityAndRelaunch() throws {
-        keepScreenshot("fresh-create-or-join")
-        try app.performAccessibilityAudit(for: .sufficientElementDescription)
-        createFamily()
-        addChild("Hanna")
-        addChild("Alek")
-        tap("setup-weekday-lists")
-        let weekday = Calendar.current.component(.weekday, from: Date())
-        tap("weekday-\(weekday)")
-        tap("add-responsibility")
-        XCTAssertFalse(app.buttons["save-responsibility"].isEnabled)
-        fill("responsibility-title", with: "Water plants")
-        XCTAssertTrue(app.buttons["chore-requirement"].exists)
-        tap("save-responsibility")
-        XCTAssertTrue(app.staticTexts["Water plants"].waitForExistence(timeout: 5))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        tap("finish-setup")
-        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Water plants"].exists)
-        keepScreenshot("parent-shared-daily-list")
-        tap("switch-user")
-        tap("user-card-hanna")
-        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
-        tap("state-water-plants-hanna")
-        tap("Done")
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Done"))
-        keepScreenshot("hanna-completed-alek-still-needed")
-        relaunch()
-        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
-        reveal(app.buttons["state-water-plants-hanna"])
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Done"))
-        tap("switch-user")
-        tap("user-card-test-parent")
-        reveal(app.buttons["state-water-plants-hanna"])
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Done"))
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-alek"], containing: "Unmarked"))
-        keepScreenshot("parent-who-did-what-without-opening-child")
-        tap("switch-user")
-        tap("user-card-alek")
-        tap("state-water-plants-alek")
-        tap("Done")
-        XCTAssertTrue(app.staticTexts["Complete"].exists)
-        tap("switch-user")
-        tap("user-card-hanna")
-        tap("state-water-plants-hanna")
-        tap("Unmarked")
-        tap("Cancel")
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Done"))
-        tap("state-water-plants-hanna")
-        tap("Unmarked")
-        tap("Remove Contribution")
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Unmarked"))
-        tap("switch-user")
-        tap("user-card-test-parent")
-        reveal(app.buttons["state-water-plants-alek"])
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-alek"], containing: "Done"))
-        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Unmarked"))
-        keepScreenshot("removal-preserves-other-child")
-        tap("parent-child-hanna")
-        XCTAssertTrue(screen("parent-child-detail").waitForExistence(timeout: 5))
-        keepScreenshot("weekly-progress-and-excused-day")
-    }
-
     func testPartialSetupDuplicatePreventionAndConfirmedResetAtLargeType() throws {
         createFamily()
         relaunch(largeType: true)
@@ -114,22 +50,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.buttons["create-family"].exists)
         keepScreenshot("fresh-after-confirmed-local-reset")
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
-    }
-
-    func testJoinFailureKeepsFreshSetupAndDoesNotCreateFakeFamily() throws {
-        tap("join-family")
-        keepScreenshot("native-join-existing-family")
-        tap("find-families")
-        XCTAssertTrue(app.alerts["Unable to Connect"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'iCloud sharing is unavailable'")).firstMatch.exists)
-        keepScreenshot("unsigned-simulator-sharing-dependency")
-        tap("OK")
-        tap("Cancel")
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
-        relaunch()
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-        XCTAssertFalse(screen("parent-dashboard").exists)
-        XCTAssertFalse(screen("profile-selection").exists)
+        try checkJoinFailureKeepsFreshSetup()
     }
 
     func testChoreAssignmentDatesAfterMembershipChanges() throws {
@@ -153,7 +74,7 @@ final class EarnedItUITests: XCTestCase {
         tap("One child")
         let alek = app.switches["eligible-alek"]
         reveal(alek)
-        XCTAssertFalse(app.switches["eligible-nora"].exists)
+        XCTAssertTrue(app.switches["eligible-nora"].exists)
         alek.switches.firstMatch.tap()
         XCTAssertEqual(alek.value as? String, "1")
         keepScreenshot("r12-new-chore-today-eligibility")
@@ -178,6 +99,129 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.switches["eligible-alek"].exists)
         keepScreenshot("r12-reassignment-persists-after-relaunch")
         tap("Cancel")
+    }
+
+    func testExistingAllChildrenChoreIncludesNewChildImmediately() throws {
+        createFamily()
+        addChild("Hanna")
+        addChild("Alek")
+        tap("setup-weekday-lists")
+        tap("weekday-\(Calendar.current.component(.weekday, from: Date()))")
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Feed dog")
+        tap("save-responsibility")
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Read book")
+        tap("chore-requirement")
+        tap("One child")
+        app.switches["eligible-hanna"].switches.firstMatch.tap()
+        tap("save-responsibility")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("finish-setup")
+        tap("state-feed-dog-alek")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-alek"], containing: "Done"))
+        keepScreenshot("after-compact-two-children")
+        tap("family-management")
+        tap("family-add-child")
+        fill("family-display-name", with: "New Child")
+        tap("save-family-user")
+        XCTAssertFalse(app.staticTexts["Joins lists tomorrow"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["state-feed-dog-new-child"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-alek"], containing: "Done"))
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Unmarked"))
+        XCTAssertFalse(app.buttons["state-read-book-new-child"].exists)
+        checkControls(["state-feed-dog-alek", "state-feed-dog-hanna", "state-feed-dog-new-child"])
+        keepScreenshot("after-new-child-immediately-in-today")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .contrast, .hitRegion]) { issue in
+            // Captured audit attachments show the full decorative star, not clipped text.
+            // Its shading is not a text contrast signal. AvatarView hides it from VoiceOver;
+            // the adjacent member name and status carry meaning and remain fully audited.
+            guard issue.auditType == .textClipped || issue.auditType == .contrast,
+                  let element = issue.element, element.label == "⭐️",
+                  abs(element.frame.width - 52) < 0.01,
+                  abs(element.frame.height - 52) < 0.01 else { return false }
+            let progress = self.app.buttons["parent-child-alek"]
+            return progress.exists && progress.frame.contains(element.frame)
+        }
+        tap("switch-user")
+        tap("user-card-new-child")
+        reveal(app.buttons["state-feed-dog-new-child"])
+        XCTAssertFalse(app.buttons["state-feed-dog-alek"].exists)
+        XCTAssertFalse(app.staticTexts["Read book"].exists)
+        tap("state-feed-dog-new-child")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Done"))
+        tap("state-feed-dog-new-child")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Unmarked"))
+        XCTAssertFalse(app.alerts["Remove this contribution?"].exists)
+        app.buttons["state-feed-dog-new-child"].press(forDuration: 1)
+        tap("Not Needed Today")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Not Needed Today"))
+        keepScreenshot("after-child-own-control-and-sibling-states")
+        tap("state-feed-dog-new-child")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Done"))
+        relaunch()
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
+        reveal(app.buttons["state-feed-dog-new-child"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Done"))
+        tap("switch-user")
+        tap("user-card-test-parent")
+        reveal(app.buttons["state-feed-dog-new-child"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-alek"], containing: "Done"))
+        keepScreenshot("after-parent-completions-persist")
+        tap("state-feed-dog-new-child")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Unmarked"))
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-alek"], containing: "Done"))
+        tap("family-management")
+        tap("family-add-child")
+        fill("family-display-name", with: "Alexandria Montgomery")
+        tap("save-family-user")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        relaunch(largeType: true)
+        reveal(app.buttons["state-feed-dog-alek"])
+        keepScreenshot("after-largest-type-chore-title")
+        checkControls(["state-feed-dog-alexandria-montgomery"])
+        let longName = app.buttons["state-feed-dog-alexandria-montgomery"]
+        let distance = min(300, max(0, longName.frame.midY - app.frame.midY))
+        if distance > 0 {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.8))
+            start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+                        withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        keepScreenshot("after-largest-type-long-name")
+        checkControls(["state-feed-dog-alek", "state-feed-dog-hanna", "state-feed-dog-new-child"])
+        keepScreenshot("after-daily-list-largest-type")
+        tap("state-feed-dog-new-child")
+        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Done"))
+        keepScreenshot("after-largest-type-direct-toggle")
+    }
+
+    private func checkControls(_ identifiers: [String]) {
+        for identifier in identifiers {
+            let button = app.buttons[identifier]
+            reveal(button)
+            XCTAssertGreaterThanOrEqual(button.frame.width, 44 - 0.01)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44 - 0.01)
+            XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
+            XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
+        }
+    }
+
+    private func checkJoinFailureKeepsFreshSetup() throws {
+        tap("join-family")
+        keepScreenshot("native-join-existing-family")
+        tap("find-families")
+        XCTAssertTrue(app.alerts["Unable to Connect"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'iCloud sharing is unavailable'")).firstMatch.exists)
+        keepScreenshot("unsigned-simulator-sharing-dependency")
+        tap("OK")
+        tap("Cancel")
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
+        relaunch()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("parent-dashboard").exists)
+        XCTAssertFalse(screen("profile-selection").exists)
     }
 
     private func createFamily() {
