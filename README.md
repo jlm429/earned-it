@@ -6,7 +6,7 @@ A native iPhone app that helps parents see what their children did without askin
 
 One family has one recurring chore list for each weekday, Sunday through Saturday. Every member uses those same lists. A Monday chore returns next Monday with no completions carried forward.
 
-A chore can require one child, any one eligible child, specific children, or all children. Each child records their own Done or Not Needed Today entry. Parents see expected people, completed people, and who remains directly on the daily list. Removing an entry asks for confirmation and changes only that person’s contribution for that date.
+A chore can require one child, any one eligible child, specific children, or all children. Each child records their own Done or Not Needed Today entry. Parents see expected people, completed people, and who remains directly on the daily list. Tap a child’s name to mark Done or undo it directly. Touch and hold for Not Needed Today and other dated states. Each change affects only that person’s contribution for that date; children can change only their own entries.
 
 ## Create or join a family
 
@@ -33,7 +33,7 @@ For example, if Hanna and Alek must both water plants and Hanna finishes, Hanna 
 
 ## Dates and history
 
-The family’s Gregorian timezone is fixed when created. Traveling devices keep the same family dates. New chores start today. Edits, archives, and membership changes after setup start tomorrow so today’s responsibilities and contributions stay intact. History remains available after configuration changes or member archival.
+The family’s Gregorian timezone is fixed when created. Traveling devices keep the same family dates. New chores start today. New children join currently applicable all-children chores immediately, including today. Their persisted join date is the current family date, so earlier dates gain no obligations. Chore edits, archives, and new parent profiles after setup still start tomorrow. Existing dated contributions stay intact. History remains available after configuration changes or member archival.
 
 This preproduction refactor uses a new named store, `shared-household-v1.store`. Old beta stores are left untouched; their incompatible per-child data is not migrated or automatically deleted. Production never seeds sample families. Settings requires confirmation to remove local data. Disconnecting a shared installation does not delete CloudKit or other devices’ data and requires pending changes to sync first.
 

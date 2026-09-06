@@ -141,8 +141,10 @@ final class HouseholdStore {
             existing.avatar = avatar
             member = existing
         } else {
+            // Joining all-children chores is immediate, independent of next-day chore edits.
+            // Persist the household day so reload and sync never backdate membership.
             member = FamilyMember(id: id, householdID: household.id, displayName: name, role: role,
-                                  avatar: avatar, joinedDay: household.isSetupComplete ? tomorrow : day)
+                                  avatar: avatar, joinedDay: role == .child || !household.isSetupComplete ? day : tomorrow)
         }
         try append(.member(member))
         return member

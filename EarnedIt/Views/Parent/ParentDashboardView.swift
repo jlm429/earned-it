@@ -15,7 +15,7 @@ struct ParentDashboardView: View {
                             AvatarView(user: parent, size: 58)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(store.household?.name ?? "Family overview").font(.title2.bold())
-                                Text("See who helped and who’s still needed.").foregroundStyle(.secondary)
+                                Text("See who helped and who’s still needed.").foregroundStyle(.primary.opacity(0.7))
                             }
                         }
                         Text("Family day").font(.subheadline.weight(.medium))

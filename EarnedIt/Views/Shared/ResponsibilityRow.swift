@@ -2,100 +2,99 @@ import SwiftUI
 
 struct ResponsibilityRow: View {
     @Environment(HouseholdStore.self) private var store
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let chore: DailyChore
     let actor: FamilyMember
-    @State private var pendingRemoval: FamilyMember?
-    @State private var pendingState: DailyStateKind = .unmarked
 
     var body: some View {
         SectionCard {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: chore.configuration.category.symbolName)
-                        .foregroundStyle(.secondary).padding(.top, 3)
-                    VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
+                ChoreFlowLayout {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(chore.configuration.title).font(.headline)
-                        Text(chore.requiredMembers.isEmpty ? RequirementMode.anyOne.title : "Required: " + chore.requiredMembers.map(\.displayName).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                        Text(completionLabel).font(.caption).foregroundStyle(.primary.opacity(0.7))
+                            .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
                     }
-                    Spacer(minLength: 0)
+                    .frame(minHeight: 44, alignment: .leading)
+                    ForEach(chore.eligibleMembers) { member in
+                        memberControl(member)
+                    }
                 }
-                Label(completionLabel, systemImage: chore.isFullyComplete ? "checkmark.circle.fill" : "circle.dotted")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
                 if !chore.configuration.notes.isEmpty {
-                    Text(chore.configuration.notes).font(.subheadline).foregroundStyle(.secondary)
-                }
-                ForEach(chore.eligibleMembers) { member in
-                    memberRow(member)
+                    Text(chore.configuration.notes).font(.subheadline).foregroundStyle(.primary.opacity(0.7))
                 }
                 if chore.eligibleMembers.isEmpty {
-                    Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.secondary)
-                } else if chore.requiredMembers.isEmpty && !chore.isFullyComplete {
-                    Text("One eligible child is needed.").font(.caption).foregroundStyle(.secondary)
+                    Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.primary.opacity(0.7))
                 }
-            }
-        }
-        .accessibilityIdentifier("chore-\(chore.configuration.title.accessibilitySlug)")
-        .alert("Remove this contribution?", isPresented: Binding(
-            get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
-        )) {
-            Button("Remove Contribution", role: .destructive) {
-                if let member = pendingRemoval { update(member, state: pendingState) }
-                pendingRemoval = nil
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Only \(pendingRemoval?.displayName ?? "this member")’s entry for this date will change. Other members’ entries are kept.")
-        }
-    }
-
-    private var completionLabel: String {
-        if chore.isFullyComplete {
-            return chore.notNeededMembers.isEmpty ? "Complete" : "Accounted for"
-        }
-        return chore.requiredMembers.isEmpty ? "One person still needed" : "\(chore.remainingMembers.count) still needed"
-    }
-
-    private func memberRow(_ member: FamilyMember) -> some View {
-        let state = chore.state(for: member.id)
-        let canChange = actor.role == .parent || actor.id == member.id
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
-            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
-        return layout {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(member.id == actor.id ? "\(member.displayName) (you)" : member.displayName)
-                    .font(.subheadline.weight(.medium))
-                if chore.requiredMembers.isEmpty && !state.isAccountedFor && chore.isFullyComplete {
-                    Text("Someone else helped").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
-            if canChange && chore.day <= chore.today {
-                Menu {
-                    ForEach(DailyStateKind.allCases.filter { PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: $0) }) { option in
-                        Button(option.rawValue, systemImage: option.symbolName) {
-                            if state.isAccountedFor && !option.isAccountedFor {
-                                pendingState = option
-                                pendingRemoval = member
-                            } else { update(member, state: option) }
-                        }
-                    }
-                } label: {
-                    Label(state == .unmarked ? "Mark" : state.rawValue, systemImage: state.symbolName)
-                        .font(.subheadline).foregroundStyle(.primary)
-                        .padding(.vertical, 8)
-                }
-                .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
-                .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
-            } else {
-                Label(state.rawValue, systemImage: state.symbolName)
-                    .font(.subheadline).foregroundStyle(.primary)
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chore-\(chore.configuration.title.accessibilitySlug)")
+    }
+
+    private var completionLabel: String {
+        if chore.eligibleMembers.isEmpty { return "No eligible children" }
+        if chore.isFullyComplete {
+            let status = chore.notNeededMembers.isEmpty ? "Complete" : "Accounted for"
+            return chore.requiredMembers.isEmpty ? "Any one: \(status)" : status
+        }
+        return chore.requiredMembers.isEmpty ? "Any one child needed" : "\(chore.remainingMembers.count) still needed"
+    }
+
+    @ViewBuilder
+    private func memberControl(_ member: FamilyMember) -> some View {
+        let state = chore.state(for: member.id)
+        let nextState: DailyStateKind = state == .done ? (chore.day == chore.today ? .unmarked : .missed) : .done
+        let canChange = !store.cloudIsReadOnly && !store.cloudAccessBlocked
+            && PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: nextState)
+        if canChange {
+            Button { update(member, state: nextState) } label: {
+                memberLabel(member, state: state)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
+            .accessibilityValue(state.rawValue)
+            .accessibilityHint(state == .done ? "Tap to undo completion. More states in Actions." : "Tap to mark done. More states in Actions.")
+            .accessibilityAddTraits(state == .done ? .isSelected : [])
+            .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+            .contextMenu { stateActions(for: member) }
+            .accessibilityActions { stateActions(for: member) }
+        } else {
+            memberLabel(member, state: state)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
+                .accessibilityValue("View only")
+                .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+        }
+    }
+
+    private func memberLabel(_ member: FamilyMember, state: DailyStateKind) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: state.symbolName)
+                .foregroundStyle(state == .done ? Color.primary : state.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(member.displayName).font(.subheadline.weight(.medium))
+                if state == .notNeeded || state == .missed {
+                    Text(state == .notNeeded ? "Not needed" : "Missed").font(.caption)
+                }
+            }
+            .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(minWidth: 44, minHeight: 44)
+        .background(state.isAccountedFor ? state.tint.opacity(0.12) : Color(uiColor: .tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private func stateActions(for member: FamilyMember) -> some View {
+        ForEach(DailyStateKind.allCases.filter {
+            PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: $0)
+        }) { state in
+            Button(state.rawValue, systemImage: state.symbolName) { update(member, state: state) }
+        }
     }
 
     private func update(_ member: FamilyMember, state: DailyStateKind) {
@@ -103,6 +102,44 @@ struct ResponsibilityRow: View {
             try store.setCompletion(choreID: chore.id, memberID: member.id,
                                     date: chore.day.date(in: store.calendar), state: state)
         }
+    }
+}
+
+/// Keeps names at their readable size and wraps whole controls before narrowing long text.
+private struct ChoreFlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(width: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrangement(width: bounds.width, subviews: subviews)
+        for (index, frame) in result.frames.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                                  proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func arrangement(width: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        let available = max(0, width ?? subviews.reduce(0) { $0 + $1.sizeThatFits(.unspecified).width + spacing })
+        var frames: [CGRect] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let ideal = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: min(ideal.width, available), height: nil))
+            if x > 0 && x + size.width > available {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+        return (CGSize(width: available, height: y + rowHeight), frames)
     }
 }
 
@@ -116,13 +153,15 @@ struct SharedDailyList: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(store.calendar.isDate(date, inSameDayAs: store.today) ? "Today’s Chores" : "Chores for This Day").font(.title2.bold())
             if chores.isEmpty {
                 ContentUnavailableView("Nothing expected", systemImage: "checkmark.circle",
                     description: Text(actor.role == .parent ? "Configure a shared weekday list to get started." : "Enjoy your day. Your family’s list has nothing for you here."))
             } else {
                 ForEach(chores) { chore in ResponsibilityRow(chore: chore, actor: actor) }
+                Text("Tap a name to mark done or undo. Touch and hold for other states.")
+                    .font(.caption).foregroundStyle(.primary.opacity(0.7))
             }
         }
     }
