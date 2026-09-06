@@ -471,4 +471,163 @@ final class SharingTests: XCTestCase {
         }
     }
 
+    func testApprovedParentCanDisconnectFromReadOnlyShare() async throws {
+        let fixture = try await approvedParentInstallation()
+        fixture.server.writeAllowed = false
+        try await fixture.store.synchronize()
+        XCTAssertTrue(fixture.store.cloudIsReadOnly)
+        try checkLocalDisconnect(fixture)
+    }
+
+    func testApprovedParentCanDisconnectFromRevokedShare() async throws {
+        let fixture = try await approvedParentInstallation()
+        let location = try XCTUnwrap(fixture.store.session.location)
+        fixture.server.zones[location.zoneName]?.participants.remove("guest")
+        do { try await fixture.store.synchronize(); XCTFail("Revocation must fail cloud fetch") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .permissionFailure) }
+        XCTAssertTrue(fixture.store.cloudAccessBlocked)
+        try checkLocalDisconnect(fixture)
+    }
+
+    func testApprovedParentCanDisconnectFromWritableShare() async throws {
+        try checkLocalDisconnect(try await approvedParentInstallation())
+    }
+
+    func testDisconnectStillRequiresLocalParentAndKeepsPendingWritesAfterCloudLoss() async throws {
+        for readOnly in [true, false] {
+            let fixture = try await approvedParentInstallation()
+            _ = try fixture.store.saveChore(weekday: .monday, title: "Offline chore", mode: .all, memberIDs: [])
+            let location = try XCTUnwrap(fixture.store.session.location)
+            if readOnly { fixture.server.writeAllowed = false }
+            else { fixture.server.zones[location.zoneName]?.participants.remove("guest") }
+            do { try await fixture.store.synchronize(); XCTFail("Cloud cannot accept the pending write") } catch {}
+            let facts = try fixture.repository.facts(householdID: location.householdID)
+            XCTAssertGreaterThan(fixture.store.pendingCount, 0)
+            for profile in [fixture.family.hanna.id, nil] as [UUID?] {
+                try fixture.store.selectProfile(profile)
+                let session = fixture.store.session
+                XCTAssertThrowsError(try fixture.store.resetLocalData()) {
+                    XCTAssertEqual($0 as? HouseholdError, .permission)
+                }
+                XCTAssertEqual(try fixture.repository.session(), session)
+            }
+            try fixture.store.selectProfile(fixture.family.parent.id)
+            let session = fixture.store.session
+            XCTAssertThrowsError(try fixture.store.resetLocalData()) {
+                XCTAssertEqual($0 as? HouseholdError, .pendingChanges)
+            }
+            XCTAssertEqual(fixture.store.session, session)
+            XCTAssertEqual(try fixture.repository.session(), session)
+            XCTAssertEqual(Set(try fixture.repository.facts(householdID: location.householdID).map(\.id)), Set(facts.map(\.id)))
+            XCTAssertThrowsError(try fixture.store.saveMember(name: "Still blocked", role: .child, avatar: .star))
+        }
+    }
+
+    func testDisconnectRetainsRejectedEvidenceAfterCloudLoss() async throws {
+        for readOnly in [true, false] {
+            let fixture = try await approvedParentInstallation()
+            let chore = try fixture.family.chore()
+            try await fixture.family.store.synchronize()
+            try await fixture.store.synchronize()
+            try fixture.store.selectProfile(fixture.family.hanna.id)
+            try fixture.store.setCompletion(choreID: chore, memberID: fixture.family.hanna.id,
+                                            date: fixture.family.clock.now, state: .done)
+            let location = try XCTUnwrap(fixture.store.session.location)
+            let completion = try XCTUnwrap(fixture.repository.pending(householdID: location.householdID).first)
+            try fixture.family.store.approve(XCTUnwrap(fixture.store.currentRequest), memberIDs: [fixture.family.parent.id])
+            try await fixture.family.store.synchronize()
+            try await fixture.store.synchronize()
+            try fixture.store.selectProfile(fixture.family.parent.id)
+            XCTAssertEqual(fixture.store.pendingCount, 0)
+            XCTAssertNotNil(fixture.store.rejectedChanges[completion.id])
+            let facts = try fixture.repository.facts(householdID: location.householdID)
+            if readOnly {
+                fixture.server.writeAllowed = false
+                try await fixture.store.synchronize()
+            } else {
+                fixture.server.zones[location.zoneName]?.participants.remove("guest")
+                do { try await fixture.store.synchronize(); XCTFail("Share was revoked") } catch {}
+            }
+            let reasons = fixture.store.rejectedChanges
+            try fixture.store.resetLocalData()
+            XCTAssertNil(fixture.store.household)
+            XCTAssertEqual(Set(try fixture.repository.facts(householdID: location.householdID).map(\.id)), Set(facts.map(\.id)))
+            XCTAssertEqual(try fixture.repository.rejections(householdID: location.householdID), reasons)
+            XCTAssertFalse(fixture.transport.uploadedIDs.contains(completion.id))
+            let reopened = try HouseholdStore(repository: fixture.repository, transport: fixture.transport,
+                                              clock: { fixture.family.clock.now }, automaticSync: false)
+            XCTAssertNil(reopened.household)
+            fixture.server.writeAllowed = true
+            try await reopened.join(url: URL(string: "https://test.invalid/\(location.zoneName)")!)
+            XCTAssertEqual(reopened.rejectedChanges, reasons)
+            XCTAssertEqual(reopened.snapshot.completions.first?.state, .done)
+        }
+    }
+
+    func testDisconnectCannotInterruptAnActiveSynchronization() async throws {
+        let fixture = try await approvedParentInstallation()
+        let suspended = expectation(description: "Fetch suspended")
+        var resume: CheckedContinuation<Void, Never>?
+        fixture.transport.beforeFetch = {
+            await withCheckedContinuation { continuation in
+                resume = continuation
+                suspended.fulfill()
+            }
+        }
+        let session = fixture.store.session
+        let syncing = Task { try await fixture.store.synchronize() }
+        await fulfillment(of: [suspended], timeout: 5)
+        XCTAssertTrue(fixture.store.isSyncing)
+        XCTAssertThrowsError(try fixture.store.resetLocalData()) {
+            XCTAssertEqual($0 as? HouseholdError, .pendingChanges)
+        }
+        XCTAssertEqual(fixture.store.session, session)
+        XCTAssertEqual(try fixture.repository.session(), session)
+        resume?.resume()
+        try await syncing.value
+        XCTAssertFalse(fixture.store.isSyncing)
+    }
+
+    private typealias ParentInstallation = (family: TestFamily, server: TestCloudServer,
+        store: HouseholdStore, repository: HouseholdRepository, transport: TestTransport)
+
+    private func approvedParentInstallation() async throws -> ParentInstallation {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let repository = try HouseholdRepository(inMemory: true)
+        let transport = TestTransport(server: server, account: "guest")
+        let store = try HouseholdStore(repository: repository, transport: transport,
+                                       clock: { family.clock.now }, automaticSync: false)
+        let location = try XCTUnwrap(family.store.session.location)
+        try await store.join(url: URL(string: "https://test.invalid/\(location.zoneName)")!)
+        try store.requestProfiles([family.parent.id, family.hanna.id], deviceName: "Parent tablet")
+        try await store.synchronize()
+        try await family.store.synchronize()
+        try family.store.approve(XCTUnwrap(family.store.pendingRequests.first),
+                                memberIDs: [family.parent.id, family.hanna.id])
+        try await family.store.synchronize()
+        try await store.synchronize()
+        try store.selectProfile(family.parent.id)
+        return (family, server, store, repository, transport)
+    }
+
+    private func checkLocalDisconnect(_ fixture: ParentInstallation) throws {
+        XCTAssertEqual(fixture.store.selectedMember?.role, .parent)
+        XCTAssertEqual(fixture.store.pendingCount, 0)
+        let householdID = try XCTUnwrap(fixture.store.household?.id)
+        let location = try XCTUnwrap(fixture.store.session.location)
+        let remoteFacts = fixture.server.zones[location.zoneName]?.facts
+        let oldDeviceID = fixture.store.session.deviceID
+        try fixture.store.resetLocalData()
+        XCTAssertNil(fixture.store.household)
+        XCTAssertNil(fixture.store.session.location)
+        XCTAssertNotEqual(fixture.store.session.deviceID, oldDeviceID)
+        XCTAssertTrue(try fixture.repository.facts(householdID: householdID).isEmpty)
+        XCTAssertEqual(fixture.server.zones[location.zoneName]?.facts, remoteFacts)
+        let reopened = try HouseholdStore(repository: fixture.repository, automaticSync: false)
+        XCTAssertNil(reopened.household)
+        XCTAssertEqual(reopened.session, fixture.store.session)
+    }
+
 }

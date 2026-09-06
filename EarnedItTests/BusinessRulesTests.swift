@@ -3,6 +3,41 @@ import XCTest
 
 @MainActor
 final class BusinessRulesTests: XCTestCase {
+    func testChoreAssignmentChoicesAndSaveShareCreationAndEditDates() throws {
+        let family = try TestFamily()
+        let existing = try family.chore()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        try family.store.archiveMember(family.alek.id)
+        let newID = UUID()
+        XCTAssertEqual(family.store.choreAssignmentDay(choreID: newID), family.store.day)
+        XCTAssertEqual(Set(family.store.eligibleChildren(choreID: newID).map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertThrowsError(try family.store.saveChore(choreID: newID, weekday: .monday, title: "New chore",
+                                                      mode: .particular, memberIDs: [nora.id]))
+        try family.store.saveChore(choreID: newID, weekday: .monday, title: "New chore",
+                                   mode: .particular, memberIDs: [family.alek.id])
+        let created = try XCTUnwrap(family.store.snapshot.configuration(choreID: newID, on: family.store.day))
+        XCTAssertEqual(created.effectiveDay, family.store.day)
+        XCTAssertEqual(created.memberIDs, [family.alek.id])
+
+        XCTAssertEqual(family.store.choreAssignmentDay(choreID: existing), family.store.tomorrow)
+        XCTAssertEqual(Set(family.store.eligibleChildren(choreID: existing).map(\.id)), [family.hanna.id, nora.id])
+        XCTAssertThrowsError(try family.store.saveChore(choreID: existing, weekday: .monday, title: "Changed",
+                                                      mode: .particular, memberIDs: [family.alek.id]))
+        try family.store.saveChore(choreID: existing, weekday: .monday, title: "Changed",
+                                   mode: .particular, memberIDs: [nora.id])
+        let edited = try XCTUnwrap(family.store.snapshot.configuration(choreID: existing, on: family.store.tomorrow))
+        XCTAssertEqual(edited.effectiveDay, family.store.tomorrow)
+        XCTAssertEqual(edited.memberIDs, [nora.id])
+        XCTAssertEqual(family.store.snapshot.configuration(choreID: existing, on: family.store.day)?.mode, .all)
+
+        family.move(to: "2026-09-08T16:00:00Z")
+        let nextNewID = UUID()
+        XCTAssertEqual(Set(family.store.eligibleChildren(choreID: nextNewID).map(\.id)), [family.hanna.id, nora.id])
+        try family.store.saveChore(choreID: nextNewID, weekday: .tuesday, title: "Today now includes Nora",
+                                   mode: .particular, memberIDs: [nora.id])
+        XCTAssertEqual(family.store.dailyList().first?.eligibleMembers.map(\.id), [nora.id])
+    }
+
     func testSevenCanonicalListsAndMondayRecurrenceWithoutCompletionRecurrence() throws {
         let family = try TestFamily()
         XCTAssertEqual(family.store.household?.weekdayLists.map(\.weekday), Weekday.allCases)

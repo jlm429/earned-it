@@ -76,3 +76,9 @@ R9 captures the connecting installation and household before awaits, checks them
 R10 adds an observable timer revision invalidated by the significant-time-change handler. The existing foreground SwiftUI task includes it in its identity, cancelling and recomputing its sleep even when household midnight itself is unchanged. A clock-driven regression advances two hours within one household date, verifies the changed timer identity and shortened delay, and verifies the boundary date refresh. No polling or background subsystem is introduced.
 
 R8 through R10 verification on September 6, 2026 passed all 38 selected tests (20 BusinessRulesTests, 18 SharingTests) with zero failures. The single focused `xcodebuild test` run used the existing task Simulator `5C590529-AEAA-43DF-8271-1E011EB6CE91` and worktree-local DerivedData. Exact evidence: `.artifacts/review-lifecycle.xcresult` and `.artifacts/review-lifecycle.log`. No full repository suite, lint, live CloudKit, push, PR, or CI phase ran here. These worktree-local notes hand off the changes and evidence for the external report.
+
+### Disconnect and assignment-date follow-up R11 and R12
+
+Local disconnect checks the currently approved local parent independently of cloud write access. Active synchronization and ordinary pending changes still block reset. The same repository operation clears the local session and retains rejected changes with their household context. Cloud write authorization for shared mutations is unchanged.
+
+`HouseholdStore.choreAssignmentDay(choreID:)` and `eligibleChildren(choreID:)` supply the effective date and member choices for both the assignment picker and chore saving. A new chore uses today; an existing chore revision uses tomorrow. This includes children joining or leaving at that boundary. See [the changelog](../CHANGELOG.md) for user-visible changes and the external report for exact follow-up test evidence.
