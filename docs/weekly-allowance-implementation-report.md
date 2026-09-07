@@ -23,7 +23,7 @@ The app retains its native SwiftUI cards, forms, profile selection and centraliz
 
 There is no SwiftData entity change. New allowance facts use the existing Codable payload journal and CloudKit record envelope. Existing household, member, chore, completion, and session payloads reopen with allowance unset; the new optional local celebration receipt decodes as absent. Current shared-household stores are preserved. Old incompatible beta stores remain untouched. No actual family store was deleted or inspected.
 
-This journal had no configurable threshold fields to migrate. The earlier fixed scoring constants and obsolete copy have been replaced; retained outcomes now use the accepted all-required rule. All participating installations should update to the new app version before sharing allowance facts, since earlier clients do not understand the new fact case.
+This journal had no configurable threshold fields to migrate. The earlier fixed scoring constants and obsolete copy have been replaced; retained outcomes now use the accepted all-required rule. See [Create or join a family](../README.md#create-or-join-a-family) for the participating-installation update requirement.
 
 The historical timezone and same-day reassignment backlog concerns are already addressed for the current journal by persisted `CivilDay` values and next-day configuration/archive boundaries. Tests cover those behaviors and their weekly projections. This task does not migrate the incompatible beta store or expand unrelated assignment editing scope. The previously documented hidden archived-selection issue in the chore editor remains separate.
 

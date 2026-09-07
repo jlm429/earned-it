@@ -18,6 +18,8 @@ An invited installation requests its preexisting family profiles. A parent revie
 
 The app keeps a local SwiftData journal and exchanges its facts through CloudKit private/shared databases. Foreground, local changes, and manual refresh trigger sync. There is no custom backend or push notification dependency. Offline changes are retained for retry. Synchronization is eventual, not instantaneous.
 
+Update all participating installations to the weekly allowance version before sharing allowance changes. Earlier app versions cannot read the new allowance facts.
+
 **Trust boundary:** CloudKit read/write participants can modify or delete any records in a share. App parent/child restrictions are centralized client checks, not server-enforced protection against a modified client. Invite only trusted family participants.
 
 ## Progress, streaks, and allowance
