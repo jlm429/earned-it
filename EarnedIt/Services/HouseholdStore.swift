@@ -70,6 +70,37 @@ final class HouseholdStore {
         MetricsService.weekFacts(childID: memberID, containing: date ?? today, snapshot: snapshot, today: today)
     }
 
+    func allowanceWeek(for memberID: UUID, containing date: Date? = nil) -> AllowanceWeek {
+        AllowanceService.week(childID: memberID, containing: date ?? today, snapshot: snapshot, today: today)
+    }
+
+    func allowanceHistory(for memberID: UUID) -> [AllowanceWeek] {
+        AllowanceService.history(childID: memberID, snapshot: snapshot, today: today)
+    }
+
+    func saveAllowance(memberID: UUID, text: String, currencyCode: String, locale: Locale = .autoupdatingCurrent) throws {
+        try requireParent()
+        guard let member = snapshot.member(memberID), member.role == .child,
+              snapshot.isActive(member, on: day) else { throw HouseholdError.permission }
+        let amount = try AllowanceAmount.parse(text, currencyCode: currencyCode, locale: locale)
+        let start = CivilDay(AppCalendar.weekStart(containing: today, calendar: calendar), calendar: calendar)
+        try append(.allowance(AllowanceRevision(memberID: memberID, effectiveWeek: start, amount: amount)))
+    }
+
+    /// A local presentation receipt prevents replay after relaunch without syncing profile selection.
+    func consumeCelebration(for memberID: UUID) throws -> Bool {
+        today = clock()
+        guard selectedMember?.id == memberID, selectedMember?.role == .child,
+              let previous = allowanceHistory(for: memberID).dropFirst().first, previous.earned else { return false }
+        guard !(session.celebratedWeeks ?? []).contains(previous.id) else { return false }
+        let retained = Set(snapshot.members.filter { $0.role == .child }.flatMap { allowanceHistory(for: $0.id).map(\.id) })
+        var updated = session
+        updated.celebratedWeeks = (session.celebratedWeeks ?? []).filter { retained.contains($0) } + [previous.id]
+        try repository.commit(facts: [], session: updated)
+        session = updated
+        return true
+    }
+
     func perform(_ action: () throws -> Void) {
         do { try action() } catch { errorMessage = error.localizedDescription }
     }
@@ -194,6 +225,10 @@ final class HouseholdStore {
 
     func setCompletion(choreID: UUID, memberID: UUID, date: Date, state: DailyStateKind) throws {
         try requireWriteAccess()
+        let requestedDay = CivilDay(date, calendar: calendar)
+        if selectedMember?.role == .child && !PermissionService.canChildEdit(day: requestedDay, today: day) {
+            throw HouseholdError.completionLocked
+        }
         guard let actor = selectedMember,
               let chore = dailyList(on: date).first(where: { $0.id == choreID }),
               PermissionService.canSetState(actor: actor, target: memberID, chore: chore, state: state) else {
@@ -483,6 +518,7 @@ final class HouseholdStore {
         case .completion(let value):
             return hasMembers(value.eligibleMemberIDs + [value.memberID, value.recordedByMemberID])
                 && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+        case .allowance(let value): return available.member(value.memberID)?.role == .child
         case .excuse(let value): return hasMembers([value.memberID])
         case .request(let value): return hasMembers(value.memberIDs)
         case .grant(let value):
@@ -503,6 +539,10 @@ final class HouseholdStore {
             switch fact.body {
             case .household(let value):
                 guard value.id == householdID, TimeZone(identifier: value.timeZoneID) != nil else { throw HouseholdError.malformedData }
+            case .allowance(let value):
+                guard value.amount?.isValid != false,
+                      CivilDay(AppCalendar.weekStart(containing: value.effectiveWeek.date(in: AppCalendar.current)),
+                               calendar: AppCalendar.current) == value.effectiveWeek else { throw HouseholdError.malformedData }
             case .member(let value):
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
             case .chore(let value):

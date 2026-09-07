@@ -174,7 +174,7 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(family.store.weekFacts(for: family.alek.id)[0].expectedCount, 0)
         family.move(to: "2026-09-14T16:00:00Z")
         let previous = ISO8601DateFormatter().date(from: "2026-09-07T16:00:00Z")!
-        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: family.store.weekFacts(for: family.hanna.id, containing: previous), asOf: family.clock.now, calendar: family.store.calendar), true)
+        XCTAssertNil(WeeklyScoringService.allowanceEarned(days: family.store.weekFacts(for: family.hanna.id, containing: previous), asOf: family.clock.now, calendar: family.store.calendar))
         XCTAssertNil(WeeklyScoringService.allowanceEarned(days: family.store.weekFacts(for: family.alek.id, containing: previous), asOf: family.clock.now, calendar: family.store.calendar))
     }
 
@@ -283,7 +283,7 @@ final class BusinessRulesTests: XCTestCase {
         let family = try TestFamily()
         let id = try family.chore()
         let monday = family.clock.now
-        family.move(to: "2026-09-08T16:00:00Z")
+        family.move(to: "2026-09-09T16:00:00Z")
         XCTAssertEqual(family.store.dailyList(on: monday)[0].state(for: family.hanna.id), .missed)
         try family.store.selectProfile(family.hanna.id)
         XCTAssertThrowsError(try family.store.setCompletion(choreID: id, memberID: family.hanna.id, date: monday, state: .done))
@@ -333,20 +333,20 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(family.store.weekFacts(for: family.alek.id)[0].accountedCount, 0)
     }
 
-    func testWeeklyThresholdsAllowanceAndFutureExclusion() throws {
+    func testWeeklyAllRequiredRuleAndFutureExclusion() throws {
         let family = try TestFamily()
         let calendar = family.store.calendar
         let monday = family.clock.now
         let sunday = calendar.date(byAdding: .day, value: 6, to: monday)!
         let nextMonday = calendar.date(byAdding: .day, value: 7, to: monday)!
-        XCTAssertEqual(WeeklyScoringService.status(accounted: 95, expected: 100), .green)
+        XCTAssertEqual(WeeklyScoringService.status(accounted: 95, expected: 100), .yellow)
         XCTAssertEqual(WeeklyScoringService.status(accounted: 94, expected: 100), .yellow)
         XCTAssertEqual(WeeklyScoringService.status(accounted: 85, expected: 100), .yellow)
-        XCTAssertEqual(WeeklyScoringService.status(accounted: 84, expected: 100), .red)
+        XCTAssertEqual(WeeklyScoringService.status(accounted: 84, expected: 100), .yellow)
         XCTAssertEqual(WeeklyScoringService.status(accounted: 0, expected: 0), .neutral)
         let days = [DayFacts(date: monday, states: Array(repeating: .done, count: 85) + Array(repeating: .missed, count: 15), isExcused: false)]
         XCTAssertNil(WeeklyScoringService.allowanceEarned(days: days, asOf: sunday, calendar: calendar))
-        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: days, asOf: nextMonday, calendar: calendar), true)
+        XCTAssertEqual(WeeklyScoringService.allowanceEarned(days: days, asOf: nextMonday, calendar: calendar), false)
         let future = DayFacts(date: sunday, states: [.missed], isExcused: false)
         XCTAssertEqual(WeeklyScoringService.summary(days: days + [future], today: monday, calendar: calendar).expectedCount, 100)
     }
@@ -382,11 +382,10 @@ final class BusinessRulesTests: XCTestCase {
         try family.store.selectProfile(family.hanna.id)
         family.clock.set("2026-09-08T04:00:01Z")
         XCTAssertEqual(CivilDay(staleDate, calendar: tokyo), CivilDay(family.clock.now, calendar: tokyo))
-        XCTAssertThrowsError(try family.store.setCompletion(choreID: monday, memberID: family.hanna.id,
-                                                            date: staleDate, state: .done))
+        try family.store.setCompletion(choreID: monday, memberID: family.hanna.id, date: staleDate, state: .done)
         try family.store.setCompletion(choreID: tuesday, memberID: family.hanna.id,
                                        date: family.clock.now, state: .done)
-        XCTAssertEqual(family.store.snapshot.completions.first?.day.rawValue, "2026-09-08")
+        XCTAssertEqual(Set(family.store.snapshot.completions.map { $0.day.rawValue }), ["2026-09-07", "2026-09-08"])
         try family.store.selectProfile(family.parent.id)
         family.clock.set("2026-09-09T04:00:01Z")
         try family.store.archiveChore(tuesday)

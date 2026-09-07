@@ -7,13 +7,13 @@ struct ParentChildDetailView: View {
     let today: Date
     @State private var selectedDate: Date?
     @State private var weekOffset = 0
+    @State private var editingAllowance = false
 
     private var date: Date { selectedDate ?? today }
     private var weekDate: Date { store.calendar.date(byAdding: .day, value: 7 * weekOffset, to: today) ?? today }
     private var days: [DayFacts] { store.weekFacts(for: child.id, containing: weekDate) }
-    private var summary: WeeklySummary {
-        WeeklyScoringService.summary(days: days, today: min(today, days.last?.date ?? today), calendar: store.calendar)
-    }
+    private var week: AllowanceWeek { store.allowanceWeek(for: child.id, containing: weekDate) }
+    private var historyCount: Int { store.allowanceHistory(for: child.id).count }
     private var isExcused: Bool {
         store.snapshot.excuses.contains { $0.memberID == child.id && $0.day == CivilDay(date, calendar: store.calendar) && $0.isExcused }
     }
@@ -34,23 +34,32 @@ struct ParentChildDetailView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             Button("Previous Week", systemImage: "chevron.left") { weekOffset -= 1 }
+                                .disabled(-weekOffset >= historyCount - 1)
+                                .accessibilityIdentifier("previous-week")
                             Spacer()
-                            Text(weekOffset == 0 ? "This week" : weekDate.formatted(.dateTime.month().day())).font(.subheadline)
-                            Spacer()
-                            Button("Next Week", systemImage: "chevron.right") { weekOffset += 1 }.disabled(weekOffset == 0)
-                        }.labelStyle(.iconOnly)
+                            Button("Next Week", systemImage: "chevron.right") { weekOffset += 1 }
+                                .disabled(weekOffset == 0).accessibilityIdentifier("next-week")
+                        }.labelStyle(.iconOnly).buttonStyle(.bordered).controlSize(.large)
+                        AllowanceWeekCard(week: week)
                         WeekStrip(days: days, today: today, compact: false)
-                        StatusBadge(status: summary.status)
-                        Text("\(summary.accountedCount) of \(summary.expectedCount) expected items accounted for")
-                            .accessibilityIdentifier("parent-weekly-count")
-                        if let completion = summary.completion {
-                            Text(completion, format: .percent.precision(.fractionLength(0))).font(.title.bold())
-                        }
-                        if let earned = WeeklyScoringService.allowanceEarned(days: days, asOf: today, calendar: store.calendar) {
-                            Label(earned ? "Allowance earned" : "Allowance not earned", systemImage: earned ? "checkmark.seal.fill" : "calendar.badge.clock")
-                        }
-                        Text("Required chores count for each required child. Any-one chores add credit only for the child who contributes. Excused days are excluded.")
+                        WeeklyItemsView(week: week, actor: parent)
+                        NavigationLink("View all retained weeks") { WeeklySummaryView(child: child) }
+                            .accessibilityIdentifier("retained-weeks")
+                        Text("Current week plus up to 12 finished weeks. Done and Not Needed count; excused days are excluded. Optional contributions do not replace required items.")
                             .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if store.snapshot.isActive(child, on: store.day) {
+                    SectionCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Current weekly allowance").font(.headline)
+                            Text(store.allowanceWeek(for: child.id).amount?.formatted() ?? "Not set")
+                            Button("Edit Weekly Allowance") { editingAllowance = true }
+                                .buttonStyle(.bordered).controlSize(.large)
+                                .accessibilityIdentifier("edit-allowance")
+                            Text("Tracks eligibility, not payments. Changes apply to the current week onward.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 if child.joinedDay <= store.day {
@@ -58,7 +67,7 @@ struct ParentChildDetailView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Excuse a day").font(.headline)
                             Text("Day").font(.subheadline.weight(.medium))
-                        DatePicker("Day", selection: Binding(get: { date }, set: { selectedDate = $0 }),
+                            DatePicker("Day", selection: Binding(get: { date }, set: { selectedDate = $0 }),
                                        in: child.joinedDay.date(in: store.calendar)...today, displayedComponents: .date)
                                 .labelsHidden()
                             Toggle("Excused from scoring", isOn: Binding(get: { isExcused }, set: { value in
@@ -73,6 +82,9 @@ struct ParentChildDetailView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle(child.displayName)
+        .sheet(isPresented: $editingAllowance) {
+            AllowanceEditorView(child: child, amount: store.allowanceWeek(for: child.id).amount)
+        }
         .accessibilityIdentifier("parent-child-detail")
     }
 }

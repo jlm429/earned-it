@@ -14,6 +14,9 @@ struct MainRoleView: View {
                 }
             }
             .toolbar {
+                #if DEBUG
+                ToolbarItem(placement: .topBarTrailing) { WeeklyTestClockControl() }
+                #endif
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         store.perform { try store.selectProfile(nil) }

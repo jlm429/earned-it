@@ -11,8 +11,15 @@ final class EarnedItUITests: XCTestCase {
         if name.contains("LargeType") {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
+        if name.contains("WeeklyAllowance") {
+            app.launchArguments += ["--ui-test-weekly-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        }
         app.launch()
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        if name.contains("WeeklyAllowance") {
+            XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        } else {
+            XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        }
     }
 
     func testPartialSetupDuplicatePreventionAndConfirmedResetAtLargeType() throws {
@@ -197,6 +204,116 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot("after-largest-type-direct-toggle")
     }
 
+    func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
+        tap("parent-child-hanna")
+        tap("edit-allowance")
+        fill("allowance-amount", with: "12.345")
+        tap("save-allowance")
+        XCTAssertTrue(app.alerts["Unable to Save"].waitForExistence(timeout: 5))
+        tap("OK")
+        replaceAmount("12.34")
+        keepScreenshot("weekly-edit-fractional-allowance")
+        tap("save-allowance")
+        XCTAssertTrue(app.staticTexts["$12.34"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("parent-child-alek")
+        tap("edit-allowance")
+        fill("allowance-amount", with: "4.50")
+        tap("save-allowance")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("switch-user")
+        tap("user-card-hanna")
+        keepScreenshot("weekly-current-week-start")
+        checkControls(["view-weekly-summary"])
+        XCTAssertFalse(screen("week-celebration").exists)
+        keepScreenshot("weekly-current-future-not-missed")
+        advanceWeeklyClock(to: "Sunday")
+        XCTAssertFalse(screen("week-celebration").exists)
+        advanceWeeklyClock(to: "Next Monday")
+        reveal(screen("parent-check-in"))
+        keepScreenshot("weekly-finished-gentle-parent-reminder")
+        tap("yesterday-items")
+        tap("state-pack-school-bag-hanna")
+        XCTAssertTrue(waitForLabel(app.buttons["state-pack-school-bag-hanna"], containing: "Done"))
+        keepScreenshot("weekly-sunday-completed-during-monday-grace")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        reveal(screen("week-celebration"))
+        XCTAssertTrue(app.staticTexts["Way to go!"].exists)
+        keepScreenshot("weekly-earned-it-way-to-go")
+        relaunchWeekly(date: "2026-09-14T16:00:00Z")
+        XCTAssertFalse(screen("week-celebration").exists)
+        reveal(screen("earned-it-badge"))
+        keepScreenshot("weekly-badge-persists-without-replay")
+        advanceWeeklyClock(to: "Next Tuesday")
+        tap("switch-user")
+        tap("user-card-alek")
+        tap("view-weekly-summary")
+        XCTAssertTrue(app.navigationBars["Weekly History"].waitForExistence(timeout: 5))
+        tap("weekly-item-2026-09-13-pack-school-bag")
+        XCTAssertTrue(app.navigationBars["Day’s Items"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["state-pack-school-bag-alek"].exists)
+        XCTAssertTrue(screen("completion-cutoff").exists)
+        XCTAssertFalse(app.staticTexts["Tap a name to mark done or undo. Touch and hold for other states."].exists)
+        keepScreenshot("weekly-child-locked-after-grace")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("switch-user")
+        tap("user-card-test-parent")
+        tap("parent-child-alek")
+        tap("previous-week")
+        keepScreenshot("weekly-parent-missing-items-and-dates")
+        tap("weekly-item-2026-09-13-pack-school-bag")
+        tap("state-pack-school-bag-alek")
+        XCTAssertTrue(waitForLabel(app.buttons["state-pack-school-bag-alek"], containing: "Done"))
+        keepScreenshot("weekly-parent-corrects-locked-sunday")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("weekly-item-2026-09-07-water-plants")
+        tap("state-water-plants-alek")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        reveal(screen("earned-it-badge"))
+        keepScreenshot("weekly-corrected-parent-earned-outcome")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("parent-child-hanna")
+        tap("edit-allowance")
+        replaceAmount("20.05")
+        tap("save-allowance")
+        tap("previous-week")
+        XCTAssertTrue(app.staticTexts["$12.34 weekly allowance"].waitForExistence(timeout: 5))
+        keepScreenshot("weekly-finished-amount-preserved-after-edit")
+        relaunchWeekly(date: "2026-09-15T16:00:00Z", largeType: true)
+        tap("parent-child-hanna")
+        reveal(app.staticTexts["$20.05 weekly allowance"])
+        keepScreenshot("weekly-current-largest-type")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
+    private func advanceWeeklyClock(to title: String) {
+        tap("test-clock")
+        // A presented native menu is outside the scrolling content bounds.
+        let option = app.buttons[title]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        XCTAssertTrue(option.isHittable)
+        option.tap()
+    }
+
+    private func replaceAmount(_ text: String) {
+        let field = app.textFields["allowance-amount"]
+        reveal(field)
+        field.tap()
+        let current = field.value as? String ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + text)
+    }
+
+    private func relaunchWeekly(date: String, largeType: Bool = false, hideClock: Bool = false) {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-weekly-fixture", "--ui-test-date=\(date)",
+                               "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        if hideClock { app.launchArguments += ["--ui-test-hide-clock"] }
+        if largeType { app.launchArguments += ["--ui-test-dark", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        app.launch()
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8) || screen("parent-dashboard").exists)
+    }
+
     private func checkControls(_ identifiers: [String]) {
         for identifier in identifiers {
             let button = app.buttons[identifier]
@@ -257,18 +374,51 @@ final class EarnedItUITests: XCTestCase {
 
     private func tap(_ identifier: String) {
         let element = app.buttons[identifier]
-        reveal(element)
+        if identifier == "test-clock" || app.navigationBars.buttons[identifier].exists {
+            XCTAssertTrue(element.waitForExistence(timeout: 5))
+        } else {
+            reveal(element)
+        }
         element.tap()
     }
 
     private func reveal(_ element: XCUIElement) {
         _ = element.waitForExistence(timeout: 2)
-        for _ in 0..<8 where !element.exists || !element.isHittable { app.swipeUp() }
-        if !element.exists || !element.isHittable {
-            for _ in 0..<10 where !element.exists || !element.isHittable { app.swipeDown() }
+        // SwiftUI can report a link as hittable while it is covered by an inset or bar.
+        // Scroll its center into the content area before synthesizing the tap.
+        func safelyVisible() -> Bool {
+            guard element.exists, element.isHittable else { return false }
+            let top = app.navigationBars.firstMatch.frame.maxY + 8
+            let bottom = app.frame.maxY - 36
+            return element.frame.midY > top && element.frame.midY < bottom
+        }
+        let scroll: XCUIElement
+        if app.scrollViews.firstMatch.exists {
+            scroll = app.scrollViews.firstMatch
+        } else if app.collectionViews.firstMatch.exists {
+            scroll = app.collectionViews.firstMatch
+        } else if app.tables.firstMatch.exists {
+            scroll = app.tables.firstMatch
+        } else {
+            scroll = app
+        }
+        // Forms virtualize distant cells. Search enough content at accessibility text sizes
+        // before reversing direction; once mounted, the element's frame directs each drag.
+        for index in 0..<80 {
+            if safelyVisible() { break }
+            let top = app.navigationBars.firstMatch.frame.maxY + 8
+            let bottom = app.frame.maxY - 36
+            let center = (top + bottom) / 2
+            let targetY = element.exists && !element.frame.isEmpty
+                ? element.frame.midY : (index < 40 ? bottom + 160 : top - 160)
+            let distance = min(160, max(-160, targetY - center))
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0))
+                .withOffset(CGVector(dx: 0, dy: center - scroll.frame.minY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(element.exists)
-        XCTAssertTrue(element.isHittable)
+        XCTAssertTrue(safelyVisible(), "Target \(element.identifier), frame \(element.frame), navigation bar \(app.navigationBars.firstMatch.frame)")
     }
 
     private func waitForLabel(_ element: XCUIElement, containing text: String) -> Bool {

@@ -4,7 +4,7 @@ extension ProgressStatus {
     var tint: Color {
         switch self {
         case .green: .green
-        case .yellow: .orange
+        case .yellow: .yellow
         case .red: .red
         case .neutral: .secondary
         }
@@ -13,7 +13,7 @@ extension ProgressStatus {
     var symbolName: String {
         switch self {
         case .green: "checkmark.circle.fill"
-        case .yellow: "circle.lefthalf.filled"
+        case .yellow: "exclamationmark.triangle.fill"
         case .red: "exclamationmark.circle.fill"
         case .neutral: "minus.circle"
         }
@@ -24,7 +24,7 @@ extension DayStatus {
     var tint: Color {
         switch self {
         case .green: .green
-        case .yellow: .orange
+        case .yellow: .yellow
         case .red: .red
         case .excused: .blue
         case .neutral, .future: .secondary

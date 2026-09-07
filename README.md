@@ -18,16 +18,26 @@ An invited installation requests its preexisting family profiles. A parent revie
 
 The app keeps a local SwiftData journal and exchanges its facts through CloudKit private/shared databases. Foreground, local changes, and manual refresh trigger sync. There is no custom backend or push notification dependency. Offline changes are retained for retry. Synchronization is eventual, not instantaneous.
 
+Update all participating installations to the weekly allowance version before sharing allowance changes. Earlier app versions cannot read the new allowance facts.
+
 **Trust boundary:** CloudKit read/write participants can modify or delete any records in a share. App parent/child restrictions are centralized client checks, not server-enforced protection against a modified client. Invite only trusted family participants.
 
 ## Progress, streaks, and allowance
 
-Weeks run Monday through Sunday. Green starts at 95%, yellow at 85%, and red is below 85%. At least 85% accounted for earns allowance after Sunday. Zero expected items are neutral. Children see status and streaks, without numeric percentages. The app does not configure amounts or make payments.
+Weeks run Monday through Sunday in the family timezone. Every required item must be Done or Not Needed to earn allowance after Sunday. A complete state has a checkmark; unfinished work has a yellow warning with text and dated missing items. Future items are labeled as scheduled and do not count as missed. Empty weeks and optional-only weeks never earn allowance.
+
+Parents open a child’s weekly detail and choose **Edit Weekly Allowance** to set an independent amount and currency. Amounts use integer currency minor units, support currency-specific decimal places, and can be left unset. Edits apply to the current week and future weeks; finished weeks retain their earlier amount. This tracks eligibility only, never payments or transfers.
+
+Weekly history shows the current week and up to 12 finished weeks, labeled **Week of** with a date range. Summaries derive from retained chore revisions, membership, completions, excuses, and allowance revisions, so parent corrections update history after relaunch and sync. The summary window is bounded without deleting source journal records.
+
+Children can mark their own items on the scheduled day and the following calendar day. At the start of the second following day, only parents can correct that date. Sunday items therefore remain available to children through Monday in the family timezone. **Finish yesterday’s items** and the dated weekly item links provide access.
+
+A finished week with every required item accounted for earns an **Earned It** badge. **Way to go!** appears once per child and finished week on an installation, with a persisted local presentation receipt. A finished week with missing items instead offers **Check in with your parent**. The fresh current week stays first, and parent corrections update the previous result.
 
 - Required chores count once for each required child. Only that child’s own Done or Not Needed Today state earns credit.
 - Any-one chores are optional individual contributions. A contributor gets one accounted item and one expected item; other eligible children get neither credit nor a penalty.
 - Excused days are excluded. They neither extend nor break streaks. Days without scored chores are also neutral.
-- Past unmarked obligations derive Missed. Parents can correct dated entries and excuse days.
+- Past unmarked obligations derive Missed, with a one-day child completion grace period. Parents can correct dated entries and excuse days.
 
 For example, if Hanna and Alek must both water plants and Hanna finishes, Hanna has 1/1 and Alek has 0/1. If watering plants is any-one, Hanna has 1/1 and Alek has no scored item. Alek does not get Hanna’s credit and is not penalized for leaving a finished shared chore alone.
 
@@ -49,7 +59,7 @@ xcodebuild test -project EarnedIt.xcodeproj -scheme EarnedIt \
   -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
 ```
 
-Debug UI tests use a separate store and explicit reset flags. Unsigned Simulator builds do not activate CloudKit. Domain tests inject an in-memory transport server to verify shared identity, profile approval, convergence, retries, and credit. These tests are not live iCloud verification.
+Debug UI tests use a separate store and explicit reset flags. The weekly flow additionally uses `--ui-test-weekly-fixture` and a controllable family clock; these fixtures cannot run against the actual store and are excluded from Release builds. Unsigned Simulator builds do not activate CloudKit. Domain tests inject an in-memory transport server to verify shared identity, profile approval, convergence, retries, and credit. These tests are not live iCloud verification.
 
 Physical-device sharing requires an Apple development team with the iCloud capability and the container declared in `Configuration/EarnedIt.entitlements`. Provision `iCloud.com.jlm429.EarnedIt` for the app’s bundle ID. The explicit CloudKit schema is `HouseholdFact` with `payload` (Bytes) and `formatVersion` (Int64), plus the system CKShare record. Development saves can create the development schema. Production schema deployment is a separate, deliberate release action. The app never initializes or promotes production schema automatically.
 

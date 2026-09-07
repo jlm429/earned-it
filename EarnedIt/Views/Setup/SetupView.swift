@@ -70,7 +70,7 @@ struct SetupView: View {
                     }
                     Section("Progress & allowance") {
                         Text("Each child earns credit for their own work. Required chores count toward their week. Any-one chores are optional contributions, so another child’s work never counts as yours.")
-                        Text("At least 85% accounted for after Sunday earns allowance. Excused days are left out. Agree on any amount outside the app.")
+                        Text("Every required item must be accounted for to earn allowance after Sunday. Excused days are left out. Parents can set a weekly amount for each child. This tracks eligibility, never payments.")
                     }
                     Section {
                         Button("Start Our Week") { store.perform { try store.finishSetup() } }

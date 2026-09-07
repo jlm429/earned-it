@@ -32,6 +32,10 @@ struct ParentDashboardView: View {
                 }
                 SharedDailyList(actor: parent, date: selectedDate ?? today)
                 Text("Weekly progress").font(.title2.bold())
+                if let child = store.snapshot.members.first(where: { $0.role == .child }) {
+                    WeekHeading(week: store.allowanceWeek(for: child.id))
+                    Text("A fresh allowance week starts every Monday.").font(.subheadline).foregroundStyle(.secondary)
+                }
                 ForEach(store.snapshot.members.filter { $0.role == .child }) { child in
                     NavigationLink {
                         ParentChildDetailView(parent: parent, child: child, today: today)
@@ -41,7 +45,9 @@ struct ParentDashboardView: View {
                                 AvatarView(user: child)
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text(child.displayName).font(.headline).foregroundStyle(.primary)
-                                    StatusBadge(status: WeeklyScoringService.summary(days: store.weekFacts(for: child.id), today: today, calendar: store.calendar).status)
+                                    StatusBadge(status: store.allowanceWeek(for: child.id).status)
+                                    Text(store.allowanceWeek(for: child.id).amount?.formatted() ?? "Allowance not set")
+                                        .font(.subheadline).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)

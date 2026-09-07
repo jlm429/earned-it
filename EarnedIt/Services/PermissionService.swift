@@ -1,12 +1,15 @@
 import Foundation
 
 enum HouseholdError: LocalizedError, Equatable {
+    case invalidAllowance, completionLocked
     case permission, invalidName, duplicateName, missingChildren, invalidAssignment, unavailableDay
     case noHousehold, alreadyHasHousehold, cloudUnavailable, wrongAccount, invitation, readOnly
     case missingProfile, lastParent, pendingChanges, malformedData, familyStillSyncing
 
     var errorDescription: String? {
         switch self {
+        case .invalidAllowance: "Enter an amount from 0 to 999,999 using the currency’s decimal places, or leave it blank. Do not use grouping separators."
+        case .completionLocked: "You can mark an item on its scheduled day and the following day in your family timezone. After that, check in with your parent for a correction."
         case .permission: "This profile does not have permission for that change."
         case .invalidName: "Use a name with 1 to 50 characters."
         case .duplicateName: "A member with that name and role already exists."
@@ -43,10 +46,17 @@ enum PermissionService {
         guard actor?.role == .parent else { throw HouseholdError.permission }
     }
 
+    static func canChildEdit(day: CivilDay, today: CivilDay) -> Bool {
+        // Civil dates use UTC here only for calendar arithmetic, independent of elapsed hours.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return day <= today && today <= day.adding(days: 1, calendar: calendar)
+    }
+
     static func canSetState(actor: FamilyMember, target: UUID, chore: DailyChore, state: DailyStateKind) -> Bool {
         guard chore.day <= chore.today,
               chore.eligibleMembers.contains(where: { $0.id == target }) else { return false }
         if actor.role == .parent { return state != .unmarked || chore.day == chore.today }
-        return actor.id == target && chore.day == chore.today && state != .missed
+        return actor.id == target && canChildEdit(day: chore.day, today: chore.today) && state != .missed
     }
 }

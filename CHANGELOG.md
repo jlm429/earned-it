@@ -4,6 +4,14 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ## Unreleased
 
+### Weekly allowance
+
+- Parents can set and edit each child’s weekly amount and currency, including fractional amounts or an unset amount. Finished weeks preserve the rate that applied to them. This tracks eligibility, never payments or transfers.
+- Allowance now requires every required item (100%) after the week ends. Future items stay scheduled; missing items show a yellow warning, their names, and dates. Optional-only and empty weeks do not earn allowance.
+- Weekly history retains a view of the current Monday-start week plus 12 finished weeks, including corrections after chore changes, reassignment, and archive.
+- Children can mark an item on its scheduled day and the next calendar day. Later corrections require a parent. Sunday’s grace period continues through Monday.
+- Finished complete weeks receive an Earned It badge and a one-time “Way to go!” treatment. Missing weeks gently ask children to check in with their parent. Both stay separate from the fresh current week.
+
 ### Fixed
 
 - New children immediately join existing all-children chores that apply today. Particular-child assignments, future chore starts, earlier history, and other children’s completions are preserved across reload and sync.
@@ -17,7 +25,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 - One shared recurring list for each weekday, with a separate completion for each person and calendar date. Monday's configuration returns next Monday without carrying completions forward.
 - Chores can require one child, any one eligible child, multiple specific children, or all children. Parents see who completed each chore and who remains on the same daily list. Removing a contribution changes only that person's dated entry.
 - Create Family and Join Existing Family, persisted setup, native iCloud invitations, and association with existing family profiles. An installation can support multiple approved profiles.
-- Per-child weekly progress, streaks, excused days, and allowance eligibility. Required chores credit only the relevant child; optional any-one contributions credit their contributor without penalizing other children. No payments or amounts are configured.
+- Per-child weekly progress, streaks, excused days, and allowance eligibility. Required chores credit only the relevant child; optional any-one contributions credit their contributor without penalizing other children. The original preview tracked eligibility only; per-child amounts are now available as described above. No payments are recorded.
 - Household timezone dates, retained assignment history, next-day configuration edits and archives, and protection against conflicting edits leaving no active parent.
 - Offline changes remain available for synchronization. Rejected changes retain their reasons and evidence; dependent uploads wait for confirmed prerequisite saves.
 - Existing beta stores remain untouched. Production does not seed sample families.
