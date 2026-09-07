@@ -171,6 +171,7 @@ enum HouseholdFactBody: Codable, Equatable {
     case member(FamilyMember)
     case chore(ChoreRevision)
     case completion(DatedCompletion)
+    case allowance(AllowanceRevision)
     case excuse(Excuse)
     case request(ProfileRequest)
     case grant(ProfileGrant)
@@ -197,6 +198,7 @@ struct HouseholdSnapshot: Equatable {
     var completions: [DatedCompletion] = []
     var recordedAssignments: [DatedCompletion] = []
     private var parentCreationOrder: [UUID] = []
+    var allowances: [AllowanceRevision] = []
     var excuses: [Excuse] = []
     var requests: [ProfileRequest] = []
     var grants: [ProfileGrant] = []
@@ -218,6 +220,7 @@ struct HouseholdSnapshot: Equatable {
             case .completion(let value):
                 completionsByKey[value.key] = value
                 recordedAssignments.append(value)
+            case .allowance(let value): allowances.append(value)
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
             case .grant(let value): grantsByKey[value.key] = value

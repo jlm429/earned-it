@@ -43,7 +43,7 @@ struct ResponsibilityRow: View {
     @ViewBuilder
     private func memberControl(_ member: FamilyMember) -> some View {
         let state = chore.state(for: member.id)
-        let nextState: DailyStateKind = state == .done ? (chore.day == chore.today ? .unmarked : .missed) : .done
+        let nextState: DailyStateKind = state == .done ? (chore.day == chore.today || actor.role == .child ? .unmarked : .missed) : .done
         let canChange = !store.cloudIsReadOnly && !store.cloudAccessBlocked
             && PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: nextState)
         if canChange {
@@ -160,8 +160,14 @@ struct SharedDailyList: View {
                     description: Text(actor.role == .parent ? "Configure a shared weekday list to get started." : "Enjoy your day. Your family’s list has nothing for you here."))
             } else {
                 ForEach(chores) { chore in ResponsibilityRow(chore: chore, actor: actor) }
-                Text("Tap a name to mark done or undo. Touch and hold for other states.")
-                    .font(.caption).foregroundStyle(.primary.opacity(0.7))
+                if !store.cloudIsReadOnly && !store.cloudAccessBlocked && chores.contains(where: { chore in
+                    chore.eligibleMembers.contains { member in
+                        PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: .done)
+                    }
+                }) {
+                    Text("Tap a name to mark done or undo. Touch and hold for other states.")
+                        .font(.caption).foregroundStyle(.primary.opacity(0.7))
+                }
             }
         }
     }

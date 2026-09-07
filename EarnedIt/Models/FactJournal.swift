@@ -45,4 +45,5 @@ struct DeviceSession: Codable, Equatable {
     var cloudParticipantID: String?
     var location: CloudLocation?
     var cloudCanWrite: Bool?
+    var celebratedWeeks: [String]?
 }

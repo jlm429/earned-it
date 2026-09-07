@@ -5,4 +5,4 @@
 - Members have explicit parent/child roles. Device installations and CloudKit participants are separate identities.
 - Parent screens prioritize who did what on the shared daily list. Children see their own work and relevant household contributions.
 - Keep authorization and mutation logic in `HouseholdStore` and `PermissionService`; never mutate domain facts from views.
-- Retain streaks, excused-day neutrality, Monday to Sunday weeks, and the 85 percent allowance threshold. Never invent payments or amounts.
+- Retain streaks, excused-day neutrality, Monday to Sunday weeks, and the all-required-items allowance rule. See `AllowanceService.swift` for amount revisions, the bounded weekly history, and earned outcomes. Never add payments or transfers.

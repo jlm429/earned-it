@@ -32,7 +32,14 @@ struct EarnedItApp: App {
             #else
             transport = CloudKitHouseholdTransport()
             #endif
-            _store = State(initialValue: try HouseholdStore(repository: repository, transport: transport))
+            #if DEBUG
+            let initialStore = try HouseholdStore(repository: repository, transport: transport,
+                clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now })
+            try WeeklyUITestFixture.prepare(initialStore)
+            #else
+            let initialStore = try HouseholdStore(repository: repository, transport: transport)
+            #endif
+            _store = State(initialValue: initialStore)
             startupError = nil
         } catch {
             startupError = error.localizedDescription

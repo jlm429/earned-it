@@ -18,12 +18,15 @@ struct RootView: View {
                 UserSelectionView()
             }
         }
+        #if DEBUG
+        .preferredColorScheme(WeeklyUITestFixture.enabled && ProcessInfo.processInfo.arguments.contains("--ui-test-dark") ? .dark : nil)
+        #endif
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
         .task { store.refreshDate(); await acceptInvitation() }
         .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)-\(store.midnightTimerRevision)") {
             guard scenePhase == .active else { return }
-            let delay = max(0, store.nextHouseholdMidnight.timeIntervalSinceNow)
+            let delay = max(0, store.nextHouseholdMidnight.timeIntervalSince(store.today))
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             store.refreshDate()
         }

@@ -62,8 +62,8 @@ enum DailyStateKind: String, Codable, CaseIterable, Identifiable {
 }
 
 enum ProgressStatus: String, Identifiable {
-    case green = "On Track"
-    case yellow = "Almost There"
+    case green = "Complete so far"
+    case yellow = "Items to finish"
     case red = "Needs Attention"
     case neutral = "No Items"
 

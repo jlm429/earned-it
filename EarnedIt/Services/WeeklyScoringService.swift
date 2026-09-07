@@ -20,10 +20,7 @@ enum WeeklyScoringService {
 
     static func status(accounted: Int, expected: Int) -> ProgressStatus {
         guard expected > 0 else { return .neutral }
-        let completion = Double(accounted) / Double(expected)
-        if completion >= 0.95 { return .green }
-        if completion >= 0.85 { return .yellow }
-        return .red
+        return accounted >= expected ? .green : .yellow
     }
 
     static func allowanceEarned(
@@ -36,9 +33,10 @@ enum WeeklyScoringService {
         guard let periodEnd = calendar.date(byAdding: .day, value: 7, to: start),
               calendar.startOfDay(for: date) >= periodEnd else { return nil }
         let lastDay = calendar.date(byAdding: .day, value: 6, to: start) ?? start
-        let weekly = summary(days: days, today: lastDay, calendar: calendar)
+        let required = days.map { DayFacts(date: $0.date, states: $0.requiredStates ?? $0.states, isExcused: $0.isExcused) }
+        let weekly = summary(days: required, today: lastDay, calendar: calendar)
         guard let completion = weekly.completion else { return nil }
-        return completion >= 0.85
+        return completion == 1
     }
 
     static func dayStatus(
