@@ -5,11 +5,13 @@ struct DailyChore: Identifiable, Equatable {
     let day: CivilDay
     let eligibleMembers: [FamilyMember]
     let requiredMemberIDs: Set<UUID>
+    let turnOwnerID: UUID?
     let contributions: [DatedCompletion]
     let today: CivilDay
 
     var id: UUID { configuration.choreID }
     var requiredMembers: [FamilyMember] { eligibleMembers.filter { requiredMemberIDs.contains($0.id) } }
+    var turnOwner: FamilyMember? { turnOwnerID.flatMap { id in eligibleMembers.first { $0.id == id } } }
     var requiredCompletionCount: Int { requiredMembers.isEmpty ? min(1, eligibleMembers.count) : requiredMembers.count }
     var completedMembers: [FamilyMember] { eligibleMembers.filter { state(for: $0.id) == .done } }
     var notNeededMembers: [FamilyMember] { eligibleMembers.filter { state(for: $0.id) == .notNeeded } }
@@ -39,6 +41,12 @@ struct DailyChore: Identifiable, Equatable {
         if !requiredMemberIDs.contains(memberID) && !state.isAccountedFor { return nil }
         return state
     }
+
+    func turnLabel(for actor: FamilyMember) -> String? {
+        guard configuration.mode == .alternating else { return nil }
+        guard let turnOwner else { return "No eligible child this turn" }
+        return actor.role == .child && actor.id == turnOwner.id ? "Your turn" : "\(turnOwner.displayName)’s turn"
+    }
 }
 
 enum ChoreRules {
@@ -64,13 +72,57 @@ enum ChoreRules {
             guard (!revision.isArchived && revision.weekday.rawValue == weekday) || !recorded.isEmpty else { return nil }
             let scheduled = !revision.isArchived && revision.weekday.rawValue == weekday
             var members = scheduled ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
+            var turnOwnerID: UUID?
+            if scheduled && revision.mode == .alternating {
+                let activeByID = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) })
+                let participants = revision.memberIDs.compactMap { activeByID[$0] }
+                if !participants.isEmpty {
+                    let index = alternatingOccurrenceIndex(choreID: choreID, before: day,
+                                                           snapshot: snapshot, calendar: household.calendar)
+                    let owner = participants[index % participants.count]
+                    members = [owner]
+                    turnOwnerID = owner.id
+                } else {
+                    members = []
+                }
+            }
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
             requiredIDs.formUnion(recorded.filter { $0.mode != .anyOne }.flatMap(\.eligibleMemberIDs))
             // A recorded assignment survives conflicting offline edits or later membership revisions.
             let recordedIDs = Set(recorded.flatMap(\.eligibleMemberIDs))
             members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
             return DailyChore(configuration: revision, day: day, eligibleMembers: members,
-                              requiredMemberIDs: requiredIDs, contributions: contributions, today: today)
+                              requiredMemberIDs: requiredIDs, turnOwnerID: turnOwnerID,
+                              contributions: contributions, today: today)
         }.sorted { $0.configuration.title.localizedStandardCompare($1.configuration.title) == .orderedAscending }
+    }
+
+    /// Counts scheduled alternating dates before this date. Edits do not reset the sequence.
+    private static func alternatingOccurrenceIndex(choreID: UUID, before day: CivilDay,
+                                                   snapshot: HouseholdSnapshot, calendar: Calendar) -> Int {
+        var revisionsByDay: [CivilDay: ChoreRevision] = [:]
+        for revision in snapshot.revisions where revision.choreID == choreID && revision.effectiveDay < day {
+            revisionsByDay[revision.effectiveDay] = revision
+        }
+        let timeline = revisionsByDay.values.sorted { $0.effectiveDay < $1.effectiveDay }
+        return timeline.enumerated().reduce(into: 0) { count, entry in
+            let (index, revision) = entry
+            guard revision.mode == .alternating, !revision.isArchived else { return }
+            let end = min(timeline.indices.contains(index + 1) ? timeline[index + 1].effectiveDay : day, day)
+            count += occurrenceCount(weekday: revision.weekday, from: revision.effectiveDay,
+                                     before: end, calendar: calendar)
+        }
+    }
+
+    private static func occurrenceCount(weekday: Weekday, from start: CivilDay,
+                                        before end: CivilDay, calendar: Calendar) -> Int {
+        guard start < end else { return 0 }
+        let startDate = start.date(in: calendar)
+        let currentWeekday = calendar.component(.weekday, from: startDate)
+        let offset = (weekday.rawValue - currentWeekday + 7) % 7
+        guard let first = calendar.date(byAdding: .day, value: offset, to: startDate),
+              first < end.date(in: calendar) else { return 0 }
+        let days = calendar.dateComponents([.day], from: first, to: end.date(in: calendar)).day ?? 0
+        return (days + 6) / 7
     }
 }

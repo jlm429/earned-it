@@ -199,18 +199,24 @@ final class HouseholdStore {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 80, notes.count <= 300 else { throw HouseholdError.invalidAssignment }
         let effective = choreAssignmentDay(choreID: choreID)
-        let eligible = eligibleChildren(choreID: choreID).map(\.id)
+        let eligible = eligibleChildren(choreID: choreID)
+        let eligibleIDs = eligible.map(\.id)
         let ids = Set(memberIDs)
-        guard mode == .all || ids.isSubset(of: Set(eligible)) else { throw HouseholdError.invalidAssignment }
+        guard mode == .all || ids.isSubset(of: Set(eligibleIDs)) else { throw HouseholdError.invalidAssignment }
         switch mode {
         case .particular: guard ids.count == 1 else { throw HouseholdError.invalidAssignment }
         case .multiple: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
         case .anyOne: guard !ids.isEmpty else { throw HouseholdError.invalidAssignment }
-        case .all: guard !eligible.isEmpty else { throw HouseholdError.invalidAssignment }
+        case .all: guard !eligibleIDs.isEmpty else { throw HouseholdError.invalidAssignment }
+        case .alternating: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
         }
+        let existingOrder = snapshot.configuration(choreID: choreID, on: effective)?.memberIDs ?? []
+        let retainedOrder = existingOrder.filter(ids.contains)
+        let retainedIDs = Set(retainedOrder)
+        let orderedIDs = retainedOrder + eligibleIDs.filter { ids.contains($0) && !retainedIDs.contains($0) }
         let revision = ChoreRevision(id: UUID(), householdID: household.id, choreID: choreID, weekday: weekday,
                                      effectiveDay: effective, title: title, notes: notes, category: category, mode: mode,
-                                     memberIDs: mode == .all ? [] : ids.sorted { $0.uuidString < $1.uuidString }, isArchived: false)
+                                     memberIDs: mode == .all ? [] : orderedIDs, isArchived: false)
         try append(.chore(revision))
         return choreID
     }

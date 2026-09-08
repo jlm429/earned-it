@@ -73,6 +73,7 @@ final class BusinessRulesTests: XCTestCase {
 
     func testChoreAssignmentChoicesAndSaveShareCreationAndEditDates() throws {
         let family = try TestFamily()
+        XCTAssertEqual(RequirementMode.assignmentChoices, [.all, .particular, .alternating])
         let existing = try family.chore()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
         try family.store.archiveMember(family.alek.id)
@@ -104,6 +105,93 @@ final class BusinessRulesTests: XCTestCase {
         try family.store.saveChore(choreID: nextNewID, weekday: .tuesday, title: "Today now includes Nora",
                                    mode: .particular, memberIDs: [nora.id])
         XCTAssertEqual(family.store.dailyList().first?.eligibleMembers.map(\.id), [nora.id])
+    }
+
+    func testAlternatingOwnerAdvancesWrapsAndDoesNotFollowCompletion() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let turnOrder = revision.memberIDs
+
+        let first = try XCTUnwrap(family.store.dailyList().first)
+        let firstOwner = try XCTUnwrap(first.turnOwner)
+        XCTAssertEqual(first.turnOwner?.id, turnOrder[0])
+        XCTAssertEqual(first.requiredMembers.map(\.id), [turnOrder[0]])
+        XCTAssertEqual(first.turnLabel(for: family.parent), "\(firstOwner.displayName)’s turn")
+        let otherChild = firstOwner.id == family.hanna.id ? family.alek : family.hanna
+        XCTAssertEqual(first.turnLabel(for: firstOwner), "Your turn")
+        XCTAssertEqual(ChoreRules.visibleList([first], to: firstOwner).map(\.id), [id])
+        XCTAssertTrue(ChoreRules.visibleList([first], to: otherChild).isEmpty)
+
+        try family.complete(id, as: firstOwner)
+        let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        let thirdMonday = ISO8601DateFormatter().date(from: "2026-09-21T16:00:00Z")!
+        let second = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
+        let third = try XCTUnwrap(family.store.dailyList(on: thirdMonday).first)
+        XCTAssertEqual(second.turnOwner?.id, turnOrder[1])
+        XCTAssertEqual(second.state(for: turnOrder[1]), .unmarked)
+        XCTAssertEqual(third.turnOwner?.id, turnOrder[0])
+        XCTAssertEqual(family.store.snapshot.completions.count, 1)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.dailyList(on: nextMonday).first?.turnOwner?.id, turnOrder[1])
+        XCTAssertEqual(reopened.dailyList(on: thirdMonday).first?.turnOwner?.id, turnOrder[0])
+    }
+
+    func testAlternatingRotationSurvivesUnrelatedRevisionEdits() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+
+        try family.store.saveChore(choreID: id, weekday: .monday, title: "Water the plants", notes: "Use the blue cup",
+                                   category: .personal, mode: .alternating, memberIDs: original.memberIDs)
+
+        let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        let next = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
+        XCTAssertEqual(next.configuration.title, "Water the plants")
+        XCTAssertEqual(next.configuration.memberIDs, original.memberIDs)
+        XCTAssertEqual(next.turnOwner?.id, original.memberIDs[1])
+    }
+
+    func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id, nora.id])
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let archivedID = revision.memberIDs[1]
+        try family.store.archiveMember(archivedID)
+        let zara = try family.store.saveMember(name: "Zara", role: .child, avatar: .fox)
+
+        let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        let thirdMonday = ISO8601DateFormatter().date(from: "2026-09-21T16:00:00Z")!
+        let remainingOrder = revision.memberIDs.filter { $0 != archivedID }
+        let second = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
+        let third = try XCTUnwrap(family.store.dailyList(on: thirdMonday).first)
+        XCTAssertEqual(second.turnOwner?.id, remainingOrder[1])
+        XCTAssertEqual(third.turnOwner?.id, remainingOrder[0])
+        XCTAssertFalse(second.eligibleMembers.contains { $0.id == archivedID || $0.id == zara.id })
+        XCTAssertThrowsError(try family.store.setCompletion(choreID: id, memberID: archivedID,
+                                                            date: nextMonday, state: .done))
+    }
+
+    func testExistingRequirementModePayloadsRemainDecodable() throws {
+        for rawMode in ["all", "particular", "anyOne", "multiple"] {
+            let payload = """
+            {
+              "id":"00000000-0000-0000-0000-000000000001",
+              "householdID":"00000000-0000-0000-0000-000000000002",
+              "choreID":"00000000-0000-0000-0000-000000000003",
+              "weekday":2,
+              "effectiveDay":"2026-09-07",
+              "title":"Legacy chore",
+              "notes":"",
+              "category":"Home",
+              "mode":"\(rawMode)",
+              "memberIDs":[],
+              "isArchived":false
+            }
+            """
+            XCTAssertEqual(try JSONDecoder().decode(ChoreRevision.self, from: Data(payload.utf8)).mode.rawValue, rawMode)
+        }
     }
 
     func testSevenCanonicalListsAndMondayRecurrenceWithoutCompletionRecurrence() throws {
@@ -149,14 +237,17 @@ final class BusinessRulesTests: XCTestCase {
             let family = try TestFamily()
             let ids = mode == .particular ? [family.hanna.id] : [family.hanna.id, family.alek.id]
             let id = try family.chore(mode, ids: ids)
-            let expectedCount = mode == .particular ? 1 : 2
+            let expectedCount = mode == .particular || mode == .alternating ? 1 : 2
             XCTAssertEqual(family.store.dailyList()[0].eligibleMembers.count, expectedCount, mode.rawValue)
             XCTAssertEqual(family.store.dailyList()[0].requiredMembers.count, mode == .anyOne ? 0 : expectedCount)
             XCTAssertEqual(family.store.dailyList()[0].requiredCompletionCount, mode == .anyOne ? 1 : expectedCount)
-            try family.complete(id, as: family.hanna)
-            XCTAssertEqual(family.store.dailyList()[0].isFullyComplete, mode == .particular || mode == .anyOne, mode.rawValue)
+            let first = try XCTUnwrap(family.store.dailyList()[0].eligibleMembers.first)
+            try family.complete(id, as: first)
+            XCTAssertEqual(family.store.dailyList()[0].isFullyComplete,
+                           mode == .particular || mode == .anyOne || mode == .alternating, mode.rawValue)
             if expectedCount == 2 {
-                try family.complete(id, as: family.alek)
+                let second = try XCTUnwrap(family.store.dailyList()[0].eligibleMembers.first { $0.id != first.id })
+                try family.complete(id, as: second)
                 XCTAssertTrue(family.store.dailyList()[0].isFullyComplete)
             }
         }
@@ -311,6 +402,8 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertThrowsError(try family.chore(.particular, ids: []))
         XCTAssertThrowsError(try family.chore(.particular, ids: [family.hanna.id, family.alek.id]))
         XCTAssertThrowsError(try family.chore(.multiple, ids: [family.hanna.id]))
+        XCTAssertThrowsError(try family.chore(.alternating, ids: [family.hanna.id]))
+        XCTAssertThrowsError(try family.chore(.alternating, ids: [family.hanna.id, family.parent.id]))
         XCTAssertThrowsError(try family.chore(.anyOne, ids: [family.parent.id]))
         XCTAssertTrue(family.store.snapshot.revisions.isEmpty)
     }

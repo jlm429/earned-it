@@ -24,6 +24,28 @@ struct ResponsibilityFormView: View {
         _memberIDs = State(initialValue: Set(existing?.memberIDs ?? []))
     }
 
+    private var eligibleChildren: [FamilyMember] { store.eligibleChildren(choreID: choreID) }
+    private var eligibleIDs: Set<UUID> { Set(eligibleChildren.map(\.id)) }
+    private var selectedIDs: Set<UUID> { memberIDs.intersection(eligibleIDs) }
+    private var displayedModes: [RequirementMode] {
+        RequirementMode.assignmentChoices.contains(mode)
+            ? RequirementMode.assignmentChoices : [mode] + RequirementMode.assignmentChoices
+    }
+    private var selectedChildrenInTurnOrder: [FamilyMember] {
+        let byID = Dictionary(uniqueKeysWithValues: eligibleChildren.map { ($0.id, $0) })
+        let existingOrder = existing?.memberIDs.compactMap { selectedIDs.contains($0) ? byID[$0] : nil } ?? []
+        let existingIDs = Set(existingOrder.map(\.id))
+        return existingOrder + eligibleChildren.filter { selectedIDs.contains($0.id) && !existingIDs.contains($0.id) }
+    }
+    private var canSaveAssignment: Bool {
+        switch mode {
+        case .all: !eligibleChildren.isEmpty
+        case .particular: selectedIDs.count == 1
+        case .alternating, .multiple: selectedIDs.count >= 2
+        case .anyOne: !selectedIDs.isEmpty
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -41,12 +63,12 @@ struct ResponsibilityFormView: View {
                 }
                 Section("Who is needed?") {
                     Picker("Requirement", selection: $mode) {
-                        ForEach(RequirementMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        ForEach(displayedModes) { mode in Text(mode.title).tag(mode) }
                     }.accessibilityIdentifier("chore-requirement")
                     if mode == .all {
                         Text("Every child on this family’s list for that date completes it independently.")
                     } else {
-                        ForEach(store.eligibleChildren(choreID: choreID)) { member in
+                        ForEach(eligibleChildren) { member in
                             Toggle(member.displayName, isOn: Binding(
                                 get: { memberIDs.contains(member.id) },
                                 set: {
@@ -58,7 +80,11 @@ struct ResponsibilityFormView: View {
                             .accessibilityIdentifier("eligible-\(member.displayName.accessibilitySlug)")
                         }
                     }
-                    if mode == .anyOne {
+                    if mode == .alternating {
+                        Text(alternatingHelp)
+                            .font(.footnote).foregroundStyle(.primary.opacity(0.7))
+                            .accessibilityIdentifier("alternating-turn-order")
+                    } else if mode == .anyOne {
                         Text("Any eligible child can finish this chore. Only their own contribution earns credit; others receive no credit or penalty.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
@@ -73,7 +99,9 @@ struct ResponsibilityFormView: View {
             .navigationTitle(existing == nil ? "New Chore" : "Edit Chore")
             .navigationBarTitleDisplayMode(.inline)
             .onChange(of: mode) { _, mode in
-                if mode == .particular { memberIDs = Set(memberIDs.prefix(1)) }
+                if mode == .particular {
+                    memberIDs = selectedChildrenInTurnOrder.first.map { Set([$0.id]) } ?? []
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -83,11 +111,12 @@ struct ResponsibilityFormView: View {
                     Button("Save") {
                         do {
                             try store.saveChore(choreID: choreID, weekday: weekday, title: title, notes: notes,
-                                                category: category, mode: mode, memberIDs: Array(memberIDs))
+                                                category: category, mode: mode, memberIDs: Array(selectedIDs))
                             dismiss()
                         } catch { errorMessage = error.localizedDescription }
                     }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 80 || notes.count > 300)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 80
+                              || notes.count > 300 || !canSaveAssignment)
                     .accessibilityIdentifier("save-responsibility")
                 }
             }
@@ -95,5 +124,11 @@ struct ResponsibilityFormView: View {
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
         }
+    }
+
+    private var alternatingHelp: String {
+        let names = selectedChildrenInTurnOrder.map(\.displayName)
+        if names.count < 2 { return "Choose at least two children. One child owns each date." }
+        return "Turn order: \(names.joined(separator: ", ")). It advances with each scheduled date, even when a turn is not completed."
     }
 }

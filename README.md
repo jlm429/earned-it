@@ -6,7 +6,7 @@ A native iPhone app that helps parents see what their children did without askin
 
 One family has one recurring chore list for each weekday, Sunday through Saturday. Every member uses those same lists. A Monday chore returns next Monday with no completions carried forward.
 
-A chore can require one child, any one eligible child, specific children, or all children. Each child records their own Done or Not Needed Today entry. Parents see expected people, completed people, and who remains directly on the daily list. Tap a child’s name to mark Done or undo it directly. Touch and hold for Not Needed Today and other dated states. Each change affects only that person’s contribution for that date; children can change only their own entries.
+A chore can belong to all children, one child, or selected children who alternate turns. Each alternating date has one owner, and the turn advances with the schedule even when the prior occurrence was not completed. Children see an alternating chore only on their turn; parents see whose turn it is. Older any-one and multiple-child chores remain readable with their existing behavior. Each child records their own Done or Not Needed Today entry. Parents see expected people, completed people, and who remains directly on the daily list. Tap a child’s name to mark Done or undo it directly. Touch and hold for Not Needed Today and other dated states. Each change affects only that person’s contribution for that date; children can change only their own entries.
 
 ## Create or join a family
 
@@ -35,6 +35,7 @@ Children can mark their own items on the scheduled day and the following calenda
 A finished week with every required item accounted for earns an **Earned It** badge. **Way to go!** appears once per child and finished week on an installation, with a persisted local presentation receipt. A finished week with missing items instead offers **Check in with your parent**. The fresh current week stays first, and parent corrections update the previous result.
 
 - Required chores count once for each required child. Only that child’s own Done or Not Needed Today state earns credit.
+- Alternating chores count once for the child who owns that date. Completion never moves a later turn.
 - Any-one chores are optional individual contributions. A contributor gets one accounted item and one expected item; other eligible children get neither credit nor a penalty.
 - Excused days are excluded. They neither extend nor break streaks. Days without scored chores are also neutral.
 - Past unmarked obligations derive Missed, with a one-day child completion grace period. Parents can correct dated entries and excuse days.

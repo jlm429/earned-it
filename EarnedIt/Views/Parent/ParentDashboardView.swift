@@ -34,7 +34,7 @@ struct ParentDashboardView: View {
                 Text("Weekly progress").font(.title2.bold())
                 if let child = store.snapshot.members.first(where: { $0.role == .child }) {
                     WeekHeading(week: store.allowanceWeek(for: child.id))
-                    Text("A fresh allowance week starts every Monday.").font(.subheadline).foregroundStyle(.secondary)
+                    Text("A fresh allowance week starts every Monday.").font(.subheadline).foregroundStyle(.primary.opacity(0.7))
                 }
                 ForEach(store.snapshot.members.filter { $0.role == .child }) { child in
                     NavigationLink {

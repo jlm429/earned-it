@@ -11,7 +11,7 @@ struct ResponsibilityRow: View {
                 ChoreFlowLayout {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(chore.configuration.title).font(.headline)
-                        Text(completionLabel).font(.caption).foregroundStyle(.primary.opacity(0.7))
+                        Text(statusLabel).font(.caption).foregroundStyle(.primary.opacity(0.7))
                             .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
                     }
                     .frame(minHeight: 44, alignment: .leading)
@@ -38,6 +38,11 @@ struct ResponsibilityRow: View {
             return chore.requiredMembers.isEmpty ? "Any one: \(status)" : status
         }
         return chore.requiredMembers.isEmpty ? "Any one child needed" : "\(chore.remainingMembers.count) still needed"
+    }
+
+    private var statusLabel: String {
+        guard let turn = chore.turnLabel(for: actor) else { return completionLabel }
+        return chore.turnOwner == nil ? turn : "\(turn) · \(completionLabel)"
     }
 
     @ViewBuilder

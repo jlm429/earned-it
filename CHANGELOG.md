@@ -4,6 +4,16 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ## Unreleased
 
+### Alternating chores
+
+- Parents can assign a chore to all children, one child, or selected children who alternate turns. Turn order is shown while editing and advances on scheduled dates regardless of completion.
+- Children see an alternating chore only when it is theirs, with concise turn copy and the existing compact completion state. Parent daily lists identify the current owner.
+- Future turns exclude archived or inactive participants. Existing all-child, single-child, any-one, and multiple-child chores continue to load with their prior behavior.
+
+### Development
+
+- Pull requests and manual dispatches now build the app and run the complete automated suite on the stable macOS 26, Xcode 26.6, and iOS 26.5 Simulator toolchain without signing.
+
 ### Weekly allowance
 
 - Parents can set and edit each child’s weekly amount and currency, including fractional amounts or an unset amount. Finished weeks preserve the rate that applied to them. This tracks eligibility, never payments or transfers.
@@ -30,10 +40,6 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 - Household timezone dates, retained assignment history, next-day configuration edits and archives, and protection against conflicting edits leaving no active parent.
 - Offline changes remain available for synchronization. Rejected changes retain their reasons and evidence; dependent uploads wait for confirmed prerequisite saves.
 - Existing beta stores remain untouched. Production does not seed sample families.
-
-### Known limitation
-
-Editing an existing any-one or multiple-child chore after archiving one of its selected children can retain a hidden selection and fail validation. This preexisting edge case remains open.
 
 ### Sharing and validation limits
 
