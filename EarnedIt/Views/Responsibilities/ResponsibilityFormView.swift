@@ -32,10 +32,7 @@ struct ResponsibilityFormView: View {
             ? RequirementMode.assignmentChoices : [mode] + RequirementMode.assignmentChoices
     }
     private var selectedChildrenInTurnOrder: [FamilyMember] {
-        let byID = Dictionary(uniqueKeysWithValues: eligibleChildren.map { ($0.id, $0) })
-        let existingOrder = existing?.memberIDs.compactMap { selectedIDs.contains($0) ? byID[$0] : nil } ?? []
-        let existingIDs = Set(existingOrder.map(\.id))
-        return existingOrder + eligibleChildren.filter { selectedIDs.contains($0.id) && !existingIDs.contains($0.id) }
+        store.orderedEligibleChildren(choreID: choreID, selectedMemberIDs: selectedIDs)
     }
     private var canSaveAssignment: Bool {
         switch mode {

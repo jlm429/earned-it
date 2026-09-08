@@ -66,6 +66,17 @@ final class HouseholdStore {
         return snapshot.members.filter { $0.role == .child && snapshot.isActive($0, on: effective) }
     }
 
+    func orderedEligibleChildren(choreID: UUID, selectedMemberIDs: Set<UUID>) -> [FamilyMember] {
+        let eligible = eligibleChildren(choreID: choreID)
+        let byID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+        let effective = choreAssignmentDay(choreID: choreID)
+        let retained = snapshot.configuration(choreID: choreID, on: effective)?.memberIDs.compactMap {
+            selectedMemberIDs.contains($0) ? byID[$0] : nil
+        } ?? []
+        let retainedIDs = Set(retained.map(\.id))
+        return retained + eligible.filter { selectedMemberIDs.contains($0.id) && !retainedIDs.contains($0.id) }
+    }
+
     func weekFacts(for memberID: UUID, containing date: Date? = nil) -> [DayFacts] {
         MetricsService.weekFacts(childID: memberID, containing: date ?? today, snapshot: snapshot, today: today)
     }
@@ -210,10 +221,7 @@ final class HouseholdStore {
         case .all: guard !eligibleIDs.isEmpty else { throw HouseholdError.invalidAssignment }
         case .alternating: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
         }
-        let existingOrder = snapshot.configuration(choreID: choreID, on: effective)?.memberIDs ?? []
-        let retainedOrder = existingOrder.filter(ids.contains)
-        let retainedIDs = Set(retainedOrder)
-        let orderedIDs = retainedOrder + eligibleIDs.filter { ids.contains($0) && !retainedIDs.contains($0) }
+        let orderedIDs = orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
         let revision = ChoreRevision(id: UUID(), householdID: household.id, choreID: choreID, weekday: weekday,
                                      effectiveDay: effective, title: title, notes: notes, category: category, mode: mode,
                                      memberIDs: mode == .all ? [] : orderedIDs, isArchived: false)

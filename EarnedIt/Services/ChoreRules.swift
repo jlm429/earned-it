@@ -7,6 +7,13 @@ struct HistoricalContribution: Identifiable, Equatable {
     var id: UUID { member.id }
 }
 
+struct ResolvedOccurrence: Equatable {
+    let winningRevision: ChoreRevision
+    let scheduledOwner: FamilyMember?
+    let activeContributions: [DatedCompletion]
+    let displacedHistoricalContributions: [HistoricalContribution]
+}
+
 struct DailyChore: Identifiable, Equatable {
     let configuration: ChoreRevision
     let day: CivilDay
@@ -77,26 +84,13 @@ enum ChoreRules {
             guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return nil }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
             guard (!revision.isArchived && revision.weekday.rawValue == weekday) || !recorded.isEmpty else { return nil }
-            let contributions = snapshot.completions.filter {
-                $0.choreID == choreID && $0.day == day
-                    && !($0.mode == .alternating && $0.revisionID != revision.id)
-            }
             let scheduled = !revision.isArchived && revision.weekday.rawValue == weekday
-            var members = scheduled ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
-            var turnOwnerID: UUID?
-            if scheduled && revision.mode == .alternating {
-                let activeByID = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) })
-                let participants = revision.memberIDs.compactMap { activeByID[$0] }
-                if !participants.isEmpty {
-                    let index = alternatingOccurrenceIndex(choreID: choreID, before: day,
-                                                           snapshot: snapshot, calendar: household.calendar)
-                    let owner = participants[index % participants.count]
-                    members = [owner]
-                    turnOwnerID = owner.id
-                } else {
-                    members = []
-                }
-            }
+            let scheduledMembers = scheduled ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
+            let occurrence = resolveOccurrence(revision: revision, scheduledMembers: scheduledMembers,
+                                               choreID: choreID, day: day, snapshot: snapshot,
+                                               calendar: household.calendar)
+            var members = revision.mode == .alternating
+                ? occurrence.scheduledOwner.map { [$0] } ?? [] : scheduledMembers
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
             if !scheduled || revision.mode != .alternating {
                 let restorable = recorded.filter { $0.mode != .anyOne && $0.mode != .alternating }
@@ -105,19 +99,48 @@ enum ChoreRules {
                 let recordedIDs = Set(restorable.flatMap(\.eligibleMemberIDs))
                 members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
             }
-            var historicalByMemberID: [UUID: DatedCompletion] = [:]
-            for contribution in recorded where contribution.mode == .alternating
-                && contribution.revisionID != revision.id {
-                historicalByMemberID[contribution.memberID] = contribution
-            }
-            let historicalContributions = snapshot.members.compactMap { member in
-                historicalByMemberID[member.id].map { HistoricalContribution(member: member, state: $0.state) }
-            }
-            return DailyChore(configuration: revision, day: day, eligibleMembers: members,
-                              requiredMemberIDs: requiredIDs, turnOwnerID: turnOwnerID,
-                              contributions: contributions, historicalContributions: historicalContributions,
+            return DailyChore(configuration: occurrence.winningRevision, day: day, eligibleMembers: members,
+                              requiredMemberIDs: requiredIDs, turnOwnerID: occurrence.scheduledOwner?.id,
+                              contributions: occurrence.activeContributions,
+                              historicalContributions: occurrence.displacedHistoricalContributions,
                               today: today)
         }.sorted { $0.configuration.title.localizedStandardCompare($1.configuration.title) == .orderedAscending }
+    }
+
+    private static func resolveOccurrence(revision: ChoreRevision, scheduledMembers: [FamilyMember],
+                                          choreID: UUID, day: CivilDay, snapshot: HouseholdSnapshot,
+                                          calendar: Calendar) -> ResolvedOccurrence {
+        var owner: FamilyMember?
+        if revision.mode == .alternating, !scheduledMembers.isEmpty {
+            let activeByID = Dictionary(uniqueKeysWithValues: scheduledMembers.map { ($0.id, $0) })
+            let participants = revision.memberIDs.compactMap { activeByID[$0] }
+            if !participants.isEmpty {
+                let index = alternatingOccurrenceIndex(choreID: choreID, before: day,
+                                                       snapshot: snapshot, calendar: calendar)
+                owner = participants[index % participants.count]
+            }
+        }
+        func isActive(_ contribution: DatedCompletion) -> Bool {
+            if revision.mode == .alternating {
+                return contribution.mode == .alternating
+                    && contribution.revisionID == revision.id && contribution.memberID == owner?.id
+            }
+            return contribution.mode != .alternating
+        }
+        let active = snapshot.completions.filter {
+            $0.choreID == choreID && $0.day == day && isActive($0)
+        }
+        var historicalByMemberID: [UUID: DatedCompletion] = [:]
+        for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
+            && contribution.day == day && contribution.mode == .alternating && !isActive(contribution) {
+            historicalByMemberID[contribution.memberID] = contribution
+        }
+        let historical = snapshot.members.compactMap { member in
+            historicalByMemberID[member.id].map { HistoricalContribution(member: member, state: $0.state) }
+        }
+        return ResolvedOccurrence(winningRevision: revision, scheduledOwner: owner,
+                                  activeContributions: active,
+                                  displacedHistoricalContributions: historical)
     }
 
     /// Counts scheduled alternating dates before this date. Edits do not reset the sequence.

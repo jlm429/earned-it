@@ -107,6 +107,35 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(family.store.dailyList().first?.eligibleMembers.map(\.id), [nora.id])
     }
 
+    func testSyncedTurnOrderMatchesDisplayedAndSavedOrder() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let effectiveDay = family.store.tomorrow
+        let syncedOrder = Array(original.memberIDs.reversed())
+        let syncedRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: original.weekday, effectiveDay: effectiveDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .alternating,
+                                           memberIDs: syncedOrder, isArchived: false)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let syncedFact = HouseholdFact(id: UUID(), householdID: original.householdID, sequence: sequence + 1,
+                                       authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                       body: .chore(syncedRevision))
+        try family.repository.commit(facts: [syncedFact], uploaded: true)
+        let syncedStore = try HouseholdStore(repository: family.repository,
+                                              clock: { family.clock.now }, automaticSync: false)
+        let selectedIDs = Set(original.memberIDs)
+        let displayedOrder = syncedStore.orderedEligibleChildren(choreID: id,
+                                                                 selectedMemberIDs: selectedIDs).map(\.id)
+
+        XCTAssertEqual(displayedOrder, syncedOrder)
+        try syncedStore.saveChore(choreID: id, weekday: original.weekday, title: "Synced turn order",
+                                  mode: .alternating, memberIDs: Array(selectedIDs))
+        let saved = try XCTUnwrap(syncedStore.snapshot.configuration(choreID: id, on: effectiveDay))
+        XCTAssertEqual(saved.memberIDs, displayedOrder)
+    }
+
     func testAlternatingOwnerAdvancesWrapsAndDoesNotFollowCompletion() throws {
         let family = try TestFamily()
         let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
@@ -239,6 +268,43 @@ final class BusinessRulesTests: XCTestCase {
                        [HistoricalContribution(member: family.hanna, state: .done)])
         XCTAssertEqual(allChore.state(for: family.hanna.id), .unmarked)
         XCTAssertFalse(allChore.isFullyComplete)
+    }
+
+    func testMembershipConvergenceMovesSameRevisionCompletionToHistory() throws {
+        let family = try TestFamily()
+        _ = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let id = try family.chore(.alternating,
+                                  ids: family.store.eligibleChildren(choreID: UUID()).map(\.id),
+                                  weekday: .tuesday)
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let originalOwner = try XCTUnwrap(family.store.snapshot.member(revision.memberIDs[0]))
+        let completion = DatedCompletion(choreID: id, revisionID: revision.id,
+                                         memberID: originalOwner.id, day: occurrenceDay, state: .done,
+                                         eligibleMemberIDs: [originalOwner.id], mode: .alternating,
+                                         recordedByMemberID: originalOwner.id)
+        var archivedOwner = originalOwner
+        archivedOwner.archivedFrom = occurrenceDay
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: revision.householdID).map(\.sequence).max())
+        let convergedFacts = [HouseholdFact(id: UUID(), householdID: revision.householdID,
+                                           sequence: sequence + 1, authorDeviceID: UUID(),
+                                           authorMemberID: originalOwner.id, body: .completion(completion)),
+                              HouseholdFact(id: UUID(), householdID: revision.householdID,
+                                           sequence: sequence + 2, authorDeviceID: UUID(),
+                                           authorMemberID: family.parent.id, body: .member(archivedOwner))]
+        try family.repository.commit(facts: convergedFacts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let convergedStore = try HouseholdStore(repository: family.repository,
+                                                clock: { family.clock.now }, automaticSync: false)
+
+        let chore = try XCTUnwrap(convergedStore.dailyList().first { $0.id == id })
+        XCTAssertNotEqual(chore.turnOwner?.id, originalOwner.id)
+        XCTAssertFalse(chore.eligibleMembers.contains { $0.id == originalOwner.id })
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(member: archivedOwner, state: .done)])
+        XCTAssertFalse(PermissionService.canSetState(actor: originalOwner, target: originalOwner.id,
+                                                     chore: chore, state: .done))
     }
 
     func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
