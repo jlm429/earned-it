@@ -204,6 +204,49 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot("after-largest-type-direct-toggle")
     }
 
+    func testAlternatingChoreShowsOnlyTheCurrentChildTurn() throws {
+        createFamily()
+        addChild("Hanna")
+        addChild("Alek")
+        addChild("Nora")
+        tap("setup-weekday-lists")
+        tap("weekday-\(Calendar.current.component(.weekday, from: Date()))")
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Set the table")
+        tap("chore-requirement")
+        tap("Alternate / take turns")
+        app.switches["eligible-hanna"].switches.firstMatch.tap()
+        app.switches["eligible-alek"].switches.firstMatch.tap()
+        app.switches["eligible-nora"].switches.firstMatch.tap()
+        XCTAssertEqual(app.staticTexts["alternating-turn-order"].label,
+                       "Turn order: Alek, Hanna, Nora. It advances with each scheduled date, even when a turn is not completed.")
+        keepScreenshot("alternating-three-child-turn-order")
+        tap("save-responsibility")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("finish-setup")
+
+        XCTAssertTrue(app.staticTexts["full-status-set-the-table"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["full-status-set-the-table"].label.contains("Alek’s turn"))
+        XCTAssertTrue(app.buttons["state-set-the-table-alek"].exists)
+        XCTAssertFalse(app.buttons["state-set-the-table-hanna"].exists)
+        XCTAssertFalse(app.buttons["state-set-the-table-nora"].exists)
+        keepScreenshot("alternating-parent-current-owner")
+
+        tap("switch-user")
+        tap("user-card-alek")
+        XCTAssertTrue(app.staticTexts["full-status-set-the-table"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["full-status-set-the-table"].label.contains("Your turn"))
+        XCTAssertTrue(app.buttons["state-set-the-table-alek"].exists)
+        keepScreenshot("alternating-current-child-your-turn")
+
+        tap("switch-user")
+        tap("user-card-hanna")
+        XCTAssertFalse(app.staticTexts["Set the table"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["state-set-the-table-alek"].exists)
+        keepScreenshot("alternating-other-child-hidden")
+    }
+
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
         tap("parent-child-hanna")
         tap("edit-allowance")
