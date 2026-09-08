@@ -25,6 +25,15 @@ struct ResponsibilityRow: View {
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.primary.opacity(0.7))
                 }
+                if actor.role == .parent && !chore.historicalContributors.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Earlier assignment history").font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        ForEach(chore.historicalContributors) { member in
+                            historicalContributionLabel(member)
+                        }
+                    }
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -91,6 +100,19 @@ struct ResponsibilityRow: View {
         .background(state.isAccountedFor ? state.tint.opacity(0.12) : Color(uiColor: .tertiarySystemFill),
                     in: RoundedRectangle(cornerRadius: 12))
         .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func historicalContributionLabel(_ member: FamilyMember) -> some View {
+        let state = chore.state(for: member.id)
+        return HStack(spacing: 6) {
+            Image(systemName: state.symbolName).foregroundStyle(state.tint).accessibilityHidden(true)
+            Text("\(member.displayName): \(state.rawValue)").font(.caption)
+        }
+        .foregroundStyle(.primary.opacity(0.7))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(member.displayName), earlier assignment, \(state.rawValue)")
+        .accessibilityValue("View only")
+        .accessibilityIdentifier("history-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
     }
 
     @ViewBuilder

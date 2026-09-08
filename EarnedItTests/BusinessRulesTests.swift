@@ -186,6 +186,7 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(chore.eligibleMembers.map(\.id), [family.alek.id])
         XCTAssertEqual(chore.requiredMembers.map(\.id), [family.alek.id])
         XCTAssertEqual(chore.contributions, [displacedContribution])
+        XCTAssertEqual(chore.historicalContributors.map(\.id), [family.hanna.id])
         XCTAssertEqual(chore.state(for: family.hanna.id), .done)
         XCTAssertTrue(ChoreRules.visibleList([chore], to: family.hanna).isEmpty)
         try reopened.selectProfile(family.hanna.id)

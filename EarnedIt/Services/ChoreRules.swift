@@ -7,6 +7,7 @@ struct DailyChore: Identifiable, Equatable {
     let requiredMemberIDs: Set<UUID>
     let turnOwnerID: UUID?
     let contributions: [DatedCompletion]
+    let historicalContributors: [FamilyMember]
     let today: CivilDay
 
     var id: UUID { configuration.choreID }
@@ -93,9 +94,15 @@ enum ChoreRules {
                 let recordedIDs = Set(recorded.flatMap(\.eligibleMemberIDs))
                 members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
             }
+            let memberIDs = Set(members.map(\.id))
+            let historicalContributors = scheduled && revision.mode == .alternating
+                ? snapshot.members.filter { member in
+                    !memberIDs.contains(member.id) && contributions.contains { $0.memberID == member.id }
+                } : []
             return DailyChore(configuration: revision, day: day, eligibleMembers: members,
                               requiredMemberIDs: requiredIDs, turnOwnerID: turnOwnerID,
-                              contributions: contributions, today: today)
+                              contributions: contributions, historicalContributors: historicalContributors,
+                              today: today)
         }.sorted { $0.configuration.title.localizedStandardCompare($1.configuration.title) == .orderedAscending }
     }
 
