@@ -192,6 +192,29 @@ final class BusinessRulesTests: XCTestCase {
         try reopened.selectProfile(family.hanna.id)
         XCTAssertThrowsError(try reopened.setCompletion(choreID: id, memberID: family.hanna.id,
                                                         date: family.clock.now, state: .notNeeded))
+
+        let rescheduledRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                                weekday: .wednesday, effectiveDay: occurrenceDay,
+                                                title: original.title, notes: original.notes,
+                                                category: original.category, mode: .alternating,
+                                                memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let rescheduledFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                            sequence: sequence + Int64(bodies.count) + 1,
+                                            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                            body: .chore(rescheduledRevision))
+        try family.repository.commit(facts: [rescheduledFact], uploaded: true)
+        let rescheduledStore = try HouseholdStore(repository: family.repository,
+                                                   clock: { family.clock.now }, automaticSync: false)
+        let historicalOnly = try XCTUnwrap(rescheduledStore.dailyList().first { $0.id == id })
+        XCTAssertEqual(historicalOnly.configuration.id, rescheduledRevision.id)
+        XCTAssertNil(historicalOnly.turnOwner)
+        XCTAssertTrue(historicalOnly.eligibleMembers.isEmpty)
+        XCTAssertTrue(historicalOnly.requiredMembers.isEmpty)
+        XCTAssertEqual(historicalOnly.historicalContributors.map(\.id), [family.hanna.id])
+        XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: family.hanna).isEmpty)
+        try rescheduledStore.selectProfile(family.hanna.id)
+        XCTAssertThrowsError(try rescheduledStore.setCompletion(choreID: id, memberID: family.hanna.id,
+                                                                date: family.clock.now, state: .notNeeded))
     }
 
     func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
