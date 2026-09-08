@@ -8,7 +8,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 - Parents can assign a chore to all children, one child, or selected children who alternate turns. Turn order is shown while editing and advances on scheduled dates regardless of completion.
 - Children see an alternating chore only when it is theirs, with concise turn copy and the existing compact completion state. Parent daily lists identify the current owner.
-- Future turns exclude archived or inactive participants. Existing all-child, single-child, any-one, and multiple-child chores continue to load with their prior behavior.
+- Future turns exclude archived or inactive participants. Existing all-child and single-child behavior is unchanged. Older any-one and multiple-child chores continue to load without migration and retain their assignment during unrelated edits unless a parent deliberately converts them.
 
 ### Development
 
