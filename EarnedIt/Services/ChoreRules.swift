@@ -1,5 +1,12 @@
 import Foundation
 
+struct HistoricalContribution: Identifiable, Equatable {
+    let member: FamilyMember
+    let state: DailyStateKind
+
+    var id: UUID { member.id }
+}
+
 struct DailyChore: Identifiable, Equatable {
     let configuration: ChoreRevision
     let day: CivilDay
@@ -7,7 +14,7 @@ struct DailyChore: Identifiable, Equatable {
     let requiredMemberIDs: Set<UUID>
     let turnOwnerID: UUID?
     let contributions: [DatedCompletion]
-    let historicalContributors: [FamilyMember]
+    let historicalContributions: [HistoricalContribution]
     let today: CivilDay
 
     var id: UUID { configuration.choreID }
@@ -68,9 +75,12 @@ enum ChoreRules {
         let choreIDs = Set(snapshot.revisions.map(\.choreID))
         return choreIDs.compactMap { choreID -> DailyChore? in
             guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return nil }
-            let contributions = snapshot.completions.filter { $0.choreID == choreID && $0.day == day }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
             guard (!revision.isArchived && revision.weekday.rawValue == weekday) || !recorded.isEmpty else { return nil }
+            let contributions = snapshot.completions.filter {
+                $0.choreID == choreID && $0.day == day
+                    && !($0.mode == .alternating && $0.revisionID != revision.id)
+            }
             let scheduled = !revision.isArchived && revision.weekday.rawValue == weekday
             var members = scheduled ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
             var turnOwnerID: UUID?
@@ -95,14 +105,17 @@ enum ChoreRules {
                 let recordedIDs = Set(restorable.flatMap(\.eligibleMemberIDs))
                 members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
             }
-            let memberIDs = Set(members.map(\.id))
-            let historicalContributors = snapshot.members.filter { member in
-                !memberIDs.contains(member.id)
-                    && contributions.contains { $0.memberID == member.id && $0.mode == .alternating }
+            var historicalByMemberID: [UUID: DatedCompletion] = [:]
+            for contribution in recorded where contribution.mode == .alternating
+                && contribution.revisionID != revision.id {
+                historicalByMemberID[contribution.memberID] = contribution
+            }
+            let historicalContributions = snapshot.members.compactMap { member in
+                historicalByMemberID[member.id].map { HistoricalContribution(member: member, state: $0.state) }
             }
             return DailyChore(configuration: revision, day: day, eligibleMembers: members,
                               requiredMemberIDs: requiredIDs, turnOwnerID: turnOwnerID,
-                              contributions: contributions, historicalContributors: historicalContributors,
+                              contributions: contributions, historicalContributions: historicalContributions,
                               today: today)
         }.sorted { $0.configuration.title.localizedStandardCompare($1.configuration.title) == .orderedAscending }
     }

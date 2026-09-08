@@ -25,12 +25,12 @@ struct ResponsibilityRow: View {
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.primary.opacity(0.7))
                 }
-                if actor.role == .parent && !chore.historicalContributors.isEmpty {
+                if actor.role == .parent && !chore.historicalContributions.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Earlier assignment history").font(.caption.weight(.semibold))
                             .foregroundStyle(.primary.opacity(0.7))
-                        ForEach(chore.historicalContributors) { member in
-                            historicalContributionLabel(member)
+                        ForEach(chore.historicalContributions) { contribution in
+                            historicalContributionLabel(contribution)
                         }
                     }
                 }
@@ -102,17 +102,18 @@ struct ResponsibilityRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func historicalContributionLabel(_ member: FamilyMember) -> some View {
-        let state = chore.state(for: member.id)
-        return HStack(spacing: 6) {
-            Image(systemName: state.symbolName).foregroundStyle(state.tint).accessibilityHidden(true)
-            Text("\(member.displayName): \(state.rawValue)").font(.caption)
+    private func historicalContributionLabel(_ contribution: HistoricalContribution) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: contribution.state.symbolName)
+                .foregroundStyle(contribution.state.tint)
+                .accessibilityHidden(true)
+            Text("\(contribution.member.displayName): \(contribution.state.rawValue)").font(.caption)
         }
         .foregroundStyle(.primary.opacity(0.7))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(member.displayName), earlier assignment, \(state.rawValue)")
+        .accessibilityLabel("\(contribution.member.displayName), earlier assignment, \(contribution.state.rawValue)")
         .accessibilityValue("View only")
-        .accessibilityIdentifier("history-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+        .accessibilityIdentifier("history-\(chore.configuration.title.accessibilitySlug)-\(contribution.member.displayName.accessibilitySlug)")
     }
 
     @ViewBuilder

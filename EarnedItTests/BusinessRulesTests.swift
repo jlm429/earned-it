@@ -185,9 +185,10 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(chore.turnOwner?.id, family.alek.id)
         XCTAssertEqual(chore.eligibleMembers.map(\.id), [family.alek.id])
         XCTAssertEqual(chore.requiredMembers.map(\.id), [family.alek.id])
-        XCTAssertEqual(chore.contributions, [displacedContribution])
-        XCTAssertEqual(chore.historicalContributors.map(\.id), [family.hanna.id])
-        XCTAssertEqual(chore.state(for: family.hanna.id), .done)
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(member: family.hanna, state: .done)])
+        XCTAssertEqual(chore.state(for: family.hanna.id), .unmarked)
         XCTAssertTrue(ChoreRules.visibleList([chore], to: family.hanna).isEmpty)
         try reopened.selectProfile(family.hanna.id)
         XCTAssertThrowsError(try reopened.setCompletion(choreID: id, memberID: family.hanna.id,
@@ -210,11 +211,34 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertNil(historicalOnly.turnOwner)
         XCTAssertTrue(historicalOnly.eligibleMembers.isEmpty)
         XCTAssertTrue(historicalOnly.requiredMembers.isEmpty)
-        XCTAssertEqual(historicalOnly.historicalContributors.map(\.id), [family.hanna.id])
+        XCTAssertEqual(historicalOnly.historicalContributions,
+                       [HistoricalContribution(member: family.hanna, state: .done)])
         XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: family.hanna).isEmpty)
         try rescheduledStore.selectProfile(family.hanna.id)
         XCTAssertThrowsError(try rescheduledStore.setCompletion(choreID: id, memberID: family.hanna.id,
                                                                 date: family.clock.now, state: .notNeeded))
+
+        let allRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                        weekday: .tuesday, effectiveDay: occurrenceDay,
+                                        title: original.title, notes: original.notes,
+                                        category: original.category, mode: .all,
+                                        memberIDs: [], isArchived: false)
+        let allFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                    sequence: sequence + Int64(bodies.count) + 2,
+                                    authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                    body: .chore(allRevision))
+        try family.repository.commit(facts: [allFact], uploaded: true)
+        let allStore = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+        let allChore = try XCTUnwrap(allStore.dailyList().first { $0.id == id })
+        XCTAssertEqual(allChore.configuration.id, allRevision.id)
+        XCTAssertEqual(Set(allChore.eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertEqual(Set(allChore.requiredMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertTrue(allChore.contributions.isEmpty)
+        XCTAssertEqual(allChore.historicalContributions,
+                       [HistoricalContribution(member: family.hanna, state: .done)])
+        XCTAssertEqual(allChore.state(for: family.hanna.id), .unmarked)
+        XCTAssertFalse(allChore.isFullyComplete)
     }
 
     func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
