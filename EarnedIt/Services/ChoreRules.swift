@@ -127,8 +127,15 @@ enum ChoreRules {
             }
             return contribution.mode != .alternating
         }
-        let active = snapshot.completions.filter {
-            $0.choreID == choreID && $0.day == day && isActive($0)
+        let active: [DatedCompletion]
+        if revision.mode == .alternating {
+            active = snapshot.recordedAssignments.last {
+                $0.choreID == choreID && $0.day == day && isActive($0)
+            }.map { [$0] } ?? []
+        } else {
+            active = snapshot.completions.filter {
+                $0.choreID == choreID && $0.day == day && isActive($0)
+            }
         }
         var historicalByMemberID: [UUID: DatedCompletion] = [:]
         for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
