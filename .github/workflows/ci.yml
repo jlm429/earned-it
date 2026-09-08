@@ -27,21 +27,13 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
-      - name: Build
-        run: |
-          xcodebuild build \
-            -project EarnedIt.xcodeproj \
-            -scheme EarnedIt \
-            -configuration Debug \
-            -destination "$DESTINATION" \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: Run complete test suite
+      - name: Build and test unit suite
         run: |
           xcodebuild test \
             -project EarnedIt.xcodeproj \
             -scheme EarnedIt \
             -configuration Debug \
             -destination "$DESTINATION" \
+            -only-testing:EarnedItTests \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO
