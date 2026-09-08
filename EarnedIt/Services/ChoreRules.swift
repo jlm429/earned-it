@@ -87,10 +87,12 @@ enum ChoreRules {
                 }
             }
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
-            requiredIDs.formUnion(recorded.filter { $0.mode != .anyOne }.flatMap(\.eligibleMemberIDs))
-            // A recorded assignment survives conflicting offline edits or later membership revisions.
-            let recordedIDs = Set(recorded.flatMap(\.eligibleMemberIDs))
-            members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
+            if !scheduled || revision.mode != .alternating {
+                requiredIDs.formUnion(recorded.filter { $0.mode != .anyOne }.flatMap(\.eligibleMemberIDs))
+                // A recorded assignment survives conflicting offline edits or later membership revisions.
+                let recordedIDs = Set(recorded.flatMap(\.eligibleMemberIDs))
+                members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
+            }
             return DailyChore(configuration: revision, day: day, eligibleMembers: members,
                               requiredMemberIDs: requiredIDs, turnOwnerID: turnOwnerID,
                               contributions: contributions, today: today)
