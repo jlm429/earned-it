@@ -93,7 +93,7 @@ enum ChoreRules {
                 ? occurrence.scheduledOwner.map { [$0] } ?? [] : scheduledMembers
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
             if revision.mode != .alternating {
-                let restorable = recorded.filter { $0.mode != .anyOne && $0.mode != .alternating }
+                let restorable = occurrence.activeContributions.filter { $0.mode != .anyOne }
                 requiredIDs.formUnion(restorable.flatMap(\.eligibleMemberIDs))
                 // A recorded assignment survives conflicting offline edits or later membership revisions.
                 let recordedIDs = Set(restorable.flatMap(\.eligibleMemberIDs))
@@ -121,9 +121,10 @@ enum ChoreRules {
             }
         }
         func isActive(_ contribution: DatedCompletion) -> Bool {
+            guard contribution.revisionID == revision.id else { return false }
             if revision.mode == .alternating {
                 return contribution.mode == .alternating
-                    && contribution.revisionID == revision.id && contribution.memberID == owner?.id
+                    && contribution.memberID == owner?.id
             }
             return contribution.mode != .alternating
         }

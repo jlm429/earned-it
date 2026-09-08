@@ -400,6 +400,51 @@ final class BusinessRulesTests: XCTestCase {
                        [HistoricalContribution(member: family.alek, state: .notNeeded)])
     }
 
+    func testLosingAllChildFactDoesNotRestoreAssignmentUnderParticularWinner() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.particular, ids: [family.hanna.id], weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let losingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: .tuesday, effectiveDay: occurrenceDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .all,
+                                           memberIDs: [], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay,
+                                            title: original.title, notes: original.notes,
+                                            category: original.category, mode: .particular,
+                                            memberIDs: [family.hanna.id], isArchived: false)
+        let losingCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                                memberID: family.alek.id, day: occurrenceDay, state: .done,
+                                                eligibleMemberIDs: [family.hanna.id, family.alek.id], mode: .all,
+                                                recordedByMemberID: family.alek.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(losingRevision), .completion(losingCompletion),
+                                           .chore(winningRevision)]
+        let facts = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID,
+                          sequence: sequence + Int64(index) + 1, authorDeviceID: UUID(),
+                          authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: facts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.eligibleMembers.map(\.id), [family.hanna.id])
+        XCTAssertEqual(chore.requiredMembers.map(\.id), [family.hanna.id])
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(member: family.alek, state: .done)])
+        XCTAssertNil(chore.creditState(for: family.alek.id))
+        XCTAssertTrue(ChoreRules.visibleList([chore], to: family.alek).isEmpty)
+        XCTAssertFalse(PermissionService.canSetState(actor: family.alek, target: family.alek.id,
+                                                     chore: chore, state: .done))
+    }
+
     func testAlternatingWinnerKeepsCrossModeFactsAsHistoryForThreeChildren() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
