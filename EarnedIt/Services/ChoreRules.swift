@@ -133,9 +133,12 @@ enum ChoreRules {
                 $0.choreID == choreID && $0.day == day && isActive($0)
             }.map { [$0] } ?? []
         } else {
-            active = snapshot.completions.filter {
-                $0.choreID == choreID && $0.day == day && isActive($0)
+            var activeByMemberID: [UUID: DatedCompletion] = [:]
+            for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
+                && contribution.day == day && isActive(contribution) {
+                activeByMemberID[contribution.memberID] = contribution
             }
+            active = activeByMemberID.values.sorted { $0.key < $1.key }
         }
         var historicalByMemberID: [UUID: DatedCompletion] = [:]
         for contribution in snapshot.recordedAssignments where contribution.choreID == choreID

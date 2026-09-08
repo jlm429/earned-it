@@ -354,6 +354,52 @@ final class BusinessRulesTests: XCTestCase {
                        [HistoricalContribution(member: family.alek, state: .notNeeded)])
     }
 
+    func testLosingAlternatingFactDoesNotShadowAllChildCompletion() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.all, weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let losingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: .tuesday, effectiveDay: occurrenceDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .alternating,
+                                           memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay,
+                                            title: original.title, notes: original.notes,
+                                            category: original.category, mode: .all,
+                                            memberIDs: [], isArchived: false)
+        let winningCompletion = DatedCompletion(choreID: id, revisionID: winningRevision.id,
+                                                memberID: family.alek.id, day: occurrenceDay, state: .done,
+                                                eligibleMemberIDs: [family.alek.id, family.hanna.id], mode: .all,
+                                                recordedByMemberID: family.alek.id)
+        let shadowingCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                                  memberID: family.alek.id, day: occurrenceDay,
+                                                  state: .notNeeded, eligibleMemberIDs: [family.alek.id],
+                                                  mode: .alternating, recordedByMemberID: family.alek.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(losingRevision), .chore(winningRevision),
+                                           .completion(winningCompletion), .completion(shadowingCompletion)]
+        let facts = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID,
+                          sequence: sequence + Int64(index) + 1, authorDeviceID: UUID(),
+                          authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: facts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        XCTAssertEqual(reopened.snapshot.completions, [shadowingCompletion])
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.contributions, [winningCompletion])
+        XCTAssertEqual(chore.state(for: family.alek.id), .done)
+        XCTAssertEqual(chore.creditState(for: family.alek.id), .done)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(member: family.alek, state: .notNeeded)])
+    }
+
     func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
