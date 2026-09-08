@@ -1,10 +1,16 @@
 import Foundation
 
 struct HistoricalContribution: Identifiable, Equatable {
+    struct ID: Hashable {
+        let revisionID: UUID
+        let memberID: UUID
+    }
+
+    let revisionID: UUID
     let member: FamilyMember
     let state: DailyStateKind
 
-    var id: UUID { member.id }
+    var id: ID { ID(revisionID: revisionID, memberID: member.id) }
 }
 
 struct ResolvedOccurrence: Equatable {
@@ -141,13 +147,20 @@ enum ChoreRules {
             }
             active = activeByMemberID.values.sorted { $0.key < $1.key }
         }
-        var historicalByMemberID: [UUID: DatedCompletion] = [:]
+        var historicalByAssignment: [HistoricalContribution.ID: DatedCompletion] = [:]
+        var historicalOrder: [HistoricalContribution.ID] = []
         for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
             && contribution.day == day && !isActive(contribution) {
-            historicalByMemberID[contribution.memberID] = contribution
+            let id = HistoricalContribution.ID(revisionID: contribution.revisionID,
+                                               memberID: contribution.memberID)
+            if historicalByAssignment[id] == nil { historicalOrder.append(id) }
+            historicalByAssignment[id] = contribution
         }
-        let historical = snapshot.members.compactMap { member in
-            historicalByMemberID[member.id].map { HistoricalContribution(member: member, state: $0.state) }
+        let membersByID = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
+        let historical: [HistoricalContribution] = historicalOrder.compactMap { id in
+            guard let contribution = historicalByAssignment[id], let member = membersByID[id.memberID] else { return nil }
+            return HistoricalContribution(revisionID: contribution.revisionID, member: member,
+                                          state: contribution.state)
         }
         return ResolvedOccurrence(winningRevision: revision, scheduledOwner: owner,
                                   activeContributions: active,

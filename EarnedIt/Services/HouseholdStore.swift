@@ -213,15 +213,24 @@ final class HouseholdStore {
         let eligible = eligibleChildren(choreID: choreID)
         let eligibleIDs = eligible.map(\.id)
         let ids = Set(memberIDs)
-        guard mode == .all || ids.isSubset(of: Set(eligibleIDs)) else { throw HouseholdError.invalidAssignment }
-        switch mode {
-        case .particular: guard ids.count == 1 else { throw HouseholdError.invalidAssignment }
-        case .multiple: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
-        case .anyOne: guard !ids.isEmpty else { throw HouseholdError.invalidAssignment }
-        case .all: guard !eligibleIDs.isEmpty else { throw HouseholdError.invalidAssignment }
-        case .alternating: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
+        let current = snapshot.configuration(choreID: choreID, on: effective)
+        let currentIsLegacy = current.map { !RequirementMode.assignmentChoices.contains($0.mode) } ?? false
+        let preservesLegacy = currentIsLegacy && current?.mode == mode && current?.memberIDs == memberIDs
+        if currentIsLegacy && !RequirementMode.assignmentChoices.contains(mode) && !preservesLegacy {
+            throw HouseholdError.invalidAssignment
         }
-        let orderedIDs = orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
+        if !preservesLegacy {
+            guard mode == .all || ids.isSubset(of: Set(eligibleIDs)) else { throw HouseholdError.invalidAssignment }
+            switch mode {
+            case .particular: guard ids.count == 1 else { throw HouseholdError.invalidAssignment }
+            case .multiple: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
+            case .anyOne: guard !ids.isEmpty else { throw HouseholdError.invalidAssignment }
+            case .all: guard !eligibleIDs.isEmpty else { throw HouseholdError.invalidAssignment }
+            case .alternating: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
+            }
+        }
+        let orderedIDs = preservesLegacy ? memberIDs
+            : orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
         let revision = ChoreRevision(id: UUID(), householdID: household.id, choreID: choreID, weekday: weekday,
                                      effectiveDay: effective, title: title, notes: notes, category: category, mode: mode,
                                      memberIDs: mode == .all ? [] : orderedIDs, isArchived: false)
