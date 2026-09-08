@@ -92,7 +92,7 @@ enum ChoreRules {
             var members = revision.mode == .alternating
                 ? occurrence.scheduledOwner.map { [$0] } ?? [] : scheduledMembers
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
-            if !scheduled || revision.mode != .alternating {
+            if revision.mode != .alternating {
                 let restorable = recorded.filter { $0.mode != .anyOne && $0.mode != .alternating }
                 requiredIDs.formUnion(restorable.flatMap(\.eligibleMemberIDs))
                 // A recorded assignment survives conflicting offline edits or later membership revisions.
@@ -142,7 +142,7 @@ enum ChoreRules {
         }
         var historicalByMemberID: [UUID: DatedCompletion] = [:]
         for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
-            && contribution.day == day && contribution.mode == .alternating && !isActive(contribution) {
+            && contribution.day == day && !isActive(contribution) {
             historicalByMemberID[contribution.memberID] = contribution
         }
         let historical = snapshot.members.compactMap { member in

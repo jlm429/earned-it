@@ -400,6 +400,80 @@ final class BusinessRulesTests: XCTestCase {
                        [HistoricalContribution(member: family.alek, state: .notNeeded)])
     }
 
+    func testAlternatingWinnerKeepsCrossModeFactsAsHistoryForThreeChildren() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let participants = [family.alek.id, family.hanna.id, nora.id]
+        let id = try family.chore(.all, weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let losingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: .tuesday, effectiveDay: occurrenceDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .all,
+                                           memberIDs: [], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay,
+                                            title: original.title, notes: original.notes,
+                                            category: original.category, mode: .alternating,
+                                            memberIDs: participants, isArchived: false)
+        let hannaCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                              memberID: family.hanna.id, day: occurrenceDay, state: .done,
+                                              eligibleMemberIDs: participants, mode: .all,
+                                              recordedByMemberID: family.hanna.id)
+        let noraCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                             memberID: nora.id, day: occurrenceDay, state: .notNeeded,
+                                             eligibleMemberIDs: participants, mode: .all,
+                                             recordedByMemberID: nora.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(losingRevision), .completion(hannaCompletion),
+                                           .completion(noraCompletion), .chore(winningRevision)]
+        let facts = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID,
+                          sequence: sequence + Int64(index) + 1, authorDeviceID: UUID(),
+                          authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: facts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.turnOwner?.id, participants[0])
+        XCTAssertEqual(chore.eligibleMembers.map(\.id), [participants[0]])
+        XCTAssertEqual(chore.requiredMembers.map(\.id), [participants[0]])
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: chore.historicalContributions.map {
+            ($0.member.id, $0.state)
+        }), [family.hanna.id: .done, nora.id: .notNeeded])
+        XCTAssertTrue(ChoreRules.visibleList([chore], to: family.hanna).isEmpty)
+        XCTAssertTrue(ChoreRules.visibleList([chore], to: nora).isEmpty)
+
+        let unscheduledRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                                weekday: .wednesday, effectiveDay: occurrenceDay,
+                                                title: original.title, notes: original.notes,
+                                                category: original.category, mode: .alternating,
+                                                memberIDs: participants, isArchived: false)
+        let unscheduledFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                            sequence: sequence + Int64(bodies.count) + 1,
+                                            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                            body: .chore(unscheduledRevision))
+        try family.repository.commit(facts: [unscheduledFact], uploaded: true)
+        let unscheduledStore = try HouseholdStore(repository: family.repository,
+                                                   clock: { family.clock.now }, automaticSync: false)
+
+        let historicalOnly = try XCTUnwrap(unscheduledStore.dailyList().first { $0.id == id })
+        XCTAssertNil(historicalOnly.turnOwner)
+        XCTAssertTrue(historicalOnly.eligibleMembers.isEmpty)
+        XCTAssertTrue(historicalOnly.requiredMembers.isEmpty)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: historicalOnly.historicalContributions.map {
+            ($0.member.id, $0.state)
+        }), [family.hanna.id: .done, nora.id: .notNeeded])
+        XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: family.hanna).isEmpty)
+        XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: nora).isEmpty)
+    }
+
     func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
