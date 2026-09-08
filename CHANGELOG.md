@@ -12,7 +12,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ### Development
 
-- Pull requests and manual dispatches now build the app and run a curated deterministic unit and service suite on the stable macOS 26, Xcode 26.6, and iOS 26.5 Simulator toolchain without signing.
+- Manual CI dispatches build the app and run a curated deterministic unit and service suite on the stable macOS 26, Xcode 26.6, and iOS 26.5 Simulator toolchain without signing.
 
 ### Weekly allowance
 
