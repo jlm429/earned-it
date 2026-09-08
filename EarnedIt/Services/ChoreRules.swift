@@ -118,13 +118,7 @@ enum ChoreRules {
                                           calendar: Calendar) -> ResolvedOccurrence {
         var owner: FamilyMember?
         if revision.mode == .alternating, !scheduledMembers.isEmpty {
-            let activeByID = Dictionary(uniqueKeysWithValues: scheduledMembers.map { ($0.id, $0) })
-            let participants = revision.memberIDs.compactMap { activeByID[$0] }
-            if !participants.isEmpty {
-                let index = alternatingOccurrenceIndex(choreID: choreID, before: day,
-                                                       snapshot: snapshot, calendar: calendar)
-                owner = participants[index % participants.count]
-            }
+            owner = alternatingOwner(choreID: choreID, on: day, snapshot: snapshot, calendar: calendar)
         }
         func isActive(_ contribution: DatedCompletion) -> Bool {
             guard contribution.revisionID == revision.id else { return false }
@@ -167,32 +161,49 @@ enum ChoreRules {
                                   displacedHistoricalContributions: historical)
     }
 
-    /// Counts scheduled alternating dates before this date. Edits do not reset the sequence.
-    private static func alternatingOccurrenceIndex(choreID: UUID, before day: CivilDay,
-                                                   snapshot: HouseholdSnapshot, calendar: Calendar) -> Int {
+    private static func alternatingOwner(choreID: UUID, on day: CivilDay,
+                                         snapshot: HouseholdSnapshot, calendar: Calendar) -> FamilyMember? {
         var revisionsByDay: [CivilDay: ChoreRevision] = [:]
-        for revision in snapshot.revisions where revision.choreID == choreID && revision.effectiveDay < day {
+        for revision in snapshot.revisions where revision.choreID == choreID && revision.effectiveDay <= day {
             revisionsByDay[revision.effectiveDay] = revision
         }
         let timeline = revisionsByDay.values.sorted { $0.effectiveDay < $1.effectiveDay }
-        return timeline.enumerated().reduce(into: 0) { count, entry in
+        var priorOwnerID: UUID?
+        var ownerID: UUID?
+        for entry in timeline.enumerated() {
             let (index, revision) = entry
-            guard revision.mode == .alternating, !revision.isArchived else { return }
-            let end = min(timeline.indices.contains(index + 1) ? timeline[index + 1].effectiveDay : day, day)
-            count += occurrenceCount(weekday: revision.weekday, from: revision.effectiveDay,
-                                     before: end, calendar: calendar)
+            guard revision.mode == .alternating, !revision.isArchived else { continue }
+            let end = timeline.indices.contains(index + 1)
+                ? min(timeline[index + 1].effectiveDay, day.adding(days: 1, calendar: calendar))
+                : day.adding(days: 1, calendar: calendar)
+            let startDate = revision.effectiveDay.date(in: calendar)
+            let weekday = calendar.component(.weekday, from: startDate)
+            let offset = (revision.weekday.rawValue - weekday + 7) % 7
+            var occurrence = revision.effectiveDay.adding(days: offset, calendar: calendar)
+            while occurrence < end {
+                let eligibleIDs = Set(snapshot.members.filter {
+                    $0.role == .child && $0.isActive(on: occurrence) && revision.memberIDs.contains($0.id)
+                }.map(\.id))
+                if let nextOwnerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
+                                               eligibleIDs: eligibleIDs) {
+                    priorOwnerID = nextOwnerID
+                    if occurrence == day { ownerID = nextOwnerID }
+                }
+                occurrence = occurrence.adding(days: 7, calendar: calendar)
+            }
         }
+        return ownerID.flatMap { snapshot.member($0) }
     }
 
-    private static func occurrenceCount(weekday: Weekday, from start: CivilDay,
-                                        before end: CivilDay, calendar: Calendar) -> Int {
-        guard start < end else { return 0 }
-        let startDate = start.date(in: calendar)
-        let currentWeekday = calendar.component(.weekday, from: startDate)
-        let offset = (weekday.rawValue - currentWeekday + 7) % 7
-        guard let first = calendar.date(byAdding: .day, value: offset, to: startDate),
-              first < end.date(in: calendar) else { return 0 }
-        let days = calendar.dateComponents([.day], from: first, to: end.date(in: calendar)).day ?? 0
-        return (days + 6) / 7
+    private static func nextOwner(after priorOwnerID: UUID?, participants: [UUID],
+                                  eligibleIDs: Set<UUID>) -> UUID? {
+        guard !participants.isEmpty, !eligibleIDs.isEmpty else { return nil }
+        let priorIndex = priorOwnerID.flatMap { participants.firstIndex(of: $0) }
+        let start = priorIndex.map { ($0 + 1) % participants.count } ?? 0
+        for offset in participants.indices {
+            let candidate = participants[(start + offset) % participants.count]
+            if eligibleIDs.contains(candidate) { return candidate }
+        }
+        return nil
     }
 }

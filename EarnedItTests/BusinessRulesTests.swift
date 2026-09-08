@@ -541,17 +541,20 @@ final class BusinessRulesTests: XCTestCase {
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
         let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id, nora.id])
         let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
-        let archivedID = revision.memberIDs[1]
+        let archivedID = revision.memberIDs[0]
         try family.store.archiveMember(archivedID)
         let zara = try family.store.saveMember(name: "Zara", role: .child, avatar: .fox)
 
         let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
         let thirdMonday = ISO8601DateFormatter().date(from: "2026-09-21T16:00:00Z")!
+        let fourthMonday = ISO8601DateFormatter().date(from: "2026-09-28T16:00:00Z")!
         let remainingOrder = revision.memberIDs.filter { $0 != archivedID }
         let second = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
         let third = try XCTUnwrap(family.store.dailyList(on: thirdMonday).first)
-        XCTAssertEqual(second.turnOwner?.id, remainingOrder[1])
-        XCTAssertEqual(third.turnOwner?.id, remainingOrder[0])
+        let fourth = try XCTUnwrap(family.store.dailyList(on: fourthMonday).first)
+        XCTAssertEqual(second.turnOwner?.id, remainingOrder[0])
+        XCTAssertEqual(third.turnOwner?.id, remainingOrder[1])
+        XCTAssertEqual(fourth.turnOwner?.id, remainingOrder[0])
         XCTAssertFalse(second.eligibleMembers.contains { $0.id == archivedID || $0.id == zara.id })
         XCTAssertThrowsError(try family.store.setCompletion(choreID: id, memberID: archivedID,
                                                             date: nextMonday, state: .done))
