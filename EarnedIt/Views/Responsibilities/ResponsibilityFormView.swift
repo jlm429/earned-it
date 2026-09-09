@@ -9,7 +9,7 @@ struct ResponsibilityFormView: View {
     @State private var title: String
     @State private var notes: String
     @State private var category: ResponsibilityCategory
-    @State private var mode: RequirementMode
+    @State private var selectedMode: RequirementMode?
     @State private var memberIDs: Set<UUID>
     @State private var errorMessage: String?
 
@@ -20,8 +20,32 @@ struct ResponsibilityFormView: View {
         _title = State(initialValue: existing?.title ?? "")
         _notes = State(initialValue: existing?.notes ?? "")
         _category = State(initialValue: existing?.category ?? .home)
-        _mode = State(initialValue: existing?.mode ?? .all)
+        let initialMode = existing?.mode ?? .all
+        _selectedMode = State(initialValue: RequirementMode.assignmentChoices.contains(initialMode) ? initialMode : nil)
         _memberIDs = State(initialValue: Set(existing?.memberIDs ?? []))
+    }
+
+    private var eligibleChildren: [FamilyMember] { store.eligibleChildren(choreID: choreID) }
+    private var eligibleIDs: Set<UUID> { Set(eligibleChildren.map(\.id)) }
+    private var selectedIDs: Set<UUID> { memberIDs.intersection(eligibleIDs) }
+    private var legacyConfiguration: ChoreRevision? {
+        guard selectedMode == nil else { return nil }
+        let assignmentDay = store.choreAssignmentDay(choreID: choreID)
+        let configuration = store.snapshot.configuration(choreID: choreID, on: assignmentDay) ?? existing
+        guard let configuration, !RequirementMode.assignmentChoices.contains(configuration.mode) else { return nil }
+        return configuration
+    }
+    private var selectedChildrenInTurnOrder: [FamilyMember] {
+        store.orderedEligibleChildren(choreID: choreID, selectedMemberIDs: selectedIDs)
+    }
+    private var canSaveAssignment: Bool {
+        guard let selectedMode else { return legacyConfiguration != nil }
+        switch selectedMode {
+        case .all: return !eligibleChildren.isEmpty
+        case .particular: return selectedIDs.count == 1
+        case .alternating, .multiple: return selectedIDs.count >= 2
+        case .anyOne: return !selectedIDs.isEmpty
+        }
     }
 
     var body: some View {
@@ -40,27 +64,39 @@ struct ResponsibilityFormView: View {
                     }
                 }
                 Section("Who is needed?") {
-                    Picker("Requirement", selection: $mode) {
-                        ForEach(RequirementMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    if let legacyConfiguration {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Current compatibility assignment").font(.subheadline.weight(.semibold))
+                            Text(legacyAssignmentSummary(legacyConfiguration)).font(.footnote)
+                            Text("Choose a requirement below to convert this assignment.").font(.footnote)
+                        }
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("legacy-assignment-context")
+                    }
+                    Picker("Requirement", selection: $selectedMode) {
+                        ForEach(RequirementMode.assignmentChoices) { mode in
+                            Text(mode.title).tag(Optional(mode))
+                        }
                     }.accessibilityIdentifier("chore-requirement")
-                    if mode == .all {
+                    if selectedMode == .all {
                         Text("Every child on this family’s list for that date completes it independently.")
-                    } else {
-                        ForEach(store.eligibleChildren(choreID: choreID)) { member in
+                    } else if let selectedMode {
+                        ForEach(eligibleChildren) { member in
                             Toggle(member.displayName, isOn: Binding(
                                 get: { memberIDs.contains(member.id) },
                                 set: {
                                     if $0 {
-                                        if mode == .particular { memberIDs = [member.id] } else { memberIDs.insert(member.id) }
+                                        if selectedMode == .particular { memberIDs = [member.id] } else { memberIDs.insert(member.id) }
                                     } else { memberIDs.remove(member.id) }
                                 }
                             ))
                             .accessibilityIdentifier("eligible-\(member.displayName.accessibilitySlug)")
                         }
                     }
-                    if mode == .anyOne {
-                        Text("Any eligible child can finish this chore. Only their own contribution earns credit; others receive no credit or penalty.")
-                            .font(.footnote).foregroundStyle(.secondary)
+                    if selectedMode == .alternating {
+                        Text(alternatingHelp)
+                            .font(.footnote).foregroundStyle(.primary.opacity(0.7))
+                            .accessibilityIdentifier("alternating-turn-order")
                     }
                 }
                 Section {
@@ -72,8 +108,10 @@ struct ResponsibilityFormView: View {
             }
             .navigationTitle(existing == nil ? "New Chore" : "Edit Chore")
             .navigationBarTitleDisplayMode(.inline)
-            .onChange(of: mode) { _, mode in
-                if mode == .particular { memberIDs = Set(memberIDs.prefix(1)) }
+            .onChange(of: selectedMode) { _, mode in
+                if mode == .particular {
+                    memberIDs = selectedChildrenInTurnOrder.first.map { Set([$0.id]) } ?? []
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -82,12 +120,15 @@ struct ResponsibilityFormView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         do {
+                            let assignment = try assignmentToSave()
                             try store.saveChore(choreID: choreID, weekday: weekday, title: title, notes: notes,
-                                                category: category, mode: mode, memberIDs: Array(memberIDs))
+                                                category: category, mode: assignment.mode,
+                                                memberIDs: assignment.memberIDs)
                             dismiss()
                         } catch { errorMessage = error.localizedDescription }
                     }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 80 || notes.count > 300)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || title.count > 80
+                              || notes.count > 300 || !canSaveAssignment)
                     .accessibilityIdentifier("save-responsibility")
                 }
             }
@@ -95,5 +136,23 @@ struct ResponsibilityFormView: View {
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
         }
+    }
+
+    private var alternatingHelp: String {
+        let names = selectedChildrenInTurnOrder.map(\.displayName)
+        if names.count < 2 { return "Choose at least two children. One child owns each date." }
+        return "Turn order: \(names.joined(separator: ", ")). It advances with each scheduled date, even when a turn is not completed."
+    }
+
+    private func assignmentToSave() throws -> (mode: RequirementMode, memberIDs: [UUID]) {
+        if let selectedMode { return (selectedMode, Array(selectedIDs)) }
+        guard let legacyConfiguration else { throw HouseholdError.invalidAssignment }
+        return (legacyConfiguration.mode, legacyConfiguration.memberIDs)
+    }
+
+    private func legacyAssignmentSummary(_ configuration: ChoreRevision) -> String {
+        let names = configuration.memberIDs.compactMap { store.snapshot.member($0)?.displayName }
+        return names.isEmpty ? configuration.mode.title
+            : "\(configuration.mode.title): \(names.joined(separator: ", "))"
     }
 }

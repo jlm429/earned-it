@@ -66,6 +66,17 @@ final class HouseholdStore {
         return snapshot.members.filter { $0.role == .child && snapshot.isActive($0, on: effective) }
     }
 
+    func orderedEligibleChildren(choreID: UUID, selectedMemberIDs: Set<UUID>) -> [FamilyMember] {
+        let eligible = eligibleChildren(choreID: choreID)
+        let byID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+        let effective = choreAssignmentDay(choreID: choreID)
+        let retained = snapshot.configuration(choreID: choreID, on: effective)?.memberIDs.compactMap {
+            selectedMemberIDs.contains($0) ? byID[$0] : nil
+        } ?? []
+        let retainedIDs = Set(retained.map(\.id))
+        return retained + eligible.filter { selectedMemberIDs.contains($0.id) && !retainedIDs.contains($0.id) }
+    }
+
     func weekFacts(for memberID: UUID, containing date: Date? = nil) -> [DayFacts] {
         MetricsService.weekFacts(childID: memberID, containing: date ?? today, snapshot: snapshot, today: today)
     }
@@ -199,18 +210,30 @@ final class HouseholdStore {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title.count <= 80, notes.count <= 300 else { throw HouseholdError.invalidAssignment }
         let effective = choreAssignmentDay(choreID: choreID)
-        let eligible = eligibleChildren(choreID: choreID).map(\.id)
+        let eligible = eligibleChildren(choreID: choreID)
+        let eligibleIDs = eligible.map(\.id)
         let ids = Set(memberIDs)
-        guard mode == .all || ids.isSubset(of: Set(eligible)) else { throw HouseholdError.invalidAssignment }
-        switch mode {
-        case .particular: guard ids.count == 1 else { throw HouseholdError.invalidAssignment }
-        case .multiple: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
-        case .anyOne: guard !ids.isEmpty else { throw HouseholdError.invalidAssignment }
-        case .all: guard !eligible.isEmpty else { throw HouseholdError.invalidAssignment }
+        let current = snapshot.configuration(choreID: choreID, on: effective)
+        let currentIsLegacy = current.map { !RequirementMode.assignmentChoices.contains($0.mode) } ?? false
+        let preservesLegacy = currentIsLegacy && current?.mode == mode && current?.memberIDs == memberIDs
+        if currentIsLegacy && !RequirementMode.assignmentChoices.contains(mode) && !preservesLegacy {
+            throw HouseholdError.invalidAssignment
         }
+        if !preservesLegacy {
+            guard mode == .all || ids.isSubset(of: Set(eligibleIDs)) else { throw HouseholdError.invalidAssignment }
+            switch mode {
+            case .particular: guard ids.count == 1 else { throw HouseholdError.invalidAssignment }
+            case .multiple: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
+            case .anyOne: guard !ids.isEmpty else { throw HouseholdError.invalidAssignment }
+            case .all: guard !eligibleIDs.isEmpty else { throw HouseholdError.invalidAssignment }
+            case .alternating: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
+            }
+        }
+        let orderedIDs = preservesLegacy ? memberIDs
+            : orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
         let revision = ChoreRevision(id: UUID(), householdID: household.id, choreID: choreID, weekday: weekday,
                                      effectiveDay: effective, title: title, notes: notes, category: category, mode: mode,
-                                     memberIDs: mode == .all ? [] : ids.sorted { $0.uuidString < $1.uuidString }, isArchived: false)
+                                     memberIDs: mode == .all ? [] : orderedIDs, isArchived: false)
         try append(.chore(revision))
         return choreID
     }

@@ -25,7 +25,7 @@ There is no SwiftData entity change. New allowance facts use the existing Codabl
 
 This journal had no configurable threshold fields to migrate. The earlier fixed scoring constants and obsolete copy have been replaced; retained outcomes now use the accepted all-required rule. See [Create or join a family](../README.md#create-or-join-a-family) for the participating-installation update requirement.
 
-The historical timezone and same-day reassignment backlog concerns are already addressed for the current journal by persisted `CivilDay` values and next-day configuration/archive boundaries. Tests cover those behaviors and their weekly projections. This task does not migrate the incompatible beta store or expand unrelated assignment editing scope. The previously documented hidden archived-selection issue in the chore editor remains separate.
+The historical timezone and same-day reassignment backlog concerns are already addressed for the current journal by persisted `CivilDay` values and next-day configuration/archive boundaries. Tests cover those behaviors and their weekly projections. This task does not migrate the incompatible beta store or expand unrelated assignment editing scope.
 
 ## Verification
 

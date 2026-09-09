@@ -14,7 +14,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .invalidName: "Use a name with 1 to 50 characters."
         case .duplicateName: "A member with that name and role already exists."
         case .missingChildren: "Add at least one child to finish setup."
-        case .invalidAssignment: "Choose one child, at least two specific children, or an eligible group for this chore."
+        case .invalidAssignment: "Choose one child, at least two children to take turns, or an eligible group for this chore."
         case .unavailableDay: "This change is not available for that day."
         case .noHousehold: "Create a family or accept an existing family invitation first."
         case .alreadyHasHousehold: "This installation already has a family. Disconnect in Settings before joining another."

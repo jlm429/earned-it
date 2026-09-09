@@ -11,7 +11,7 @@ struct ResponsibilityRow: View {
                 ChoreFlowLayout {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(chore.configuration.title).font(.headline)
-                        Text(completionLabel).font(.caption).foregroundStyle(.primary.opacity(0.7))
+                        Text(statusLabel).font(.caption).foregroundStyle(.primary.opacity(0.7))
                             .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
                     }
                     .frame(minHeight: 44, alignment: .leading)
@@ -24,6 +24,15 @@ struct ResponsibilityRow: View {
                 }
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.primary.opacity(0.7))
+                }
+                if actor.role == .parent && !chore.historicalContributions.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Earlier assignment history").font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary.opacity(0.7))
+                        ForEach(chore.historicalContributions) { contribution in
+                            historicalContributionLabel(contribution)
+                        }
+                    }
                 }
             }
         }
@@ -38,6 +47,11 @@ struct ResponsibilityRow: View {
             return chore.requiredMembers.isEmpty ? "Any one: \(status)" : status
         }
         return chore.requiredMembers.isEmpty ? "Any one child needed" : "\(chore.remainingMembers.count) still needed"
+    }
+
+    private var statusLabel: String {
+        guard let turn = chore.turnLabel(for: actor) else { return completionLabel }
+        return chore.turnOwner == nil ? turn : "\(turn) · \(completionLabel)"
     }
 
     @ViewBuilder
@@ -86,6 +100,20 @@ struct ResponsibilityRow: View {
         .background(state.isAccountedFor ? state.tint.opacity(0.12) : Color(uiColor: .tertiarySystemFill),
                     in: RoundedRectangle(cornerRadius: 12))
         .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func historicalContributionLabel(_ contribution: HistoricalContribution) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: contribution.state.symbolName)
+                .foregroundStyle(contribution.state.tint)
+                .accessibilityHidden(true)
+            Text("\(contribution.member.displayName): \(contribution.state.rawValue)").font(.caption)
+        }
+        .foregroundStyle(.primary.opacity(0.7))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(contribution.member.displayName), earlier assignment, \(contribution.state.rawValue)")
+        .accessibilityValue("View only")
+        .accessibilityIdentifier("history-\(chore.configuration.title.accessibilitySlug)-\(contribution.member.displayName.accessibilitySlug)")
     }
 
     @ViewBuilder

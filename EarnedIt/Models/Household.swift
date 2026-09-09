@@ -101,7 +101,10 @@ struct FamilyMember: Codable, Equatable, Identifiable {
 }
 
 enum RequirementMode: String, Codable, CaseIterable, Identifiable {
-    case particular, anyOne, multiple, all
+    case particular, anyOne, multiple, all, alternating
+
+    static let assignmentChoices: [Self] = [.all, .particular, .alternating]
+
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -109,6 +112,7 @@ enum RequirementMode: String, Codable, CaseIterable, Identifiable {
         case .anyOne: "Any one eligible child"
         case .multiple: "Specific children"
         case .all: "All children"
+        case .alternating: "Alternate / take turns"
         }
     }
 }

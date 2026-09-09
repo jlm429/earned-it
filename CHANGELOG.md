@@ -4,6 +4,16 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ## Unreleased
 
+### Alternating chores
+
+- Parents can assign a chore to all children, one child, or selected children who alternate turns. Turn order is shown while editing and advances on scheduled dates regardless of completion.
+- Children see an alternating chore only when it is theirs, with concise turn copy and the existing compact completion state. Parent daily lists identify the current owner.
+- Future turns exclude archived or inactive participants. Existing all-child and single-child behavior is unchanged. Older any-one and multiple-child chores continue to load without migration and retain their assignment during unrelated edits unless a parent deliberately converts them.
+
+### Development
+
+- Manual CI dispatches build the app and run a curated deterministic unit and service suite on the stable macOS 26, Xcode 26.6, and iOS 26.5 Simulator toolchain without signing.
+
 ### Weekly allowance
 
 - Parents can set and edit each child’s weekly amount and currency, including fractional amounts or an unset amount. Finished weeks preserve the rate that applied to them. This tracks eligibility, never payments or transfers.
@@ -17,6 +27,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 - iPhone builds and App Store archives now include the production app icon.
 - New children immediately join existing all-children chores that apply today. Particular-child assignments, future chore starts, earlier history, and other children’s completions are preserved across reload and sync.
 - Daily chore cards now show compact, wrapping child controls with individual status symbols and colors. Tap once to complete or undo your permitted entries; touch and hold for other states. Names stay readable with Dynamic Type, controls have at least 44-point touch targets, and supporting daily text has stronger contrast.
+- Conflicting or superseded dated assignments remain visible to parents as view-only history without assigning, scoring, or granting controls to the displaced child. Archived hidden selections no longer block saving older any-one or multiple-child chore edits.
 
 - An approved local parent can disconnect an installation after its iCloud share becomes read-only or access is revoked. Disconnect still requires confirmation, blocks ordinary pending changes and active synchronization, preserves rejected-change evidence, and leaves iCloud and other installations untouched.
 - Chore assignment choices now match the date used when saving. New chores use today's children; edits use tomorrow's children. A child joining tomorrow can be selected for an edit, while a child archived from tomorrow remains eligible for a new chore today.
@@ -30,10 +41,6 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 - Household timezone dates, retained assignment history, next-day configuration edits and archives, and protection against conflicting edits leaving no active parent.
 - Offline changes remain available for synchronization. Rejected changes retain their reasons and evidence; dependent uploads wait for confirmed prerequisite saves.
 - Existing beta stores remain untouched. Production does not seed sample families.
-
-### Known limitation
-
-Editing an existing any-one or multiple-child chore after archiving one of its selected children can retain a hidden selection and fail validation. This preexisting edge case remains open.
 
 ### Sharing and validation limits
 

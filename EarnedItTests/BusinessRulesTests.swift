@@ -73,7 +73,9 @@ final class BusinessRulesTests: XCTestCase {
 
     func testChoreAssignmentChoicesAndSaveShareCreationAndEditDates() throws {
         let family = try TestFamily()
+        XCTAssertEqual(RequirementMode.assignmentChoices, [.all, .particular, .alternating])
         let existing = try family.chore()
+        let legacy = try family.chore(.anyOne, ids: [family.hanna.id, family.alek.id])
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
         try family.store.archiveMember(family.alek.id)
         let newID = UUID()
@@ -98,12 +100,485 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertEqual(edited.memberIDs, [nora.id])
         XCTAssertEqual(family.store.snapshot.configuration(choreID: existing, on: family.store.day)?.mode, .all)
 
+        let legacyOriginal = try XCTUnwrap(family.store.snapshot.configuration(choreID: legacy, on: family.store.day))
+        try family.store.saveChore(choreID: legacy, weekday: .monday, title: "Preserved legacy assignment",
+                                   mode: legacyOriginal.mode, memberIDs: legacyOriginal.memberIDs)
+        let preserved = try XCTUnwrap(family.store.snapshot.configuration(choreID: legacy, on: family.store.tomorrow))
+        XCTAssertEqual(preserved.mode, .anyOne)
+        XCTAssertEqual(preserved.memberIDs, legacyOriginal.memberIDs)
+        XCTAssertThrowsError(try family.store.saveChore(choreID: legacy, weekday: .monday, title: "Changed legacy",
+                                                        mode: .anyOne, memberIDs: [family.hanna.id]))
+        try family.store.saveChore(choreID: legacy, weekday: .monday, title: "Converted assignment",
+                                   mode: .particular, memberIDs: [family.hanna.id])
+        let converted = try XCTUnwrap(family.store.snapshot.configuration(choreID: legacy, on: family.store.tomorrow))
+        XCTAssertEqual(converted.mode, .particular)
+        XCTAssertEqual(converted.memberIDs, [family.hanna.id])
+
         family.move(to: "2026-09-08T16:00:00Z")
         let nextNewID = UUID()
         XCTAssertEqual(Set(family.store.eligibleChildren(choreID: nextNewID).map(\.id)), [family.hanna.id, nora.id])
         try family.store.saveChore(choreID: nextNewID, weekday: .tuesday, title: "Today now includes Nora",
                                    mode: .particular, memberIDs: [nora.id])
         XCTAssertEqual(family.store.dailyList().first?.eligibleMembers.map(\.id), [nora.id])
+    }
+
+    func testSyncedTurnOrderMatchesDisplayedAndSavedOrder() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let effectiveDay = family.store.tomorrow
+        let syncedOrder = Array(original.memberIDs.reversed())
+        let syncedRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: original.weekday, effectiveDay: effectiveDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .alternating,
+                                           memberIDs: syncedOrder, isArchived: false)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let syncedFact = HouseholdFact(id: UUID(), householdID: original.householdID, sequence: sequence + 1,
+                                       authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                       body: .chore(syncedRevision))
+        try family.repository.commit(facts: [syncedFact], uploaded: true)
+        let syncedStore = try HouseholdStore(repository: family.repository,
+                                              clock: { family.clock.now }, automaticSync: false)
+        let selectedIDs = Set(original.memberIDs)
+        let displayedOrder = syncedStore.orderedEligibleChildren(choreID: id,
+                                                                 selectedMemberIDs: selectedIDs).map(\.id)
+
+        XCTAssertEqual(displayedOrder, syncedOrder)
+        try syncedStore.saveChore(choreID: id, weekday: original.weekday, title: "Synced turn order",
+                                  mode: .alternating, memberIDs: Array(selectedIDs))
+        let saved = try XCTUnwrap(syncedStore.snapshot.configuration(choreID: id, on: effectiveDay))
+        XCTAssertEqual(saved.memberIDs, displayedOrder)
+    }
+
+    func testAlternatingOwnerAdvancesWrapsAndDoesNotFollowCompletion() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let turnOrder = revision.memberIDs
+
+        let first = try XCTUnwrap(family.store.dailyList().first)
+        let firstOwner = try XCTUnwrap(first.turnOwner)
+        XCTAssertEqual(first.turnOwner?.id, turnOrder[0])
+        XCTAssertEqual(first.requiredMembers.map(\.id), [turnOrder[0]])
+        XCTAssertEqual(first.turnLabel(for: family.parent), "\(firstOwner.displayName)’s turn")
+        let otherChild = firstOwner.id == family.hanna.id ? family.alek : family.hanna
+        XCTAssertEqual(first.turnLabel(for: firstOwner), "Your turn")
+        XCTAssertEqual(ChoreRules.visibleList([first], to: firstOwner).map(\.id), [id])
+        XCTAssertTrue(ChoreRules.visibleList([first], to: otherChild).isEmpty)
+
+        try family.complete(id, as: firstOwner)
+        let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        let thirdMonday = ISO8601DateFormatter().date(from: "2026-09-21T16:00:00Z")!
+        let second = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
+        let third = try XCTUnwrap(family.store.dailyList(on: thirdMonday).first)
+        XCTAssertEqual(second.turnOwner?.id, turnOrder[1])
+        XCTAssertEqual(second.state(for: turnOrder[1]), .unmarked)
+        XCTAssertEqual(third.turnOwner?.id, turnOrder[0])
+        XCTAssertEqual(family.store.snapshot.completions.count, 1)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.dailyList(on: nextMonday).first?.turnOwner?.id, turnOrder[1])
+        XCTAssertEqual(reopened.dailyList(on: thirdMonday).first?.turnOwner?.id, turnOrder[0])
+    }
+
+    func testAlternatingRotationSurvivesUnrelatedRevisionEdits() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+
+        try family.store.saveChore(choreID: id, weekday: .monday, title: "Water the plants", notes: "Use the blue cup",
+                                   category: .personal, mode: .alternating, memberIDs: original.memberIDs)
+
+        let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        let next = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
+        XCTAssertEqual(next.configuration.title, "Water the plants")
+        XCTAssertEqual(next.configuration.memberIDs, original.memberIDs)
+        XCTAssertEqual(next.turnOwner?.id, original.memberIDs[1])
+    }
+
+    func testWinningAlternatingRevisionKeepsDisplacedContributionAsHistoryOnly() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id], weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let firstRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                          weekday: .tuesday, effectiveDay: occurrenceDay, title: original.title,
+                                          notes: original.notes, category: original.category, mode: .alternating,
+                                          memberIDs: [family.hanna.id, family.alek.id], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay, title: original.title,
+                                            notes: original.notes, category: original.category, mode: .alternating,
+                                            memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let displacedContribution = DatedCompletion(choreID: id, revisionID: firstRevision.id,
+                                                     memberID: family.hanna.id, day: occurrenceDay, state: .done,
+                                                     eligibleMemberIDs: [family.hanna.id], mode: .alternating,
+                                                     recordedByMemberID: family.hanna.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(firstRevision), .completion(displacedContribution),
+                                           .chore(winningRevision)]
+        let imported = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID, sequence: sequence + Int64(index) + 1,
+                          authorDeviceID: UUID(), authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: imported, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.turnOwner?.id, family.alek.id)
+        XCTAssertEqual(chore.eligibleMembers.map(\.id), [family.alek.id])
+        XCTAssertEqual(chore.requiredMembers.map(\.id), [family.alek.id])
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(revisionID: firstRevision.id, member: family.hanna, state: .done)])
+        XCTAssertEqual(chore.state(for: family.hanna.id), .unmarked)
+        XCTAssertTrue(ChoreRules.visibleList([chore], to: family.hanna).isEmpty)
+        try reopened.selectProfile(family.hanna.id)
+        XCTAssertThrowsError(try reopened.setCompletion(choreID: id, memberID: family.hanna.id,
+                                                        date: family.clock.now, state: .notNeeded))
+
+        let rescheduledRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                                weekday: .wednesday, effectiveDay: occurrenceDay,
+                                                title: original.title, notes: original.notes,
+                                                category: original.category, mode: .alternating,
+                                                memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let rescheduledFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                            sequence: sequence + Int64(bodies.count) + 1,
+                                            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                            body: .chore(rescheduledRevision))
+        try family.repository.commit(facts: [rescheduledFact], uploaded: true)
+        let rescheduledStore = try HouseholdStore(repository: family.repository,
+                                                   clock: { family.clock.now }, automaticSync: false)
+        let historicalOnly = try XCTUnwrap(rescheduledStore.dailyList().first { $0.id == id })
+        XCTAssertEqual(historicalOnly.configuration.id, rescheduledRevision.id)
+        XCTAssertNil(historicalOnly.turnOwner)
+        XCTAssertTrue(historicalOnly.eligibleMembers.isEmpty)
+        XCTAssertTrue(historicalOnly.requiredMembers.isEmpty)
+        XCTAssertEqual(historicalOnly.historicalContributions,
+                       [HistoricalContribution(revisionID: firstRevision.id, member: family.hanna, state: .done)])
+        XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: family.hanna).isEmpty)
+        try rescheduledStore.selectProfile(family.hanna.id)
+        XCTAssertThrowsError(try rescheduledStore.setCompletion(choreID: id, memberID: family.hanna.id,
+                                                                date: family.clock.now, state: .notNeeded))
+
+        let allRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                        weekday: .tuesday, effectiveDay: occurrenceDay,
+                                        title: original.title, notes: original.notes,
+                                        category: original.category, mode: .all,
+                                        memberIDs: [], isArchived: false)
+        let allFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                    sequence: sequence + Int64(bodies.count) + 2,
+                                    authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                    body: .chore(allRevision))
+        try family.repository.commit(facts: [allFact], uploaded: true)
+        let allStore = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+        let allChore = try XCTUnwrap(allStore.dailyList().first { $0.id == id })
+        XCTAssertEqual(allChore.configuration.id, allRevision.id)
+        XCTAssertEqual(Set(allChore.eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertEqual(Set(allChore.requiredMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertTrue(allChore.contributions.isEmpty)
+        XCTAssertEqual(allChore.historicalContributions,
+                       [HistoricalContribution(revisionID: firstRevision.id, member: family.hanna, state: .done)])
+        XCTAssertEqual(allChore.state(for: family.hanna.id), .unmarked)
+        XCTAssertFalse(allChore.isFullyComplete)
+    }
+
+    func testMembershipConvergenceMovesSameRevisionCompletionToHistory() throws {
+        let family = try TestFamily()
+        _ = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let id = try family.chore(.alternating,
+                                  ids: family.store.eligibleChildren(choreID: UUID()).map(\.id),
+                                  weekday: .tuesday)
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let originalOwner = try XCTUnwrap(family.store.snapshot.member(revision.memberIDs[0]))
+        let completion = DatedCompletion(choreID: id, revisionID: revision.id,
+                                         memberID: originalOwner.id, day: occurrenceDay, state: .done,
+                                         eligibleMemberIDs: [originalOwner.id], mode: .alternating,
+                                         recordedByMemberID: originalOwner.id)
+        var archivedOwner = originalOwner
+        archivedOwner.archivedFrom = occurrenceDay
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: revision.householdID).map(\.sequence).max())
+        let convergedFacts = [HouseholdFact(id: UUID(), householdID: revision.householdID,
+                                           sequence: sequence + 1, authorDeviceID: UUID(),
+                                           authorMemberID: originalOwner.id, body: .completion(completion)),
+                              HouseholdFact(id: UUID(), householdID: revision.householdID,
+                                           sequence: sequence + 2, authorDeviceID: UUID(),
+                                           authorMemberID: family.parent.id, body: .member(archivedOwner))]
+        try family.repository.commit(facts: convergedFacts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let convergedStore = try HouseholdStore(repository: family.repository,
+                                                clock: { family.clock.now }, automaticSync: false)
+
+        let chore = try XCTUnwrap(convergedStore.dailyList().first { $0.id == id })
+        XCTAssertNotEqual(chore.turnOwner?.id, originalOwner.id)
+        XCTAssertFalse(chore.eligibleMembers.contains { $0.id == originalOwner.id })
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(revisionID: revision.id, member: archivedOwner, state: .done)])
+        XCTAssertFalse(PermissionService.canSetState(actor: originalOwner, target: originalOwner.id,
+                                                     chore: chore, state: .done))
+    }
+
+    func testLosingSameMemberFactDoesNotShadowWinningCompletion() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.alternating, ids: [family.alek.id, family.hanna.id], weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let losingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: .tuesday, effectiveDay: occurrenceDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .alternating,
+                                           memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay,
+                                            title: original.title, notes: original.notes,
+                                            category: original.category, mode: .alternating,
+                                            memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let winningCompletion = DatedCompletion(choreID: id, revisionID: winningRevision.id,
+                                                memberID: family.alek.id, day: occurrenceDay, state: .done,
+                                                eligibleMemberIDs: [family.alek.id], mode: .alternating,
+                                                recordedByMemberID: family.alek.id)
+        let shadowingCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                                  memberID: family.alek.id, day: occurrenceDay,
+                                                  state: .notNeeded, eligibleMemberIDs: [family.alek.id],
+                                                  mode: .alternating, recordedByMemberID: family.alek.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(losingRevision), .chore(winningRevision),
+                                           .completion(winningCompletion), .completion(shadowingCompletion)]
+        let facts = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID,
+                          sequence: sequence + Int64(index) + 1, authorDeviceID: UUID(),
+                          authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: facts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        XCTAssertEqual(reopened.snapshot.completions, [shadowingCompletion])
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.turnOwner?.id, family.alek.id)
+        XCTAssertEqual(chore.contributions, [winningCompletion])
+        XCTAssertEqual(chore.state(for: family.alek.id), .done)
+        XCTAssertEqual(chore.creditState(for: family.alek.id), .done)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(revisionID: losingRevision.id,
+                                               member: family.alek, state: .notNeeded)])
+    }
+
+    func testLosingAlternatingFactDoesNotShadowAllChildCompletion() throws {
+        let family = try TestFamily()
+        let id = try family.chore(.all, weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let losingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: .tuesday, effectiveDay: occurrenceDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .alternating,
+                                           memberIDs: [family.alek.id, family.hanna.id], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay,
+                                            title: original.title, notes: original.notes,
+                                            category: original.category, mode: .all,
+                                            memberIDs: [], isArchived: false)
+        let winningCompletion = DatedCompletion(choreID: id, revisionID: winningRevision.id,
+                                                memberID: family.alek.id, day: occurrenceDay, state: .done,
+                                                eligibleMemberIDs: [family.alek.id, family.hanna.id], mode: .all,
+                                                recordedByMemberID: family.alek.id)
+        let shadowingCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                                  memberID: family.alek.id, day: occurrenceDay,
+                                                  state: .notNeeded, eligibleMemberIDs: [family.alek.id],
+                                                  mode: .alternating, recordedByMemberID: family.alek.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(losingRevision), .chore(winningRevision),
+                                           .completion(winningCompletion), .completion(shadowingCompletion)]
+        let facts = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID,
+                          sequence: sequence + Int64(index) + 1, authorDeviceID: UUID(),
+                          authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: facts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        XCTAssertEqual(reopened.snapshot.completions, [shadowingCompletion])
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.contributions, [winningCompletion])
+        XCTAssertEqual(chore.state(for: family.alek.id), .done)
+        XCTAssertEqual(chore.creditState(for: family.alek.id), .done)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(revisionID: losingRevision.id,
+                                               member: family.alek, state: .notNeeded)])
+
+        let particularRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                                weekday: .tuesday, effectiveDay: occurrenceDay,
+                                                title: original.title, notes: original.notes,
+                                                category: original.category, mode: .particular,
+                                                memberIDs: [family.hanna.id], isArchived: false)
+        let particularFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                           sequence: sequence + Int64(bodies.count) + 1,
+                                           authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                           body: .chore(particularRevision))
+        try family.repository.commit(facts: [particularFact], uploaded: true)
+        let particularStore = try HouseholdStore(repository: family.repository,
+                                                  clock: { family.clock.now }, automaticSync: false)
+        let particularChore = try XCTUnwrap(particularStore.dailyList().first { $0.id == id })
+        XCTAssertEqual(particularChore.configuration.id, particularRevision.id)
+        XCTAssertEqual(particularChore.eligibleMembers.map(\.id), [family.hanna.id])
+        XCTAssertEqual(particularChore.requiredMembers.map(\.id), [family.hanna.id])
+        XCTAssertTrue(particularChore.contributions.isEmpty)
+        XCTAssertEqual(particularChore.historicalContributions,
+                       [HistoricalContribution(revisionID: winningRevision.id,
+                                               member: family.alek, state: .done),
+                        HistoricalContribution(revisionID: losingRevision.id,
+                                               member: family.alek, state: .notNeeded)])
+        XCTAssertNil(particularChore.creditState(for: family.alek.id))
+        XCTAssertTrue(ChoreRules.visibleList([particularChore], to: family.alek).isEmpty)
+        XCTAssertFalse(PermissionService.canSetState(actor: family.alek, target: family.alek.id,
+                                                     chore: particularChore, state: .done))
+    }
+
+    func testAlternatingWinnerKeepsCrossModeFactsAsHistoryForThreeChildren() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let participants = [family.alek.id, family.hanna.id, nora.id]
+        let id = try family.chore(.all, weekday: .tuesday)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let occurrenceDay = CivilDay(rawValue: "2026-09-08")!
+        let losingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                           weekday: .tuesday, effectiveDay: occurrenceDay,
+                                           title: original.title, notes: original.notes,
+                                           category: original.category, mode: .all,
+                                           memberIDs: [], isArchived: false)
+        let secondLosingRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                                 weekday: .tuesday, effectiveDay: occurrenceDay,
+                                                 title: original.title, notes: original.notes,
+                                                 category: original.category, mode: .particular,
+                                                 memberIDs: [family.hanna.id], isArchived: false)
+        let winningRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                            weekday: .tuesday, effectiveDay: occurrenceDay,
+                                            title: original.title, notes: original.notes,
+                                            category: original.category, mode: .alternating,
+                                            memberIDs: participants, isArchived: false)
+        let hannaCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                              memberID: family.hanna.id, day: occurrenceDay, state: .done,
+                                              eligibleMemberIDs: participants, mode: .all,
+                                              recordedByMemberID: family.hanna.id)
+        let noraCompletion = DatedCompletion(choreID: id, revisionID: losingRevision.id,
+                                             memberID: nora.id, day: occurrenceDay, state: .notNeeded,
+                                             eligibleMemberIDs: participants, mode: .all,
+                                             recordedByMemberID: nora.id)
+        let secondHannaCompletion = DatedCompletion(choreID: id, revisionID: secondLosingRevision.id,
+                                                    memberID: family.hanna.id, day: occurrenceDay,
+                                                    state: .notNeeded, eligibleMemberIDs: [family.hanna.id],
+                                                    mode: .particular, recordedByMemberID: family.hanna.id)
+        let sequence = try XCTUnwrap(family.repository.facts(householdID: original.householdID).map(\.sequence).max())
+        let bodies: [HouseholdFactBody] = [.chore(losingRevision), .completion(hannaCompletion),
+                                           .completion(noraCompletion), .chore(secondLosingRevision),
+                                           .completion(secondHannaCompletion), .chore(winningRevision)]
+        let facts = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: original.householdID,
+                          sequence: sequence + Int64(index) + 1, authorDeviceID: UUID(),
+                          authorMemberID: family.parent.id, body: body)
+        }
+        try family.repository.commit(facts: facts, uploaded: true)
+        family.clock.set("2026-09-08T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        let chore = try XCTUnwrap(reopened.dailyList().first { $0.id == id })
+        XCTAssertEqual(chore.configuration.id, winningRevision.id)
+        XCTAssertEqual(chore.turnOwner?.id, participants[0])
+        XCTAssertEqual(chore.eligibleMembers.map(\.id), [participants[0]])
+        XCTAssertEqual(chore.requiredMembers.map(\.id), [participants[0]])
+        XCTAssertTrue(chore.contributions.isEmpty)
+        XCTAssertEqual(chore.historicalContributions,
+                       [HistoricalContribution(revisionID: losingRevision.id,
+                                               member: family.hanna, state: .done),
+                        HistoricalContribution(revisionID: losingRevision.id,
+                                               member: nora, state: .notNeeded),
+                        HistoricalContribution(revisionID: secondLosingRevision.id,
+                                               member: family.hanna, state: .notNeeded)])
+        XCTAssertTrue(ChoreRules.visibleList([chore], to: family.hanna).isEmpty)
+        XCTAssertTrue(ChoreRules.visibleList([chore], to: nora).isEmpty)
+
+        let unscheduledRevision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: id,
+                                                weekday: .wednesday, effectiveDay: occurrenceDay,
+                                                title: original.title, notes: original.notes,
+                                                category: original.category, mode: .alternating,
+                                                memberIDs: participants, isArchived: false)
+        let unscheduledFact = HouseholdFact(id: UUID(), householdID: original.householdID,
+                                            sequence: sequence + Int64(bodies.count) + 1,
+                                            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                                            body: .chore(unscheduledRevision))
+        try family.repository.commit(facts: [unscheduledFact], uploaded: true)
+        let unscheduledStore = try HouseholdStore(repository: family.repository,
+                                                   clock: { family.clock.now }, automaticSync: false)
+
+        let historicalOnly = try XCTUnwrap(unscheduledStore.dailyList().first { $0.id == id })
+        XCTAssertNil(historicalOnly.turnOwner)
+        XCTAssertTrue(historicalOnly.eligibleMembers.isEmpty)
+        XCTAssertTrue(historicalOnly.requiredMembers.isEmpty)
+        XCTAssertEqual(historicalOnly.historicalContributions,
+                       [HistoricalContribution(revisionID: losingRevision.id,
+                                               member: family.hanna, state: .done),
+                        HistoricalContribution(revisionID: losingRevision.id,
+                                               member: nora, state: .notNeeded),
+                        HistoricalContribution(revisionID: secondLosingRevision.id,
+                                               member: family.hanna, state: .notNeeded)])
+        XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: family.hanna).isEmpty)
+        XCTAssertTrue(ChoreRules.visibleList([historicalOnly], to: nora).isEmpty)
+    }
+
+    func testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let id = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id, nora.id])
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: id, on: family.store.day))
+        let archivedID = revision.memberIDs[0]
+        try family.store.archiveMember(archivedID)
+        let zara = try family.store.saveMember(name: "Zara", role: .child, avatar: .fox)
+
+        let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        let thirdMonday = ISO8601DateFormatter().date(from: "2026-09-21T16:00:00Z")!
+        let fourthMonday = ISO8601DateFormatter().date(from: "2026-09-28T16:00:00Z")!
+        let remainingOrder = revision.memberIDs.filter { $0 != archivedID }
+        let second = try XCTUnwrap(family.store.dailyList(on: nextMonday).first)
+        let third = try XCTUnwrap(family.store.dailyList(on: thirdMonday).first)
+        let fourth = try XCTUnwrap(family.store.dailyList(on: fourthMonday).first)
+        XCTAssertEqual(second.turnOwner?.id, remainingOrder[0])
+        XCTAssertEqual(third.turnOwner?.id, remainingOrder[1])
+        XCTAssertEqual(fourth.turnOwner?.id, remainingOrder[0])
+        XCTAssertFalse(second.eligibleMembers.contains { $0.id == archivedID || $0.id == zara.id })
+        XCTAssertThrowsError(try family.store.setCompletion(choreID: id, memberID: archivedID,
+                                                            date: nextMonday, state: .done))
+    }
+
+    func testExistingRequirementModePayloadsRemainDecodable() throws {
+        for rawMode in ["all", "particular", "anyOne", "multiple"] {
+            let payload = """
+            {
+              "id":"00000000-0000-0000-0000-000000000001",
+              "householdID":"00000000-0000-0000-0000-000000000002",
+              "choreID":"00000000-0000-0000-0000-000000000003",
+              "weekday":2,
+              "effectiveDay":"2026-09-07",
+              "title":"Legacy chore",
+              "notes":"",
+              "category":"Home",
+              "mode":"\(rawMode)",
+              "memberIDs":[],
+              "isArchived":false
+            }
+            """
+            XCTAssertEqual(try JSONDecoder().decode(ChoreRevision.self, from: Data(payload.utf8)).mode.rawValue, rawMode)
+        }
     }
 
     func testSevenCanonicalListsAndMondayRecurrenceWithoutCompletionRecurrence() throws {
@@ -149,14 +624,17 @@ final class BusinessRulesTests: XCTestCase {
             let family = try TestFamily()
             let ids = mode == .particular ? [family.hanna.id] : [family.hanna.id, family.alek.id]
             let id = try family.chore(mode, ids: ids)
-            let expectedCount = mode == .particular ? 1 : 2
+            let expectedCount = mode == .particular || mode == .alternating ? 1 : 2
             XCTAssertEqual(family.store.dailyList()[0].eligibleMembers.count, expectedCount, mode.rawValue)
             XCTAssertEqual(family.store.dailyList()[0].requiredMembers.count, mode == .anyOne ? 0 : expectedCount)
             XCTAssertEqual(family.store.dailyList()[0].requiredCompletionCount, mode == .anyOne ? 1 : expectedCount)
-            try family.complete(id, as: family.hanna)
-            XCTAssertEqual(family.store.dailyList()[0].isFullyComplete, mode == .particular || mode == .anyOne, mode.rawValue)
+            let first = try XCTUnwrap(family.store.dailyList()[0].eligibleMembers.first)
+            try family.complete(id, as: first)
+            XCTAssertEqual(family.store.dailyList()[0].isFullyComplete,
+                           mode == .particular || mode == .anyOne || mode == .alternating, mode.rawValue)
             if expectedCount == 2 {
-                try family.complete(id, as: family.alek)
+                let second = try XCTUnwrap(family.store.dailyList()[0].eligibleMembers.first { $0.id != first.id })
+                try family.complete(id, as: second)
                 XCTAssertTrue(family.store.dailyList()[0].isFullyComplete)
             }
         }
@@ -311,6 +789,8 @@ final class BusinessRulesTests: XCTestCase {
         XCTAssertThrowsError(try family.chore(.particular, ids: []))
         XCTAssertThrowsError(try family.chore(.particular, ids: [family.hanna.id, family.alek.id]))
         XCTAssertThrowsError(try family.chore(.multiple, ids: [family.hanna.id]))
+        XCTAssertThrowsError(try family.chore(.alternating, ids: [family.hanna.id]))
+        XCTAssertThrowsError(try family.chore(.alternating, ids: [family.hanna.id, family.parent.id]))
         XCTAssertThrowsError(try family.chore(.anyOne, ids: [family.parent.id]))
         XCTAssertTrue(family.store.snapshot.revisions.isEmpty)
     }

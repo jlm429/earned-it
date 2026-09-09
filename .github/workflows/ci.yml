@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DESTINATION: platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Build and test unit suite
+        run: |
+          xcodebuild test \
+            -project EarnedIt.xcodeproj \
+            -scheme EarnedItCI \
+            -configuration Debug \
+            -destination "$DESTINATION" \
+            -only-testing:EarnedItTests/BusinessRulesTests/testChoreAssignmentChoicesAndSaveShareCreationAndEditDates \
+            -only-testing:EarnedItTests/BusinessRulesTests/testSyncedTurnOrderMatchesDisplayedAndSavedOrder \
+            -only-testing:EarnedItTests/BusinessRulesTests/testAlternatingOwnerAdvancesWrapsAndDoesNotFollowCompletion \
+            -only-testing:EarnedItTests/BusinessRulesTests/testAlternatingRotationSurvivesUnrelatedRevisionEdits \
+            -only-testing:EarnedItTests/BusinessRulesTests/testAlternatingFutureTurnsExcludeArchivedAndUnselectedChildren \
+            -only-testing:EarnedItTests/BusinessRulesTests/testExistingRequirementModePayloadsRemainDecodable \
+            -only-testing:EarnedItTests/BusinessRulesTests/testSevenCanonicalListsAndMondayRecurrenceWithoutCompletionRecurrence \
+            -only-testing:EarnedItTests/BusinessRulesTests/testAllRequirementModesSeparateEligibilityAndFullCompletion \
+            -only-testing:EarnedItTests/BusinessRulesTests/testChildCannotChangeOthersOrParentConfiguration \
+            -only-testing:EarnedItTests/BusinessRulesTests/testChildVisibilityAndIneligibleCompletion \
+            -only-testing:EarnedItTests/SharingTests/testDeterministicRevisionResolutionRegardlessOfDeliveryOrder \
+            -only-testing:EarnedItTests/SharingTests/testConcurrentChildCompletionsAndScopedRemovalConverge \
+            -only-testing:EarnedItTests/SharingTests/testPartialUploadRetryIsIdempotentAndLocalQueueSurvivesRelaunch \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO
