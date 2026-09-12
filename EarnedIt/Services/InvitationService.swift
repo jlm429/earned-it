@@ -108,8 +108,10 @@ enum InvitationCode {
         return SHA256.hash(data: Data(normalized.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    static func accountClaimID(householdID: UUID, participantID: String) -> UUID {
-        let digest = SHA256.hash(data: Data("\(householdID.uuidString)/\(participantID)".utf8))
+    static func accountClaimID(householdID: UUID, participantID: String, generationID: UUID) -> UUID {
+        let digest = SHA256.hash(
+            data: Data("\(householdID.uuidString)/\(participantID)/\(generationID.uuidString)".utf8)
+        )
         var bytes = Array(digest.prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
         bytes[8] = (bytes[8] & 0x3F) | 0x80

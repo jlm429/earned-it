@@ -177,7 +177,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         guard !location.isOwner else { return }
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
         do { _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID) }
-        catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {}
+        catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound
+            || error.code == .permissionFailure {}
     }
 
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
@@ -269,6 +270,17 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
         let share = try await share(for: location, title: "Earned It Family")
         return share.currentUserParticipant?.participantID == participantID
+    }
+
+    func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
+        let database = database(for: location)
+        let record = CKRecord(recordType: "InvitationValidationTime", zoneID: zoneID(for: location))
+        let results = try await database.modifyRecords(saving: [record], deleting: [],
+                                                       savePolicy: .ifServerRecordUnchanged, atomically: true)
+        guard let result = results.saveResults[record.recordID],
+              let serverTime = try result.get().modificationDate else { throw HouseholdError.cloudUnavailable }
+        do { _ = try await database.deleteRecord(withID: record.recordID) } catch {}
+        return serverTime
     }
 
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {

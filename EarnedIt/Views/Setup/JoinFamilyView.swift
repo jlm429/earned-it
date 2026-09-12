@@ -8,6 +8,7 @@ struct JoinFamilyView: View {
     @State private var busy = false
     @State private var scanning = false
     @State private var errorMessage: String?
+    @State private var connectedFamilies: [CloudFamily] = []
 
     var body: some View {
         NavigationStack {
@@ -54,6 +55,24 @@ struct JoinFamilyView: View {
                         .disabled(busy || InvitationCode.normalized(code) == nil)
                         .accessibilityIdentifier("accept-invitation")
                     if busy { ProgressView("Checking invitation…") }
+                }
+
+                Section {
+                    Button("Find Connected Families", systemImage: "icloud.and.arrow.down") {
+                        run { connectedFamilies = try await store.discoverOwnerRecoveries() }
+                    }
+                    .disabled(busy)
+                    .accessibilityIdentifier("find-connected-families")
+                    ForEach(connectedFamilies) { family in
+                        Button(family.name) {
+                            run { try await store.recoverOwnerFamily(family.location); dismiss() }
+                        }
+                        .accessibilityLabel("Reconnect to \(family.name)")
+                    }
+                } header: {
+                    Text("Owner recovery")
+                } footer: {
+                    Text("Use this on a replacement device for a family owned by this iCloud account. Ambiguous older families require a new parent invitation.")
                 }
             }
             .navigationTitle("Join Existing Family")

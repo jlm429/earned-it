@@ -68,4 +68,5 @@ struct DeviceSession: Codable, Equatable {
     var legacyProfileIDs: [UUID]?
     var pendingInvitationAcceptance: PendingInvitationAcceptance?
     var accountMembershipLockAttemptID: UUID?
+    var accountMembershipClaimBinding: String?
 }

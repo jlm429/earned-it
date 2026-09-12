@@ -296,6 +296,93 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
     }
 
+    func testRevokedGenerationAllowsRejoinWithoutReactivatingStaleDevice() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let firstInvitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let account = "returning-child"
+        let first = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                       transport: TestTransport(server: server, account: account),
+                                       clock: { family.clock.now }, automaticSync: false)
+        try await first.redeemInvitation(firstInvitation.qrPayload)
+        let oldBinding = first.session.accountMembershipClaimBinding
+        try await family.store.revokeInvitation(firstInvitation.invitation)
+
+        let secondInvitation = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: account),
+                                             clock: { family.clock.now }, automaticSync: false)
+        try await replacement.redeemInvitation(secondInvitation.qrPayload)
+
+        XCTAssertEqual(replacement.selectedMember?.id, family.alek.id)
+        XCTAssertNotEqual(replacement.session.accountMembershipClaimBinding, oldBinding)
+        do { try await first.synchronize(); XCTFail("The revoked generation must stay closed") }
+        catch { XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict) }
+        XCTAssertEqual(first.selectedMember?.id, family.hanna.id)
+        XCTAssertTrue(first.cloudIsReadOnly)
+        XCTAssertThrowsError(try first.selectProfile(family.alek.id))
+    }
+
+    func testOwnerRecoveryFindsExactUnambiguousMembership() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "owner"),
+                                             clock: { family.clock.now }, automaticSync: false)
+
+        let families = try await replacement.discoverOwnerRecoveries()
+        XCTAssertEqual(families.map(\.location.householdID), [family.store.household!.id])
+        try await replacement.recoverOwnerFamily(try XCTUnwrap(families.first).location)
+
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+        XCTAssertEqual(replacement.profiles.map(\.id), [family.parent.id])
+    }
+
+    func testOwnerRecoveryRejectsAmbiguousLegacyParents() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        _ = try family.store.saveMember(name: "Other Parent", role: .parent, avatar: .star)
+        try await family.store.connect()
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "owner"),
+                                             clock: { family.clock.now }, automaticSync: false)
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+        XCTAssertTrue(recoveries.isEmpty)
+    }
+
+    func testServerTimePreventsDeviceClockRollbackExtendingInvitation() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.expiresAt.addingTimeInterval(1)
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                         transport: TestTransport(server: server, account: "late-child"),
+                                         clock: { invitation.invitation.createdAt.addingTimeInterval(-86_400) },
+                                         automaticSync: false)
+
+        await XCTAssertThrowsErrorAsync(try await joining.redeemInvitation(invitation.qrPayload),
+                                        expected: .invitationExpired)
+        XCTAssertNil(joining.household)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("late-child"))
+    }
+
+    func testDefinitiveClaimFailureCleansUpImmediately() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "removed-child")
+        transport.claimError = CKError(.permissionFailure)
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+
+        do { try await joining.redeemInvitation(invitation.qrPayload); XCTFail("Permission loss must fail") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .permissionFailure) }
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("removed-child"))
+    }
+
     func testAccountMembershipLockAtomicallyExcludesConcurrentCrossHouseholdJoin() async throws {
         let server = TestCloudServer()
         let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))

@@ -56,6 +56,7 @@ final class TestCloudServer {
     }
     var zones: [String: Zone] = [:]
     var accountMembershipLocks: [String: AccountMembershipLock] = [:]
+    var authoritativeTime: Date?
     var createCalls = 0
     var failUploadAfter: Int?
     var writeAllowed = true
@@ -70,6 +71,7 @@ final class TestTransport: HouseholdTransport {
     var leaveFailures = 0
     var accountLockReleaseFailures = 0
     var claimError: Error?
+    var leaveError: Error?
     var acceptErrorAfterHook: Error?
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
@@ -176,6 +178,7 @@ final class TestTransport: HouseholdTransport {
     }
     func leave(_ location: CloudLocation) async throws {
         leaveAttempts += 1
+        if let leaveError { throw leaveError }
         if leaveFailures > 0 {
             leaveFailures -= 1
             throw CKError(.networkFailure)
@@ -222,6 +225,9 @@ final class TestTransport: HouseholdTransport {
     }
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
         server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
+    }
+    func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
+        server.authoritativeTime ?? clientTime
     }
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
         if let claimError { throw claimError }
