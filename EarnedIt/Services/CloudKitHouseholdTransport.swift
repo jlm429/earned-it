@@ -30,9 +30,23 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
+    func accountMembershipValidationTime(clientTime: Date) async throws -> Date {
+        let database = container.privateCloudDatabase
+        let record = CKRecord(recordType: "AccountMembershipValidationTime")
+        let results = try await database.modifyRecords(saving: [record], deleting: [],
+                                                       savePolicy: .ifServerRecordUnchanged, atomically: true)
+        guard let result = results.saveResults[record.recordID],
+              let serverTime = try result.get().modificationDate else { throw HouseholdError.cloudUnavailable }
+        do { _ = try await database.deleteRecord(withID: record.recordID) } catch {}
+        return serverTime
+    }
+
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
-                                      expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
-        try await updateAccountMembershipLock { existing in
+                                      leaseDuration: TimeInterval, clientTime: Date) async throws
+        -> AccountMembershipLock {
+        let now = try await accountMembershipValidationTime(clientTime: clientTime)
+        let boundedDuration = min(max(leaseDuration, 0), InvitationCode.lifetime)
+        return try await updateAccountMembershipLock { existing in
             if let existing, existing.state == .active {
                 return existing
             }
@@ -40,7 +54,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 return existing
             }
             return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
-                                         expiresAt: expiresAt, claimBinding: nil)
+                                         expiresAt: now.addingTimeInterval(boundedDuration), claimBinding: nil)
         }
     }
 

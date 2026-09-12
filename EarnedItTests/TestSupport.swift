@@ -84,8 +84,13 @@ final class TestTransport: HouseholdTransport {
     func accountMembershipLock() async throws -> AccountMembershipLock? {
         server.accountMembershipLocks[account]
     }
+    func accountMembershipValidationTime(clientTime: Date) async throws -> Date {
+        server.authoritativeTime ?? clientTime
+    }
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
-                                      expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
+                                      leaseDuration: TimeInterval, clientTime: Date) async throws
+        -> AccountMembershipLock {
+        let now = server.authoritativeTime ?? clientTime
         if let existing = server.accountMembershipLocks[account], existing.state == .active {
             return existing
         }
@@ -93,7 +98,9 @@ final class TestTransport: HouseholdTransport {
             return existing
         }
         let lock = AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
-                                         expiresAt: expiresAt, claimBinding: nil)
+                                         expiresAt: now.addingTimeInterval(min(max(leaseDuration, 0),
+                                                                               InvitationCode.lifetime)),
+                                         claimBinding: nil)
         server.accountMembershipLocks[account] = lock
         return lock
     }

@@ -639,6 +639,7 @@ final class HouseholdStore {
             try await identifyPendingInvitation(in: location)
             try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
         }
+        catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
         catch { try await abandonPendingInvitationAcceptance(preserving: error) }
     }
 
@@ -812,8 +813,8 @@ final class HouseholdStore {
         var lock = try await transport.acquireAccountMembershipLock(
             householdID: householdID,
             attemptID: candidate,
-            expiresAt: clock().addingTimeInterval(InvitationCode.lifetime),
-            now: clock()
+            leaseDuration: InvitationCode.lifetime,
+            clientTime: clock()
         )
         if lock.state == .provisional, lock.householdID == householdID, lock.attemptID == candidate {
             return lock
@@ -830,20 +831,21 @@ final class HouseholdStore {
             lock = try await transport.acquireAccountMembershipLock(
                 householdID: householdID,
                 attemptID: candidate,
-                expiresAt: clock().addingTimeInterval(InvitationCode.lifetime),
-                now: clock()
+                leaseDuration: InvitationCode.lifetime,
+                clientTime: clock()
             )
             if lock.state == .provisional, lock.householdID == householdID, lock.attemptID == candidate {
                 return lock
             }
         }
-        if lock.state == .provisional, lock.expiresAt <= clock() {
+        let validationTime = try await transport.accountMembershipValidationTime(clientTime: clock())
+        if lock.state == .provisional, lock.expiresAt <= validationTime {
             try await reconcileExpiredAccountMembershipLock(lock)
             lock = try await transport.acquireAccountMembershipLock(
                 householdID: householdID,
                 attemptID: candidate,
-                expiresAt: clock().addingTimeInterval(InvitationCode.lifetime),
-                now: clock()
+                leaseDuration: InvitationCode.lifetime,
+                clientTime: clock()
             )
             if lock.state == .provisional, lock.householdID == householdID, lock.attemptID == candidate {
                 return lock
@@ -995,6 +997,8 @@ final class HouseholdStore {
             try await transport.accept(url: url, expected: location)
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
             try await identifyPendingInvitation(in: location)
+        } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
+            throw cloudError
         } catch {
             try await abandonPendingInvitationAcceptance(preserving: error)
         }
@@ -1053,7 +1057,8 @@ final class HouseholdStore {
         pending.invitationID = invitation.id
         pending.expiresAt = invitation.expiresAt
         try persistPendingInvitation(pending)
-        switch imported.invitationStatus(invitation, now: clock()) {
+        let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
+        switch imported.invitationStatus(invitation, now: validationTime) {
         case .available: return
         case .expired: throw HouseholdError.invitationExpired
         case .revoked: throw HouseholdError.invitationRevoked
@@ -1161,11 +1166,14 @@ final class HouseholdStore {
                     pending.expiresAt = invitation.expiresAt
                     try persistPendingInvitation(pending)
                 }
+                let validationTime = try await transport.invitationValidationTime(
+                    in: pending.location, clientTime: clock()
+                )
                 if let invitationID = pending.invitationID,
                    let invitation = imported.invitation(invitationID),
                    !imported.isInvitationRevoked(invitationID),
                    imported.invitationClaim(invitationID) == nil,
-                   clock() < (pending.expiresAt ?? invitation.expiresAt) {
+                   validationTime < (pending.expiresAt ?? invitation.expiresAt) {
                     if session.householdID == nil {
                         try await importFamily(pending.location, participant: pending.cloudParticipantID,
                                                accountLockAttemptID: pending.accountLockAttemptID)

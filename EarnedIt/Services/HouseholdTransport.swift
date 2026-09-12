@@ -26,8 +26,10 @@ struct AccountMembershipLock: Codable, Equatable {
 protocol HouseholdTransport {
     func participantID() async throws -> String
     func accountMembershipLock() async throws -> AccountMembershipLock?
+    func accountMembershipValidationTime(clientTime: Date) async throws -> Date
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
-                                      expiresAt: Date, now: Date) async throws -> AccountMembershipLock
+                                      leaseDuration: TimeInterval, clientTime: Date) async throws
+        -> AccountMembershipLock
     func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                        claimBinding: String, now: Date) async throws -> AccountMembershipLock
     func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool

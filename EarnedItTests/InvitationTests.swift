@@ -542,7 +542,7 @@ final class InvitationTests: XCTestCase {
         let invitation = UUID()
         let now = Date(timeIntervalSince1970: 1_000)
         let provisional = try await transport.acquireAccountMembershipLock(
-            householdID: household, attemptID: attempt, expiresAt: now.addingTimeInterval(60), now: now
+            householdID: household, attemptID: attempt, leaseDuration: 60, clientTime: now
         )
         XCTAssertEqual(provisional.state, .provisional)
         let active = try await transport.activateAccountMembershipLock(
@@ -550,7 +550,7 @@ final class InvitationTests: XCTestCase {
             claimBinding: "binding-\(invitation)-\(member)", now: now
         )
         let continuation = try await transport.acquireAccountMembershipLock(
-            householdID: household, attemptID: UUID(), expiresAt: now.addingTimeInterval(60), now: now
+            householdID: household, attemptID: UUID(), leaseDuration: 60, clientTime: now
         )
         XCTAssertEqual(continuation, active)
         await XCTAssertThrowsErrorAsync(
@@ -573,18 +573,18 @@ final class InvitationTests: XCTestCase {
 
         let staleAttempt = UUID()
         _ = try await transport.acquireAccountMembershipLock(
-            householdID: household, attemptID: staleAttempt, expiresAt: now.addingTimeInterval(10), now: now
+            householdID: household, attemptID: staleAttempt, leaseDuration: 10, clientTime: now
         )
         let retained = try await transport.acquireAccountMembershipLock(
-            householdID: otherHousehold, attemptID: UUID(), expiresAt: now.addingTimeInterval(120),
-            now: now.addingTimeInterval(11)
+            householdID: otherHousehold, attemptID: UUID(), leaseDuration: 120,
+            clientTime: now.addingTimeInterval(11)
         )
         XCTAssertEqual(retained.householdID, household)
         XCTAssertEqual(retained.attemptID, staleAttempt)
 
         let otherAccount = TestTransport(server: server, account: "different-account")
         let isolated = try await otherAccount.acquireAccountMembershipLock(
-            householdID: household, attemptID: UUID(), expiresAt: now.addingTimeInterval(60), now: now
+            householdID: household, attemptID: UUID(), leaseDuration: 60, clientTime: now
         )
         XCTAssertEqual(isolated.householdID, household)
     }
@@ -850,6 +850,81 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertEqual(transport.leaveAttempts, 1)
         XCTAssertFalse(server.zones[location.zoneName]!.participants.contains("metadata-child"))
+    }
+
+    func testPendingMetadataAcceptanceUsesServerTimeWithJoinerClockAhead() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "ahead-child")
+        let joiningClock = TestClock("2027-09-07T16:00:00Z")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { joiningClock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
+        XCTAssertEqual(joining.household?.id, family.store.household?.id)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+    }
+
+    func testPendingMetadataCleanupUsesServerTimeWithJoinerClockBehind() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "behind-child")
+        let joiningClock = TestClock("2025-09-07T16:00:00Z")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { joiningClock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        server.authoritativeTime = invitation.invitation.expiresAt.addingTimeInterval(1)
+
+        try await joining.retryInvitationCleanup()
+
+        XCTAssertNil(joining.household)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+    }
+
+    func testMembershipLeaseUsesServerTimeAcrossDivergentDeviceClocks() async throws {
+        let server = TestCloudServer()
+        let joiningTransport = TestTransport(server: server, account: "skewed-child")
+        let oldHousehold = UUID()
+        let oldAttempt = UUID()
+        let serverStart = ISO8601DateFormatter().date(from: "2026-09-07T16:00:00Z")!
+        server.authoritativeTime = serverStart
+        let lock = try await joiningTransport.acquireAccountMembershipLock(
+            householdID: oldHousehold, attemptID: oldAttempt,
+            leaseDuration: InvitationCode.lifetime,
+            clientTime: serverStart.addingTimeInterval(365 * 86_400)
+        )
+        XCTAssertEqual(lock.expiresAt, serverStart.addingTimeInterval(InvitationCode.lifetime))
+
+        server.authoritativeTime = lock.expiresAt.addingTimeInterval(-1)
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let joiningClock = TestClock("2026-09-07T16:00:00Z")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                         transport: joiningTransport,
+                                         clock: { joiningClock.now }, automaticSync: false)
+
+        await XCTAssertThrowsErrorAsync(try await joining.redeemInvitation(invitation.qrPayload),
+                                        expected: .accountMembershipConflict)
+        XCTAssertEqual(server.accountMembershipLocks["skewed-child"]?.attemptID, oldAttempt)
+        server.authoritativeTime = lock.expiresAt.addingTimeInterval(1)
+
+        try await joining.redeemInvitation(invitation.qrPayload)
+
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertNotEqual(server.accountMembershipLocks["skewed-child"]?.attemptID, oldAttempt)
     }
 
     func testRevokedPendingMetadataAcceptanceLeavesAccess() async throws {
