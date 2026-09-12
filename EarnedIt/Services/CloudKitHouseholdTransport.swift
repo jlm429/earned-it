@@ -69,6 +69,18 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         return location
     }
 
+    func hasAcceptedAccess(to location: CloudLocation) async throws -> Bool {
+        if location.isOwner { return true }
+        let id = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
+        do {
+            _ = try await container.sharedCloudDatabase.record(for: id)
+            return true
+        } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound
+            || error.code == .permissionFailure {
+            return false
+        }
+    }
+
     func accept(url: URL, expected location: CloudLocation) async throws {
         guard url.scheme == "https", let host = url.host,
               host == "icloud.com" || host.hasSuffix(".icloud.com") else {

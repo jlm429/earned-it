@@ -498,7 +498,9 @@ final class HouseholdStore {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         try await retryInvitationCleanup()
         let participant = try await transport.participantID()
-        try beginPendingInvitationAcceptance(location: location, participant: participant)
+        let accessExisted = try await transport.hasAcceptedAccess(to: location)
+        try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                             accessExistedBeforeAttempt: accessExisted)
         do {
             try await acceptance()
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
@@ -606,7 +608,9 @@ final class HouseholdStore {
     private func prepareInvitationAcceptance(url: URL, participant: String) async throws -> CloudLocation {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let location = try await transport.invitationLocation(for: url)
-        try beginPendingInvitationAcceptance(location: location, participant: participant)
+        let accessExisted = try await transport.hasAcceptedAccess(to: location)
+        try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                             accessExistedBeforeAttempt: accessExisted)
         do {
             try await transport.accept(url: url, expected: location)
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
@@ -616,7 +620,8 @@ final class HouseholdStore {
         }
     }
 
-    private func beginPendingInvitationAcceptance(location: CloudLocation, participant: String) throws {
+    private func beginPendingInvitationAcceptance(location: CloudLocation, participant: String,
+                                                  accessExistedBeforeAttempt: Bool) throws {
         guard session.householdID == nil, session.pendingInvitationAcceptance == nil else {
             throw HouseholdError.alreadyHasHousehold
         }
@@ -626,6 +631,7 @@ final class HouseholdStore {
             location: location,
             cloudParticipantID: participant,
             retainedFactIDs: retainedFactIDs,
+            accessExistedBeforeAttempt: accessExistedBeforeAttempt,
             phase: .acceptingAccess
         )
         try repository.commit(facts: [], session: updated)
@@ -673,11 +679,13 @@ final class HouseholdStore {
     func retryInvitationCleanup() async throws {
         guard let pending = session.pendingInvitationAcceptance,
               pending.phase != .awaitingRedemption else { return }
-        guard let transport else { throw HouseholdError.cloudUnavailable }
-        guard try await transport.participantID() == pending.cloudParticipantID else {
-            throw HouseholdError.wrongAccount
+        if pending.accessExistedBeforeAttempt == false {
+            guard let transport else { throw HouseholdError.cloudUnavailable }
+            guard try await transport.participantID() == pending.cloudParticipantID else {
+                throw HouseholdError.wrongAccount
+            }
+            try await transport.leave(pending.location)
         }
-        try await transport.leave(pending.location)
         var updated = session
         updated.pendingInvitationAcceptance = nil
         try repository.commit(facts: [], session: updated)

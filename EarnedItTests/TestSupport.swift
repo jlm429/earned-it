@@ -98,6 +98,10 @@ final class TestTransport: HouseholdTransport {
                              ownerName: zone.owner, isOwner: zone.owner == account)
     }
     func invitationLocation(for metadata: CKShare.Metadata) throws -> CloudLocation { throw HouseholdError.invitation }
+    func hasAcceptedAccess(to location: CloudLocation) async throws -> Bool {
+        guard let zone = server.zones[location.zoneName] else { return false }
+        return zone.owner == account || zone.participants.contains(account)
+    }
     func accept(url: URL, expected location: CloudLocation) async throws {
         guard try await invitationLocation(for: url) == location,
               let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitationNotFound }

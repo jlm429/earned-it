@@ -188,6 +188,36 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 2)
     }
 
+    func testFailedInvitationReusePreservesPreexistingAccountAccess() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let firstTransport = TestTransport(server: server, account: "shared-account")
+        let first = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: firstTransport,
+                                       clock: { family.clock.now }, automaticSync: false)
+        try await first.redeemInvitation(invitation.qrPayload)
+
+        let secondRepository = try HouseholdRepository(inMemory: true)
+        let secondTransport = TestTransport(server: server, account: "shared-account")
+        let second = try HouseholdStore(repository: secondRepository, transport: secondTransport,
+                                        clock: { family.clock.now }, automaticSync: false)
+        var observedPreexistingAccess = false
+        secondTransport.beforeAccept = {
+            let persisted = try? secondRepository.session()
+            observedPreexistingAccess = persisted?.pendingInvitationAcceptance?.accessExistedBeforeAttempt == true
+        }
+
+        await XCTAssertThrowsErrorAsync(try await second.redeemInvitation(invitation.qrPayload),
+                                        expected: .invitationConsumed)
+        XCTAssertTrue(observedPreexistingAccess)
+        XCTAssertNil(second.household)
+        XCTAssertNil(second.session.pendingInvitationAcceptance)
+        XCTAssertEqual(secondTransport.leaveAttempts, 0)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
+        try await first.synchronize()
+        XCTAssertEqual(first.selectedMember?.id, family.hanna.id)
+    }
+
     func testInvitationClaimSequenceOverflowFailsSafely() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

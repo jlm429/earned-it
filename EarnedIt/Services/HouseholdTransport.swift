@@ -15,6 +15,7 @@ protocol HouseholdTransport {
     func discoverFamilies() async throws -> [CloudFamily]
     func invitationLocation(for url: URL) async throws -> CloudLocation
     func invitationLocation(for metadata: CKShare.Metadata) throws -> CloudLocation
+    func hasAcceptedAccess(to location: CloudLocation) async throws -> Bool
     func accept(url: URL) async throws -> CloudLocation
     func accept(url: URL, expected location: CloudLocation) async throws
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation
