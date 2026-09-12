@@ -25,7 +25,10 @@ struct RootView: View {
         .environment(\.timeZone, store.calendar.timeZone)
         .task {
             store.refreshDate()
-            do { try await store.retryInvitationCleanup() }
+            do {
+                try await store.retryInvitationCleanup()
+                try await store.reconcileAccountMembershipLock()
+            }
             catch { store.errorMessage = error.localizedDescription }
             await acceptInvitation()
         }

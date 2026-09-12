@@ -68,6 +68,7 @@ final class TestTransport: HouseholdTransport {
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
+    var accountLockReleaseFailures = 0
     var acceptErrorAfterHook: Error?
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
@@ -79,51 +80,53 @@ final class TestTransport: HouseholdTransport {
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                       expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
         if let existing = server.accountMembershipLocks[account], existing.state == .active {
-            guard existing.householdID == householdID else { throw HouseholdError.accountMembershipConflict }
             return existing
         }
-        if let existing = server.accountMembershipLocks[account], existing.state == .provisional,
-           existing.expiresAt > now {
-            guard existing.householdID == householdID, existing.attemptID == attemptID else {
-                throw HouseholdError.accountMembershipConflict
-            }
+        if let existing = server.accountMembershipLocks[account], existing.state == .provisional {
             return existing
         }
         let lock = AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
-                                         expiresAt: expiresAt, invitationID: nil, memberID: nil, role: nil)
+                                         expiresAt: expiresAt, claimBinding: nil)
         server.accountMembershipLocks[account] = lock
         return lock
     }
-    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID, invitationID: UUID?,
-                                       memberID: UUID, role: UserRole, now: Date) async throws -> AccountMembershipLock {
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                       claimBinding: String, now: Date) async throws -> AccountMembershipLock {
         guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID else {
             throw HouseholdError.accountMembershipConflict
         }
         if existing.state == .active {
-            guard existing.invitationID == invitationID, existing.memberID == memberID, existing.role == role else {
+            guard existing.claimBinding == claimBinding else {
                 throw HouseholdError.accountMembershipConflict
             }
             return existing
         }
-        guard existing.state == .provisional, existing.attemptID == attemptID,
-              existing.expiresAt > now else { throw HouseholdError.accountMembershipConflict }
+        guard existing.state == .provisional,
+              existing.attemptID == attemptID else { throw HouseholdError.accountMembershipConflict }
         existing.state = .active
         existing.expiresAt = .distantFuture
-        existing.invitationID = invitationID
-        existing.memberID = memberID
-        existing.role = role
+        existing.claimBinding = claimBinding
         server.accountMembershipLocks[account] = existing
         return existing
     }
-    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws {
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool {
+        if accountLockReleaseFailures > 0 {
+            accountLockReleaseFailures -= 1
+            throw CKError(.networkFailure)
+        }
         guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID,
-              existing.attemptID == attemptID else { return }
+              existing.attemptID == attemptID else { return false }
         existing.state = .released
         existing.expiresAt = now
-        existing.invitationID = nil
-        existing.memberID = nil
-        existing.role = nil
+        existing.claimBinding = nil
         server.accountMembershipLocks[account] = existing
+        return true
+    }
+    func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
+        guard let (name, zone) = server.zones.first(where: { $0.value.householdID == householdID
+            && ($0.value.owner == account || $0.value.participants.contains(account)) }) else { return nil }
+        return CloudLocation(householdID: householdID, zoneName: name, ownerName: zone.owner,
+                             isOwner: zone.owner == account)
     }
     func createZone(for household: Household) async throws -> CloudLocation {
         await beforeCreateZone?()
@@ -204,7 +207,7 @@ final class TestTransport: HouseholdTransport {
     func createInvitationAccess(for location: CloudLocation, title: String,
                                 role: UserRole) async throws -> CloudInvitationAccess {
         guard let zone = server.zones[location.zoneName],
-              zone.owner == account || zone.participants.contains(account) else { throw HouseholdError.permission }
+              zone.owner == account else { throw HouseholdError.invitationOwnerRequired }
         let participantID = UUID().uuidString
         server.zones[location.zoneName]?.pendingInvitationParticipants.insert(participantID)
         let url = URL(string: "https://test.invalid/\(location.zoneName)?invitation=\(participantID)")!

@@ -18,9 +18,7 @@ struct AccountMembershipLock: Codable, Equatable {
     let attemptID: UUID
     var state: AccountMembershipLockState
     var expiresAt: Date
-    var invitationID: UUID?
-    var memberID: UUID?
-    var role: UserRole?
+    var claimBinding: String?
 }
 
 /// Production uses the same boundary exercised by the in-memory server in tests.
@@ -29,9 +27,10 @@ protocol HouseholdTransport {
     func participantID() async throws -> String
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                       expiresAt: Date, now: Date) async throws -> AccountMembershipLock
-    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID, invitationID: UUID?,
-                                       memberID: UUID, role: UserRole, now: Date) async throws -> AccountMembershipLock
-    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                       claimBinding: String, now: Date) async throws -> AccountMembershipLock
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool
+    func membershipLocation(householdID: UUID) async throws -> CloudLocation?
     func createZone(for household: Household) async throws -> CloudLocation
     func discoverFamilies() async throws -> [CloudFamily]
     func invitationLocation(for url: URL) async throws -> CloudLocation

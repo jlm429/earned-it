@@ -37,6 +37,26 @@ struct AccountFamilyMembership {
     let member: FamilyMember
 }
 
+enum AccountMembershipBinding {
+    static func invitation(_ membership: AccountFamilyMembership) -> String {
+        digest("invitation|\(membership.claim.invitationID.uuidString)|\(membership.claim.cloudParticipantID)|"
+               + "\(membership.claim.memberID.uuidString)|\(membership.invitation.role.rawValue)|"
+               + membership.claim.codeDigest)
+    }
+
+    static func owner(householdID: UUID) -> String {
+        digest("owner|\(householdID.uuidString)")
+    }
+
+    static func legacyShared(householdID: UUID, participantID: String) -> String {
+        digest("legacy-shared|\(householdID.uuidString)|\(participantID)")
+    }
+
+    private static func digest(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 struct InvitationCredential: Equatable {
     let code: String
     let shareURL: URL?

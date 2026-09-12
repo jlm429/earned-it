@@ -109,7 +109,7 @@ final class SharingTests: XCTestCase {
         try await family.store.connect()
         let invitation = try await family.store.createChildInvitation(memberID: family.alek.id)
         let peer = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
-                                      transport: TestTransport(server: server, account: "owner"),
+                                      transport: TestTransport(server: server, account: "alek-device"),
                                       clock: { family.clock.now }, automaticSync: false)
         try await peer.redeemInvitation(invitation.qrPayload)
         XCTAssertNotEqual(peer.session.deviceID, family.store.session.deviceID)

@@ -24,57 +24,50 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                                       expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
         try await updateAccountMembershipLock { existing in
             if let existing, existing.state == .active {
-                guard existing.householdID == householdID else { throw HouseholdError.accountMembershipConflict }
                 return existing
             }
-            if let existing, existing.state == .provisional, existing.expiresAt > now {
-                guard existing.householdID == householdID, existing.attemptID == attemptID else {
-                    throw HouseholdError.accountMembershipConflict
-                }
+            if let existing, existing.state == .provisional {
                 return existing
             }
             return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
-                                         expiresAt: expiresAt, invitationID: nil, memberID: nil, role: nil)
+                                         expiresAt: expiresAt, claimBinding: nil)
         }
     }
 
-    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID, invitationID: UUID?,
-                                       memberID: UUID, role: UserRole, now: Date) async throws -> AccountMembershipLock {
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                       claimBinding: String, now: Date) async throws -> AccountMembershipLock {
         try await updateAccountMembershipLock { existing in
             guard var existing, existing.householdID == householdID else {
                 throw HouseholdError.accountMembershipConflict
             }
             if existing.state == .active {
-                guard existing.invitationID == invitationID, existing.memberID == memberID, existing.role == role else {
+                guard existing.claimBinding == claimBinding else {
                     throw HouseholdError.accountMembershipConflict
                 }
                 return existing
             }
-            guard existing.state == .provisional, existing.attemptID == attemptID,
-                  existing.expiresAt > now else { throw HouseholdError.accountMembershipConflict }
+            guard existing.state == .provisional,
+                  existing.attemptID == attemptID else { throw HouseholdError.accountMembershipConflict }
             existing.state = .active
             existing.expiresAt = .distantFuture
-            existing.invitationID = invitationID
-            existing.memberID = memberID
-            existing.role = role
+            existing.claimBinding = claimBinding
             return existing
         }
     }
 
-    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws {
-        _ = try await updateAccountMembershipLock { existing in
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool {
+        let result = try await updateAccountMembershipLock { existing in
             guard var existing else {
                 return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .released,
-                                             expiresAt: now, invitationID: nil, memberID: nil, role: nil)
+                                             expiresAt: now, claimBinding: nil)
             }
             guard existing.householdID == householdID, existing.attemptID == attemptID else { return existing }
             existing.state = .released
             existing.expiresAt = now
-            existing.invitationID = nil
-            existing.memberID = nil
-            existing.role = nil
+            existing.claimBinding = nil
             return existing
         }
+        return result.householdID == householdID && result.attemptID == attemptID && result.state == .released
     }
 
     func createZone(for household: Household) async throws -> CloudLocation {
@@ -82,6 +75,17 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         _ = try await container.privateCloudDatabase.save(zone)
         return CloudLocation(householdID: household.id, zoneName: zone.zoneID.zoneName,
                              ownerName: zone.zoneID.ownerName, isOwner: true)
+    }
+
+    func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
+        let expectedZoneName = zonePrefix + householdID.uuidString
+        for isOwner in [true, false] {
+            let database = isOwner ? container.privateCloudDatabase : container.sharedCloudDatabase
+            if let zone = try await database.allRecordZones().first(where: { $0.zoneID.zoneName == expectedZoneName }) {
+                return location(zoneID: zone.zoneID, isOwner: isOwner)
+            }
+        }
+        return nil
     }
 
     func discoverFamilies() async throws -> [CloudFamily] {
@@ -386,12 +390,20 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                                                                savePolicy: .ifServerRecordUnchanged, atomically: true)
                 guard let result = results.saveResults[recordID] else { throw HouseholdError.malformedData }
                 return try decodeAccountMembershipLock(result.get())
-            } catch let error as CKError where error.code == .serverRecordChanged
-                || error.code == .batchRequestFailed || error.code == .partialFailure {
+            } catch let error as CKError {
+                guard Self.isAccountMembershipRecordConflict(error, recordID: recordID) else { throw error }
                 continue
             }
         }
         throw HouseholdError.accountMembershipConflict
+    }
+
+    nonisolated static func isAccountMembershipRecordConflict(_ error: CKError,
+                                                               recordID: CKRecord.ID) -> Bool {
+        if error.code == .serverRecordChanged { return true }
+        guard error.code == .partialFailure,
+              let partial = error.partialErrorsByItemID?[recordID] as? CKError else { return false }
+        return partial.code == CKError.Code.serverRecordChanged
     }
 
     private func decodeAccountMembershipLock(_ record: CKRecord) throws -> AccountMembershipLock {
