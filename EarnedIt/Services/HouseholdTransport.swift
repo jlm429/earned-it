@@ -24,6 +24,7 @@ struct AccountMembershipLock: Codable, Equatable {
 /// Production uses the same boundary exercised by the in-memory server in tests.
 @MainActor
 protocol HouseholdTransport {
+    func accountDidChange()
     func participantID() async throws -> String
     func accountMembershipLock() async throws -> AccountMembershipLock?
     func accountMembershipValidationTime(clientTime: Date) async throws -> Date

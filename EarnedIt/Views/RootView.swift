@@ -64,6 +64,7 @@ struct RootView: View {
         }
         .onChange(of: invitations.pending) { _, _ in Task { await acceptInvitation() } }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
+            store.cloudAccountDidChange()
             cloudAccountRevision &+= 1
             store.refreshDate()
         }

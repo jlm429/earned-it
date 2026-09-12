@@ -10,9 +10,14 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     private let recordType = "HouseholdFact"
     private let accountMembershipRecordType = "AccountMembershipLock"
     private let accountMembershipRecordName = "current-membership"
+    private var accountGeneration: UInt64 = 0
 
     init(container: CKContainer = CKContainer(identifier: containerIdentifier)) {
         self.container = container
+    }
+
+    func accountDidChange() {
+        accountGeneration &+= 1
     }
 
     func participantID() async throws -> String {
@@ -81,10 +86,14 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
                                       now: Date) async throws -> Bool {
+        let expectedGeneration = accountGeneration
         try Task.checkCancellation()
         guard try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
         try Task.checkCancellation()
-        let result = try await updateAccountMembershipLock(expectedParticipantID: expectedParticipantID) { existing in
+        let result = try await updateAccountMembershipLock(
+            expectedParticipantID: expectedParticipantID,
+            expectedGeneration: expectedGeneration
+        ) { existing in
             guard var existing else {
                 return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .released,
                                              expiresAt: now, claimBinding: nil)
@@ -202,9 +211,11 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     func leave(_ location: CloudLocation, expectedParticipantID: String) async throws {
+        let expectedGeneration = accountGeneration
         try Task.checkCancellation()
         guard try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
         try Task.checkCancellation()
+        guard accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         guard !location.isOwner else { return }
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
         do { _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID) }
@@ -413,6 +424,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private func updateAccountMembershipLock(
         expectedParticipantID: String? = nil,
+        expectedGeneration: UInt64? = nil,
         _ update: (AccountMembershipLock?) throws -> AccountMembershipLock
     ) async throws -> AccountMembershipLock {
         let database = container.privateCloudDatabase
@@ -435,6 +447,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 if let expectedParticipantID,
                    try await participantID() != expectedParticipantID { throw HouseholdError.wrongAccount }
                 try Task.checkCancellation()
+                if let expectedGeneration,
+                   accountGeneration != expectedGeneration { throw HouseholdError.wrongAccount }
                 let results = try await database.modifyRecords(saving: [record], deleting: [],
                                                                savePolicy: .ifServerRecordUnchanged, atomically: true)
                 guard let result = results.saveResults[recordID] else { throw HouseholdError.malformedData }

@@ -47,13 +47,20 @@ enum PermissionService {
         let granted = snapshot.grants.first {
             $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID
         }?.memberIDs ?? []
-        var invited: [UUID] = []
         if let participant = session.cloudParticipantID,
            let membership = try? snapshot.accountMembership(participantID: participant,
                                                             now: day.date(in: household.calendar)) {
-            invited = [membership.member.id]
+            if membership.member.role == .child {
+                return snapshot.members.filter {
+                    $0.id == membership.member.id && snapshot.isActive($0, on: day)
+                }
+            }
+            let authorized = Set(granted + [membership.member.id] + (session.legacyProfileIDs ?? []))
+            return snapshot.members.filter {
+                snapshot.isActive($0, on: day) && (hasCreatorAccess || authorized.contains($0.id))
+            }
         }
-        let authorized = Set(granted + invited + (session.legacyProfileIDs ?? []))
+        let authorized = Set(granted + (session.legacyProfileIDs ?? []))
         return snapshot.members.filter { snapshot.isActive($0, on: day) && (hasCreatorAccess || authorized.contains($0.id)) }
     }
 

@@ -61,6 +61,10 @@ final class HouseholdStore {
         return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")/\(pending.phase.rawValue)"
     }
 
+    func cloudAccountDidChange() {
+        transport?.accountDidChange()
+    }
+
     func dailyList(on date: Date? = nil) -> [DailyChore] {
         ChoreRules.dailyList(snapshot: snapshot, day: CivilDay(date ?? today, calendar: calendar), today: day)
     }

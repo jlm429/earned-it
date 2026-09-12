@@ -65,7 +65,12 @@ final class TestCloudServer {
 @MainActor
 final class TestTransport: HouseholdTransport {
     let server: TestCloudServer
-    var account: String
+    var account: String {
+        didSet {
+            if account != oldValue { accountGeneration &+= 1 }
+        }
+    }
+    private var accountGeneration: UInt64 = 0
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
@@ -78,11 +83,14 @@ final class TestTransport: HouseholdTransport {
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
     var beforeLeave: (() async -> Void)?
+    var beforeLeaveSubmission: (() async -> Void)?
     var beforeAccountLockRelease: (() async -> Void)?
+    var beforeAccountLockReleaseSubmission: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
     init(server: TestCloudServer, account: String) { self.server = server; self.account = account }
+    func accountDidChange() { accountGeneration &+= 1 }
     func participantID() async throws -> String { account }
     func accountMembershipLock() async throws -> AccountMembershipLock? {
         server.accountMembershipLocks[account]
@@ -132,9 +140,14 @@ final class TestTransport: HouseholdTransport {
     }
     func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
                                       now: Date) async throws -> Bool {
+        let expectedGeneration = accountGeneration
         await beforeAccountLockRelease?()
         try Task.checkCancellation()
         guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        await beforeAccountLockReleaseSubmission?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         if accountLockReleaseFailures > 0 {
             accountLockReleaseFailures -= 1
             throw CKError(.networkFailure)
@@ -199,10 +212,15 @@ final class TestTransport: HouseholdTransport {
         throw HouseholdError.invitation
     }
     func leave(_ location: CloudLocation, expectedParticipantID: String) async throws {
+        let expectedGeneration = accountGeneration
         leaveAttempts += 1
         await beforeLeave?()
         try Task.checkCancellation()
         guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        await beforeLeaveSubmission?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         if let leaveError { throw leaveError }
         if leaveFailures > 0 {
             leaveFailures -= 1
