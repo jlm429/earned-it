@@ -8,6 +8,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     let container: CKContainer
     private let zonePrefix = "EarnedIt-"
     private let recordType = "HouseholdFact"
+    private let accountMembershipRecordType = "AccountMembershipLock"
+    private let accountMembershipRecordName = "current-membership"
 
     init(container: CKContainer = CKContainer(identifier: containerIdentifier)) {
         self.container = container
@@ -16,6 +18,63 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     func participantID() async throws -> String {
         guard try await container.accountStatus() == .available else { throw HouseholdError.cloudUnavailable }
         return try await container.userRecordID().recordName
+    }
+
+    func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                      expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
+        try await updateAccountMembershipLock { existing in
+            if let existing, existing.state == .active {
+                guard existing.householdID == householdID else { throw HouseholdError.accountMembershipConflict }
+                return existing
+            }
+            if let existing, existing.state == .provisional, existing.expiresAt > now {
+                guard existing.householdID == householdID, existing.attemptID == attemptID else {
+                    throw HouseholdError.accountMembershipConflict
+                }
+                return existing
+            }
+            return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
+                                         expiresAt: expiresAt, invitationID: nil, memberID: nil, role: nil)
+        }
+    }
+
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID, invitationID: UUID?,
+                                       memberID: UUID, role: UserRole, now: Date) async throws -> AccountMembershipLock {
+        try await updateAccountMembershipLock { existing in
+            guard var existing, existing.householdID == householdID else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            if existing.state == .active {
+                guard existing.invitationID == invitationID, existing.memberID == memberID, existing.role == role else {
+                    throw HouseholdError.accountMembershipConflict
+                }
+                return existing
+            }
+            guard existing.state == .provisional, existing.attemptID == attemptID,
+                  existing.expiresAt > now else { throw HouseholdError.accountMembershipConflict }
+            existing.state = .active
+            existing.expiresAt = .distantFuture
+            existing.invitationID = invitationID
+            existing.memberID = memberID
+            existing.role = role
+            return existing
+        }
+    }
+
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws {
+        _ = try await updateAccountMembershipLock { existing in
+            guard var existing else {
+                return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .released,
+                                             expiresAt: now, invitationID: nil, memberID: nil, role: nil)
+            }
+            guard existing.householdID == householdID, existing.attemptID == attemptID else { return existing }
+            existing.state = .released
+            existing.expiresAt = now
+            existing.invitationID = nil
+            existing.memberID = nil
+            existing.role = nil
+            return existing
+        }
     }
 
     func createZone(for household: Household) async throws -> CloudLocation {
@@ -302,6 +361,44 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         if #available(iOS 26.0, *) { return share.oneTimeURL(for: participantID) }
         let selector = NSSelectorFromString("oneTimeURLForParticipantID:")
         return share.perform(selector, with: participantID)?.takeUnretainedValue() as? URL
+    }
+
+    private func updateAccountMembershipLock(
+        _ update: (AccountMembershipLock?) throws -> AccountMembershipLock
+    ) async throws -> AccountMembershipLock {
+        let database = container.privateCloudDatabase
+        let recordID = CKRecord.ID(recordName: accountMembershipRecordName)
+        for _ in 0..<4 {
+            var record: CKRecord
+            let existing: AccountMembershipLock?
+            do {
+                record = try await database.record(for: recordID)
+                existing = try decodeAccountMembershipLock(record)
+            } catch let error as CKError where error.code == .unknownItem {
+                record = CKRecord(recordType: accountMembershipRecordType, recordID: recordID)
+                existing = nil
+            }
+            let next = try update(existing)
+            record["payload"] = try JSONEncoder().encode(next) as CKRecordValue
+            record["formatVersion"] = 1 as CKRecordValue
+            do {
+                let results = try await database.modifyRecords(saving: [record], deleting: [],
+                                                               savePolicy: .ifServerRecordUnchanged, atomically: true)
+                guard let result = results.saveResults[recordID] else { throw HouseholdError.malformedData }
+                return try decodeAccountMembershipLock(result.get())
+            } catch let error as CKError where error.code == .serverRecordChanged
+                || error.code == .batchRequestFailed || error.code == .partialFailure {
+                continue
+            }
+        }
+        throw HouseholdError.accountMembershipConflict
+    }
+
+    private func decodeAccountMembershipLock(_ record: CKRecord) throws -> AccountMembershipLock {
+        guard record.recordType == accountMembershipRecordType,
+              (record["formatVersion"] as? Int) == 1,
+              let payload = record["payload"] as? Data else { throw HouseholdError.malformedData }
+        return try JSONDecoder().decode(AccountMembershipLock.self, from: payload)
     }
 
     private func database(for location: CloudLocation) -> CKDatabase {

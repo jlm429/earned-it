@@ -49,6 +49,7 @@ struct PendingInvitationAcceptance: Codable, Equatable {
     let cloudParticipantID: String
     let retainedFactIDs: [UUID]?
     let accessExistedBeforeAttempt: Bool?
+    var accountLockAttemptID: UUID?
     var invitationID: UUID?
     var expiresAt: Date?
     var phase: PendingInvitationPhase
@@ -66,4 +67,5 @@ struct DeviceSession: Codable, Equatable {
     /// New joins set an empty array and rely on an invitation claim or shared grant.
     var legacyProfileIDs: [UUID]?
     var pendingInvitationAcceptance: PendingInvitationAcceptance?
+    var accountMembershipLockAttemptID: UUID?
 }

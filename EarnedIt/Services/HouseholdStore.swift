@@ -516,8 +516,9 @@ final class HouseholdStore {
         if try await resumeAccountMembership(participant: participant, requestedLocation: location,
                                              invitationCode: nil) { return }
         let accessExisted = try await transport.hasAcceptedAccess(to: location)
+        let attemptID = try await acquireAccountMembershipLock(for: location)
         try beginPendingInvitationAcceptance(location: location, participant: participant,
-                                             accessExistedBeforeAttempt: accessExisted)
+                                             accessExistedBeforeAttempt: accessExisted, attemptID: attemptID)
         do {
             try await acceptance()
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
@@ -551,8 +552,10 @@ final class HouseholdStore {
             }
             let canWrite = try await transport.canWrite(to: location)
             guard canWrite else { throw HouseholdError.readOnly }
+            let lock = try await activateAccountMembershipLock(location: location, membership: membership)
             try attach(remote: remote, location: location, participant: participant,
-                       selectedMemberID: membership.member.id, cloudCanWrite: canWrite)
+                       selectedMemberID: membership.member.id, cloudCanWrite: canWrite,
+                       accountLockAttemptID: lock.attemptID)
             return
         }
         guard let invitation = imported.invitation(matchingCode: code),
@@ -573,6 +576,20 @@ final class HouseholdStore {
         }
         guard clock() < invitation.expiresAt else { throw HouseholdError.invitationExpired }
         guard try await transport.canWrite(to: location) else { throw HouseholdError.readOnly }
+        let attemptID: UUID
+        if let pending = session.pendingInvitationAcceptance, pending.location == location,
+           let pendingAttemptID = pending.accountLockAttemptID {
+            attemptID = pendingAttemptID
+        } else {
+            attemptID = try await acquireAccountMembershipLock(for: location)
+            try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                                 accessExistedBeforeAttempt: true, attemptID: attemptID)
+            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            var pending = try requirePendingInvitation(location: location)
+            pending.invitationID = invitation.id
+            pending.expiresAt = invitation.expiresAt
+            try persistPendingInvitation(pending)
+        }
         let previousSequence = remote.map(\.sequence).max() ?? 0
         guard previousSequence < Int64.max - 1 else { throw HouseholdError.malformedData }
         let claim = InvitationClaim(invitationID: invitation.id, deviceID: session.deviceID,
@@ -596,14 +613,21 @@ final class HouseholdStore {
             if let membership = try refreshedSnapshot.accountMembership(participantID: participant, now: clock()),
                membership.claim.codeDigest == invitation.codeDigest {
                 let canWrite = try await transport.canWrite(to: location)
+                let lock = try await activateAccountMembershipLock(location: location, membership: membership,
+                                                                    attemptID: attemptID)
                 try attach(remote: refreshed, location: location, participant: participant,
-                           selectedMemberID: membership.member.id, cloudCanWrite: canWrite)
+                           selectedMemberID: membership.member.id, cloudCanWrite: canWrite,
+                           accountLockAttemptID: lock.attemptID)
                 return
             }
             throw HouseholdError.invitationConsumed
         }
+        let membership = AccountFamilyMembership(invitation: invitation, claim: claim, member: member)
+        let lock = try await activateAccountMembershipLock(location: location, membership: membership,
+                                                            attemptID: attemptID)
         try attach(remote: remote + confirmedClaims, location: location, participant: participant,
-                   selectedMemberID: invitation.memberID, cloudCanWrite: true)
+                   selectedMemberID: invitation.memberID, cloudCanWrite: true,
+                   accountLockAttemptID: lock.attemptID)
         syncMessage = "Family joined"
     }
 
@@ -630,7 +654,7 @@ final class HouseholdStore {
     }
 
     private func attach(remote: [HouseholdFact], location: CloudLocation, participant: String,
-                        selectedMemberID: UUID, cloudCanWrite: Bool) throws {
+                        selectedMemberID: UUID, cloudCanWrite: Bool, accountLockAttemptID: UUID) throws {
         var updated = session
         updated.householdID = location.householdID
         updated.location = location
@@ -639,17 +663,60 @@ final class HouseholdStore {
         updated.cloudCanWrite = cloudCanWrite
         updated.legacyProfileIDs = []
         updated.pendingInvitationAcceptance = nil
+        updated.accountMembershipLockAttemptID = accountLockAttemptID
         try repository.commit(facts: remote, session: updated, uploaded: true)
         session = updated
         cloudIsReadOnly = !cloudCanWrite
         try reload()
     }
 
+    private func acquireAccountMembershipLock(for location: CloudLocation) async throws -> UUID {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let attemptID = UUID()
+        let lock = try await transport.acquireAccountMembershipLock(
+            householdID: location.householdID,
+            attemptID: attemptID,
+            expiresAt: clock().addingTimeInterval(InvitationCode.lifetime),
+            now: clock()
+        )
+        guard lock.state == .provisional, lock.householdID == location.householdID,
+              lock.attemptID == attemptID else { throw HouseholdError.accountMembershipConflict }
+        return attemptID
+    }
+
+    private func activateAccountMembershipLock(location: CloudLocation, membership: AccountFamilyMembership,
+                                               attemptID suppliedAttemptID: UUID? = nil) async throws
+        -> AccountMembershipLock {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let attemptID: UUID
+        if let existing = suppliedAttemptID ?? session.pendingInvitationAcceptance?.accountLockAttemptID {
+            attemptID = existing
+        } else {
+            let candidate = UUID()
+            let acquired = try await transport.acquireAccountMembershipLock(
+                householdID: location.householdID,
+                attemptID: candidate,
+                expiresAt: clock().addingTimeInterval(InvitationCode.lifetime),
+                now: clock()
+            )
+            attemptID = acquired.attemptID
+        }
+        return try await transport.activateAccountMembershipLock(
+            householdID: location.householdID,
+            attemptID: attemptID,
+            invitationID: membership.invitation.id,
+            memberID: membership.member.id,
+            role: membership.member.role,
+            now: clock()
+        )
+    }
+
     private func prepareInvitationAcceptance(url: URL, location: CloudLocation, participant: String) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let accessExisted = try await transport.hasAcceptedAccess(to: location)
+        let attemptID = try await acquireAccountMembershipLock(for: location)
         try beginPendingInvitationAcceptance(location: location, participant: participant,
-                                             accessExistedBeforeAttempt: accessExisted)
+                                             accessExistedBeforeAttempt: accessExisted, attemptID: attemptID)
         do {
             try await transport.accept(url: url, expected: location)
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
@@ -660,7 +727,7 @@ final class HouseholdStore {
     }
 
     private func beginPendingInvitationAcceptance(location: CloudLocation, participant: String,
-                                                  accessExistedBeforeAttempt: Bool) throws {
+                                                  accessExistedBeforeAttempt: Bool, attemptID: UUID) throws {
         guard session.householdID == nil, session.pendingInvitationAcceptance == nil else {
             throw HouseholdError.alreadyHasHousehold
         }
@@ -671,12 +738,20 @@ final class HouseholdStore {
             cloudParticipantID: participant,
             retainedFactIDs: retainedFactIDs,
             accessExistedBeforeAttempt: accessExistedBeforeAttempt,
+            accountLockAttemptID: attemptID,
             invitationID: nil,
             expiresAt: nil,
             phase: .acceptingAccess
         )
         try repository.commit(facts: [], session: updated)
         session = updated
+    }
+
+    private func requirePendingInvitation(location: CloudLocation) throws -> PendingInvitationAcceptance {
+        guard let pending = session.pendingInvitationAcceptance, pending.location == location else {
+            throw HouseholdError.invitationNotFound
+        }
+        return pending
     }
 
     private func confirmPendingInvitationAcceptance(location: CloudLocation, participant: String) throws {
@@ -772,6 +847,10 @@ final class HouseholdStore {
         guard try await transport.participantID() == pending.cloudParticipantID else {
             throw HouseholdError.wrongAccount
         }
+        if pending.accountLockAttemptID == nil {
+            pending.accountLockAttemptID = try await acquireAccountMembershipLock(for: pending.location)
+            try persistPendingInvitation(pending)
+        }
         let remote = try await accessibleFacts(at: pending.location)
         if let remote {
             try validate(remote, householdID: pending.location.householdID)
@@ -780,8 +859,12 @@ final class HouseholdStore {
             if let membership = try imported.accountMembership(participantID: pending.cloudParticipantID,
                                                                now: clock()) {
                 let canWrite = try await transport.canWrite(to: pending.location)
+                let lock = try await activateAccountMembershipLock(location: pending.location,
+                                                                    membership: membership,
+                                                                    attemptID: pending.accountLockAttemptID)
                 try attach(remote: remote, location: pending.location, participant: pending.cloudParticipantID,
-                           selectedMemberID: membership.member.id, cloudCanWrite: canWrite)
+                           selectedMemberID: membership.member.id, cloudCanWrite: canWrite,
+                           accountLockAttemptID: lock.attemptID)
                 return
             }
             if pending.phase == .awaitingRedemption {
@@ -805,6 +888,10 @@ final class HouseholdStore {
         }
         try markPendingInvitationForCleanup(pending)
         try await transport.leave(pending.location)
+        if let attemptID = pending.accountLockAttemptID {
+            try await transport.releaseAccountMembershipLock(householdID: pending.location.householdID,
+                                                              attemptID: attemptID, now: clock())
+        }
         var updated = session
         updated.pendingInvitationAcceptance = nil
         try repository.commit(facts: [], session: updated)
@@ -841,8 +928,10 @@ final class HouseholdStore {
         }
         let canWrite = try await transport.canWrite(to: existing.0)
         guard canWrite else { throw HouseholdError.readOnly }
+        let lock = try await activateAccountMembershipLock(location: existing.0, membership: existing.2)
         try attach(remote: existing.1, location: existing.0, participant: participant,
-                   selectedMemberID: existing.2.member.id, cloudCanWrite: canWrite)
+                   selectedMemberID: existing.2.member.id, cloudCanWrite: canWrite,
+                   accountLockAttemptID: lock.attemptID)
         return true
     }
 
@@ -926,12 +1015,22 @@ final class HouseholdStore {
         } catch {
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
+                if [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code),
+                   let attemptID = session.accountMembershipLockAttemptID,
+                   try await transport.participantID() == session.cloudParticipantID {
+                    try? await transport.releaseAccountMembershipLock(householdID: location.householdID,
+                                                                      attemptID: attemptID, now: clock())
+                }
             } else {
                 cloudAccessBlocked = error as? HouseholdError == .wrongAccount || error as? HouseholdError == .malformedData
             }
             if cloudAccessBlocked {
                 var updated = session
                 updated.cloudCanWrite = false
+                if let cloudError = error as? CKError,
+                   [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code) {
+                    updated.accountMembershipLockAttemptID = nil
+                }
                 try? repository.commit(facts: [], session: updated)
                 session = updated
                 cloudIsReadOnly = true

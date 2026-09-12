@@ -55,6 +55,7 @@ final class TestCloudServer {
         var facts: [UUID: HouseholdFact] = [:]
     }
     var zones: [String: Zone] = [:]
+    var accountMembershipLocks: [String: AccountMembershipLock] = [:]
     var createCalls = 0
     var failUploadAfter: Int?
     var writeAllowed = true
@@ -75,6 +76,55 @@ final class TestTransport: HouseholdTransport {
 
     init(server: TestCloudServer, account: String) { self.server = server; self.account = account }
     func participantID() async throws -> String { account }
+    func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                      expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
+        if let existing = server.accountMembershipLocks[account], existing.state == .active {
+            guard existing.householdID == householdID else { throw HouseholdError.accountMembershipConflict }
+            return existing
+        }
+        if let existing = server.accountMembershipLocks[account], existing.state == .provisional,
+           existing.expiresAt > now {
+            guard existing.householdID == householdID, existing.attemptID == attemptID else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            return existing
+        }
+        let lock = AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
+                                         expiresAt: expiresAt, invitationID: nil, memberID: nil, role: nil)
+        server.accountMembershipLocks[account] = lock
+        return lock
+    }
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID, invitationID: UUID?,
+                                       memberID: UUID, role: UserRole, now: Date) async throws -> AccountMembershipLock {
+        guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        if existing.state == .active {
+            guard existing.invitationID == invitationID, existing.memberID == memberID, existing.role == role else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            return existing
+        }
+        guard existing.state == .provisional, existing.attemptID == attemptID,
+              existing.expiresAt > now else { throw HouseholdError.accountMembershipConflict }
+        existing.state = .active
+        existing.expiresAt = .distantFuture
+        existing.invitationID = invitationID
+        existing.memberID = memberID
+        existing.role = role
+        server.accountMembershipLocks[account] = existing
+        return existing
+    }
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws {
+        guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID,
+              existing.attemptID == attemptID else { return }
+        existing.state = .released
+        existing.expiresAt = now
+        existing.invitationID = nil
+        existing.memberID = nil
+        existing.role = nil
+        server.accountMembershipLocks[account] = existing
+    }
     func createZone(for household: Household) async throws -> CloudLocation {
         await beforeCreateZone?()
         server.createCalls += 1

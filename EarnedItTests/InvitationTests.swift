@@ -240,12 +240,90 @@ final class InvitationTests: XCTestCase {
         } catch {
             XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
-        XCTAssertNil(firstError)
+        XCTAssertEqual(firstError as? HouseholdError, .accountMembershipConflict)
         XCTAssertTrue(observedProvisionalState)
-        XCTAssertEqual(first.selectedMember?.id, family.hanna.id)
-        XCTAssertEqual(second.selectedMember?.id, family.hanna.id)
-        XCTAssertEqual(secondTransport.leaveAttempts, 0)
-        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
+        XCTAssertNil(first.selectedMember)
+        XCTAssertNil(second.selectedMember)
+        XCTAssertEqual(secondTransport.leaveAttempts, 1)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
+    }
+
+    func testAccountMembershipLockAtomicallyExcludesConcurrentCrossHouseholdJoin() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
+        let firstInvitation = try await first.store.createChildInvitation(memberID: first.hanna.id)
+        let second = try TestFamily(transport: TestTransport(server: server, account: "second-owner"))
+        let secondInvitation = try await second.store.createChildInvitation(memberID: second.hanna.id)
+        let firstTransport = TestTransport(server: server, account: "shared-account")
+        let secondTransport = TestTransport(server: server, account: "shared-account")
+        let firstJoin = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                           transport: firstTransport, clock: { first.clock.now },
+                                           automaticSync: false)
+        let secondJoin = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                            transport: secondTransport, clock: { first.clock.now },
+                                            automaticSync: false)
+        var secondError: Error?
+        firstTransport.beforeAccept = {
+            do { try await secondJoin.redeemInvitation(secondInvitation.qrPayload) }
+            catch { secondError = error }
+        }
+
+        try await firstJoin.redeemInvitation(firstInvitation.qrPayload)
+
+        XCTAssertEqual(secondError as? HouseholdError, .accountMembershipConflict)
+        XCTAssertEqual(firstJoin.selectedMember?.id, first.hanna.id)
+        XCTAssertNil(secondJoin.household)
+        XCTAssertFalse(server.zones[secondInvitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
+    }
+
+    func testAccountMembershipLockSupportsContinuationStaleRecoveryAndConditionalRelease() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "shared-account")
+        let household = UUID()
+        let otherHousehold = UUID()
+        let attempt = UUID()
+        let member = UUID()
+        let invitation = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let provisional = try await transport.acquireAccountMembershipLock(
+            householdID: household, attemptID: attempt, expiresAt: now.addingTimeInterval(60), now: now
+        )
+        XCTAssertEqual(provisional.state, .provisional)
+        let active = try await transport.activateAccountMembershipLock(
+            householdID: household, attemptID: attempt, invitationID: invitation,
+            memberID: member, role: .child, now: now
+        )
+        let continuation = try await transport.acquireAccountMembershipLock(
+            householdID: household, attemptID: UUID(), expiresAt: now.addingTimeInterval(60), now: now
+        )
+        XCTAssertEqual(continuation, active)
+        await XCTAssertThrowsErrorAsync(
+            try await transport.activateAccountMembershipLock(
+                householdID: household, attemptID: continuation.attemptID, invitationID: invitation,
+                memberID: UUID(), role: .parent, now: now
+            ),
+            expected: .accountMembershipConflict
+        )
+        try await transport.releaseAccountMembershipLock(householdID: household, attemptID: UUID(), now: now)
+        XCTAssertEqual(server.accountMembershipLocks["shared-account"]?.state, .active)
+        try await transport.releaseAccountMembershipLock(householdID: household, attemptID: attempt, now: now)
+        XCTAssertEqual(server.accountMembershipLocks["shared-account"]?.state, .released)
+
+        let staleAttempt = UUID()
+        _ = try await transport.acquireAccountMembershipLock(
+            householdID: household, attemptID: staleAttempt, expiresAt: now.addingTimeInterval(10), now: now
+        )
+        let recovered = try await transport.acquireAccountMembershipLock(
+            householdID: otherHousehold, attemptID: UUID(), expiresAt: now.addingTimeInterval(120),
+            now: now.addingTimeInterval(11)
+        )
+        XCTAssertEqual(recovered.householdID, otherHousehold)
+
+        let otherAccount = TestTransport(server: server, account: "different-account")
+        let isolated = try await otherAccount.acquireAccountMembershipLock(
+            householdID: household, attemptID: UUID(), expiresAt: now.addingTimeInterval(60), now: now
+        )
+        XCTAssertEqual(isolated.householdID, household)
     }
 
     func testExistingAccountMembershipBlocksAnotherFamilyAndProfile() async throws {
