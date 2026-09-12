@@ -74,6 +74,7 @@ final class TestTransport: HouseholdTransport {
     var claimError: Error?
     var leaveError: Error?
     var acceptErrorAfterHook: Error?
+    var invitationValidationTimeFailures = 0
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
@@ -242,7 +243,11 @@ final class TestTransport: HouseholdTransport {
         server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
-        server.authoritativeTime ?? clientTime
+        if invitationValidationTimeFailures > 0 {
+            invitationValidationTimeFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        return server.authoritativeTime ?? clientTime
     }
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
         if let claimError { throw claimError }

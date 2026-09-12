@@ -5,6 +5,7 @@ import CloudKit
 @MainActor
 @Observable
 final class HouseholdStore {
+    private static let pendingInvitationCleanupRetryDelay: TimeInterval = 30
     private let repository: HouseholdRepository
     private let transport: (any HouseholdTransport)?
     private let clock: () -> Date
@@ -54,9 +55,10 @@ final class HouseholdStore {
         snapshot.requests.last { $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID }
     }
     var familyInvitations: [FamilyInvitation] { snapshot.invitations.sorted { $0.createdAt > $1.createdAt } }
-    var pendingInvitationExpiration: Date? {
-        session.pendingInvitationAcceptance?.phase == .awaitingRedemption
-            ? session.pendingInvitationAcceptance?.expiresAt : nil
+    var pendingInvitationCleanupID: String? {
+        guard let pending = session.pendingInvitationAcceptance,
+              pending.phase == .awaitingRedemption else { return nil }
+        return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")"
     }
 
     func dailyList(on date: Date? = nil) -> [DailyChore] {
@@ -1126,6 +1128,32 @@ final class HouseholdStore {
             return true
         default:
             return false
+        }
+    }
+
+    func pendingInvitationCleanupDelay() async throws -> TimeInterval? {
+        guard let pending = session.pendingInvitationAcceptance,
+              pending.phase == .awaitingRedemption else { return nil }
+        guard let expiration = pending.expiresAt else {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        do {
+            let validationTime = try await transport.invitationValidationTime(
+                in: pending.location, clientTime: clock()
+            )
+            return min(max(0, expiration.timeIntervalSince(validationTime)), InvitationCode.lifetime)
+        } catch let error as CKError where Self.isRetryableInvitationError(error) {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+    }
+
+    func retryScheduledInvitationCleanup() async throws -> TimeInterval? {
+        do {
+            try await retryInvitationCleanup()
+            return nil
+        } catch let error as CKError where Self.isRetryableInvitationError(error) {
+            return Self.pendingInvitationCleanupRetryDelay
         }
     }
 

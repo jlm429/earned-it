@@ -32,11 +32,15 @@ struct RootView: View {
             catch { store.errorMessage = error.localizedDescription }
             await acceptInvitation()
         }
-        .task(id: store.pendingInvitationExpiration) {
-            guard let expiration = store.pendingInvitationExpiration else { return }
+        .task(id: "\(scenePhase)-\(store.pendingInvitationCleanupID ?? "none")") {
+            guard scenePhase == .active, store.pendingInvitationCleanupID != nil else { return }
             do {
-                try await Task.sleep(for: .seconds(max(0, expiration.timeIntervalSinceNow)))
-                try await store.retryInvitationCleanup()
+                while let delay = try await store.pendingInvitationCleanupDelay() {
+                    try await ContinuousClock().sleep(for: .seconds(delay))
+                    if let retryDelay = try await store.retryScheduledInvitationCleanup() {
+                        try await ContinuousClock().sleep(for: .seconds(retryDelay))
+                    }
+                }
             } catch is CancellationError {
             } catch {
                 store.errorMessage = error.localizedDescription

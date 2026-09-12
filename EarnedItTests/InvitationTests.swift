@@ -951,6 +951,119 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 1)
     }
 
+    func testPendingCleanupDelayUsesServerTimeWhenDeviceClockIsAhead() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "ahead-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { invitation.invitation.expiresAt.addingTimeInterval(365 * 86_400) },
+                                         automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+
+        let delay = try await joining.pendingInvitationCleanupDelay()
+
+        XCTAssertEqual(delay, InvitationCode.lifetime - 60)
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+    }
+
+    func testPendingCleanupDelayUsesServerTimeWhenDeviceClockIsBehind() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "behind-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { invitation.invitation.createdAt.addingTimeInterval(-365 * 86_400) },
+                                         automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+
+        let delay = try await joining.pendingInvitationCleanupDelay()
+
+        XCTAssertEqual(delay, InvitationCode.lifetime - 60)
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+    }
+
+    func testPendingCleanupEarlyWakeRecomputesAuthoritativeDelay() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "early-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        let firstDelay = try await joining.pendingInvitationCleanupDelay()
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(120)
+
+        let retryDelay = try await joining.retryScheduledInvitationCleanup()
+        let rescheduledDelay = try await joining.pendingInvitationCleanupDelay()
+
+        XCTAssertNil(retryDelay)
+        XCTAssertEqual(firstDelay, InvitationCode.lifetime - 60)
+        XCTAssertEqual(rescheduledDelay, InvitationCode.lifetime - 120)
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+    }
+
+    func testPendingCleanupTransientValidationFailureUsesBoundedBackoff() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "retry-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        transport.invitationValidationTimeFailures = 1
+
+        let retryDelay = try await joining.pendingInvitationCleanupDelay()
+        transport.invitationValidationTimeFailures = 1
+        let wakeRetryDelay = try await joining.retryScheduledInvitationCleanup()
+        let recoveredDelay = try await joining.pendingInvitationCleanupDelay()
+
+        XCTAssertEqual(retryDelay, 30)
+        XCTAssertEqual(wakeRetryDelay, 30)
+        XCTAssertEqual(recoveredDelay, InvitationCode.lifetime - 60)
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+    }
+
+    func testScheduledPendingCleanupLeavesAccessAtAuthoritativeExpiry() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "expired-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { invitation.invitation.createdAt.addingTimeInterval(-365 * 86_400) },
+                                         automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        server.authoritativeTime = invitation.invitation.expiresAt
+
+        let cleanupDelay = try await joining.pendingInvitationCleanupDelay()
+        let retryDelay = try await joining.retryScheduledInvitationCleanup()
+
+        XCTAssertEqual(cleanupDelay, 0)
+        XCTAssertNil(retryDelay)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+        XCTAssertFalse(server.zones[location.zoneName]!.participants.contains("expired-child"))
+    }
+
     func testMembershipLeaseUsesServerTimeAcrossDivergentDeviceClocks() async throws {
         let server = TestCloudServer()
         let joiningTransport = TestTransport(server: server, account: "skewed-child")
