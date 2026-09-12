@@ -50,9 +50,13 @@ final class TestCloudServer {
         let name: String
         let owner: String
         var participants: Set<String> = []
+        var pendingInvitationParticipants: Set<String> = []
+        var claimedInvitationAccounts: [String: String] = [:]
         var facts: [UUID: HouseholdFact] = [:]
     }
     var zones: [String: Zone] = [:]
+    var accountMembershipLocks: [String: AccountMembershipLock] = [:]
+    var authoritativeTime: Date?
     var createCalls = 0
     var failUploadAfter: Int?
     var writeAllowed = true
@@ -61,14 +65,110 @@ final class TestCloudServer {
 @MainActor
 final class TestTransport: HouseholdTransport {
     let server: TestCloudServer
-    var account: String
+    var account: String {
+        didSet {
+            if account != oldValue { accountGeneration &+= 1 }
+        }
+    }
+    private var accountGeneration: UInt64 = 0
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
+    var leaveFailures = 0
+    var accountLockReleaseFailures = 0
+    var accountLockActivationFailures = 0
+    var claimError: Error?
+    var leaveError: Error?
+    var acceptErrorAfterHook: Error?
+    var invitationValidationTimeFailures = 0
+    private(set) var leaveAttempts = 0
+    private(set) var leaveMutationEnqueues = 0
+    private(set) var accountLockMutationEnqueues = 0
+    var beforeAccept: (() async -> Void)?
+    var beforeLeave: (() async -> Void)?
+    var beforeLeaveSubmission: (() async -> Void)?
+    var beforeAccountLockRelease: (() async -> Void)?
+    var beforeAccountLockReleaseSubmission: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
     init(server: TestCloudServer, account: String) { self.server = server; self.account = account }
+    func accountDidChange() { accountGeneration &+= 1 }
     func participantID() async throws -> String { account }
+    func accountMembershipLock() async throws -> AccountMembershipLock? {
+        server.accountMembershipLocks[account]
+    }
+    func accountMembershipValidationTime(clientTime: Date) async throws -> Date {
+        server.authoritativeTime ?? clientTime
+    }
+    func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                      leaseDuration: TimeInterval, clientTime: Date) async throws
+        -> AccountMembershipLock {
+        let now = server.authoritativeTime ?? clientTime
+        if let existing = server.accountMembershipLocks[account], existing.state == .active {
+            return existing
+        }
+        if let existing = server.accountMembershipLocks[account], existing.state == .provisional {
+            return existing
+        }
+        let lock = AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .provisional,
+                                         expiresAt: now.addingTimeInterval(min(max(leaseDuration, 0),
+                                                                               InvitationCode.lifetime)),
+                                         claimBinding: nil)
+        server.accountMembershipLocks[account] = lock
+        return lock
+    }
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                       claimBinding: String, now: Date) async throws -> AccountMembershipLock {
+        if accountLockActivationFailures > 0 {
+            accountLockActivationFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        if existing.state == .active {
+            guard existing.claimBinding == claimBinding else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            return existing
+        }
+        guard existing.state == .provisional,
+              existing.attemptID == attemptID else { throw HouseholdError.accountMembershipConflict }
+        existing.state = .active
+        existing.expiresAt = .distantFuture
+        existing.claimBinding = claimBinding
+        server.accountMembershipLocks[account] = existing
+        return existing
+    }
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
+                                      now: Date) async throws -> Bool {
+        let expectedGeneration = accountGeneration
+        await beforeAccountLockRelease?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        await beforeAccountLockReleaseSubmission?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        accountLockMutationEnqueues += 1
+        if accountLockReleaseFailures > 0 {
+            accountLockReleaseFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID,
+              existing.attemptID == attemptID else { return false }
+        existing.state = .released
+        existing.expiresAt = now
+        existing.claimBinding = nil
+        server.accountMembershipLocks[account] = existing
+        return true
+    }
+    func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
+        guard let (name, zone) = server.zones.first(where: { $0.value.householdID == householdID
+            && ($0.value.owner == account || $0.value.participants.contains(account)) }) else { return nil }
+        return CloudLocation(householdID: householdID, zoneName: name, ownerName: zone.owner,
+                             isOwner: zone.owner == account)
+    }
     func createZone(for household: Household) async throws -> CloudLocation {
         await beforeCreateZone?()
         server.createCalls += 1
@@ -83,11 +183,61 @@ final class TestTransport: HouseholdTransport {
         }.filter { $0.location.isOwner || server.zones[$0.location.zoneName]!.participants.contains(account) }
     }
     func accept(url: URL) async throws -> CloudLocation {
+        let location = try await invitationLocation(for: url)
+        try await accept(url: url, expected: location)
+        return location
+    }
+    func invitationLocation(for url: URL) async throws -> CloudLocation {
         guard let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitation }
+        return CloudLocation(householdID: zone.householdID, zoneName: url.lastPathComponent,
+                             ownerName: zone.owner, isOwner: zone.owner == account)
+    }
+    func invitationLocation(for metadata: CKShare.Metadata) throws -> CloudLocation { throw HouseholdError.invitation }
+    func hasAcceptedAccess(to location: CloudLocation) async throws -> Bool {
+        guard let zone = server.zones[location.zoneName] else { return false }
+        return zone.owner == account || zone.participants.contains(account)
+    }
+    func accept(url: URL, expected location: CloudLocation) async throws {
+        guard try await invitationLocation(for: url) == location,
+              let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitationNotFound }
+        await beforeAccept?()
+        if let acceptErrorAfterHook { throw acceptErrorAfterHook }
+        if let participantID = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+            .first(where: { $0.name == "invitation" })?.value {
+            guard zone.pendingInvitationParticipants.contains(participantID) else { throw HouseholdError.invitationConsumed }
+            server.zones[url.lastPathComponent]?.pendingInvitationParticipants.remove(participantID)
+            server.zones[url.lastPathComponent]?.claimedInvitationAccounts[participantID] = account
+        }
         server.zones[url.lastPathComponent]?.participants.insert(account)
-        return CloudLocation(householdID: zone.householdID, zoneName: url.lastPathComponent, ownerName: zone.owner, isOwner: zone.owner == account)
     }
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation { throw HouseholdError.invitation }
+    func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws {
+        throw HouseholdError.invitation
+    }
+    func leave(_ location: CloudLocation, expectedParticipantID: String) async throws {
+        let expectedGeneration = accountGeneration
+        leaveAttempts += 1
+        await beforeLeave?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        await beforeLeaveSubmission?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        leaveMutationEnqueues += 1
+        if let leaveError { throw leaveError }
+        if leaveFailures > 0 {
+            leaveFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        guard server.zones[location.zoneName]?.owner != account else { return }
+        server.zones[location.zoneName]?.participants.remove(account)
+        let participantIDs = server.zones[location.zoneName]?.claimedInvitationAccounts
+            .filter { $0.value == account }.map(\.key) ?? []
+        for participantID in participantIDs {
+            server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID)
+        }
+    }
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
         await beforeFetch?()
         if let fetchError { throw fetchError }
@@ -105,5 +255,58 @@ final class TestTransport: HouseholdTransport {
         }
     }
     func share(for location: CloudLocation, title: String) async throws -> CKShare { throw HouseholdError.cloudUnavailable }
+    func createInvitationAccess(for location: CloudLocation, title: String,
+                                role: UserRole) async throws -> CloudInvitationAccess {
+        guard let zone = server.zones[location.zoneName],
+              zone.owner == account else { throw HouseholdError.invitationOwnerRequired }
+        let participantID = UUID().uuidString
+        server.zones[location.zoneName]?.pendingInvitationParticipants.insert(participantID)
+        let url = URL(string: "https://test.invalid/\(location.zoneName)?invitation=\(participantID)")!
+        return CloudInvitationAccess(participantID: participantID, url: url)
+    }
+    func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
+        server.zones[location.zoneName]?.pendingInvitationParticipants.remove(participantID)
+        if let account = server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID) {
+            server.zones[location.zoneName]?.participants.remove(account)
+        }
+    }
+    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
+        server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
+    }
+    func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
+        if invitationValidationTimeFailures > 0 {
+            invitationValidationTimeFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        return server.authoritativeTime ?? clientTime
+    }
+    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
+        if let claimError { throw claimError }
+        guard server.writeAllowed, facts.count == 2,
+              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+            throw HouseholdError.readOnly
+        }
+        for fact in facts {
+            if let existing = server.zones[location.zoneName]?.facts[fact.id],
+               !Self.isSameInvitationClaim(existing, as: fact) {
+                throw HouseholdError.invitationConsumed
+            }
+        }
+        for fact in facts {
+            server.zones[location.zoneName]?.facts[fact.id] = fact
+            uploadedIDs.append(fact.id)
+        }
+        return facts
+    }
     func canWrite(to location: CloudLocation) async throws -> Bool { server.writeAllowed }
+
+    private static func isSameInvitationClaim(_ lhs: HouseholdFact, as rhs: HouseholdFact) -> Bool {
+        guard lhs.id == rhs.id, lhs.householdID == rhs.householdID,
+              lhs.authorDeviceID == rhs.authorDeviceID, lhs.authorMemberID == nil, rhs.authorMemberID == nil,
+              case .invitationClaim(let left) = lhs.body,
+              case .invitationClaim(let right) = rhs.body else { return false }
+        return left.invitationID == right.invitationID && left.deviceID == right.deviceID
+            && left.cloudParticipantID == right.cloudParticipantID && left.memberID == right.memberID
+            && left.codeDigest == right.codeDigest
+    }
 }

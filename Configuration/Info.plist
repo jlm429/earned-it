@@ -3,4 +3,6 @@
 <plist version="1.0"><dict>
     <key>CKSharingSupported</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Scan an Earned It family invitation QR code.</string>
 </dict></plist>

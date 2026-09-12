@@ -170,6 +170,35 @@ struct ProfileGrant: Codable, Equatable {
     var key: String { "\(cloudParticipantID)/\(deviceID)" }
 }
 
+/// A parent-issued, short-lived authorization for exactly one existing family profile.
+/// The clear-text code is never persisted in the household journal.
+struct FamilyInvitation: Codable, Equatable, Identifiable {
+    let id: UUID
+    let householdID: UUID
+    let claimFactID: UUID
+    let memberID: UUID
+    let role: UserRole
+    let codeDigest: String
+    let createdAt: Date
+    let expiresAt: Date
+    let createdByMemberID: UUID
+    let cloudShareParticipantID: String
+}
+
+struct InvitationClaim: Codable, Equatable {
+    let invitationID: UUID
+    let deviceID: UUID
+    let cloudParticipantID: String
+    let memberID: UUID
+    let codeDigest: String
+    let claimedAt: Date
+}
+
+struct InvitationRevocation: Codable, Equatable {
+    let invitationID: UUID
+    let revokedByMemberID: UUID
+}
+
 enum HouseholdFactBody: Codable, Equatable {
     case household(Household)
     case member(FamilyMember)
@@ -179,6 +208,9 @@ enum HouseholdFactBody: Codable, Equatable {
     case excuse(Excuse)
     case request(ProfileRequest)
     case grant(ProfileGrant)
+    case invitation(FamilyInvitation)
+    case invitationClaim(InvitationClaim)
+    case invitationRevocation(InvitationRevocation)
 }
 
 /// Lamport order plus UUID gives deterministic resolution without device clock ordering.
@@ -206,6 +238,9 @@ struct HouseholdSnapshot: Equatable {
     var excuses: [Excuse] = []
     var requests: [ProfileRequest] = []
     var grants: [ProfileGrant] = []
+    var invitations: [FamilyInvitation] = []
+    var invitationClaims: [InvitationClaim] = []
+    var invitationRevocations: [InvitationRevocation] = []
 
     init(facts: [HouseholdFact] = []) {
         var membersByID: [UUID: FamilyMember] = [:]
@@ -214,6 +249,9 @@ struct HouseholdSnapshot: Equatable {
         var excusesByKey: [String: Excuse] = [:]
         var requestsByID: [UUID: ProfileRequest] = [:]
         var grantsByKey: [String: ProfileGrant] = [:]
+        var invitationsByID: [UUID: FamilyInvitation] = [:]
+        var claimsByInvitationID: [UUID: InvitationClaim] = [:]
+        var revocationsByInvitationID: [UUID: InvitationRevocation] = [:]
         for fact in facts.sorted(by: HouseholdFact.precedes) {
             switch fact.body {
             case .household(let value): household = value
@@ -228,6 +266,9 @@ struct HouseholdSnapshot: Equatable {
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
             case .grant(let value): grantsByKey[value.key] = value
+            case .invitation(let value): invitationsByID[value.id] = value
+            case .invitationClaim(let value): claimsByInvitationID[value.invitationID] = value
+            case .invitationRevocation(let value): revocationsByInvitationID[value.invitationID] = value
             }
         }
         let parents = membersByID.values.filter { $0.role == .parent }.sorted {
@@ -241,6 +282,9 @@ struct HouseholdSnapshot: Equatable {
         excuses = excusesByKey.values.sorted { $0.key < $1.key }
         requests = requestsByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
         grants = grantsByKey.values.sorted { $0.key < $1.key }
+        invitations = invitationsByID.values.sorted { $0.createdAt < $1.createdAt }
+        invitationClaims = claimsByInvitationID.values.sorted { $0.invitationID.uuidString < $1.invitationID.uuidString }
+        invitationRevocations = revocationsByInvitationID.values.sorted { $0.invitationID.uuidString < $1.invitationID.uuidString }
     }
 
     func configuration(choreID: UUID, on day: CivilDay) -> ChoreRevision? {
@@ -261,4 +305,8 @@ struct HouseholdSnapshot: Equatable {
     }
 
     func member(_ id: UUID) -> FamilyMember? { members.first { $0.id == id } }
+
+    func invitation(_ id: UUID) -> FamilyInvitation? { invitations.first { $0.id == id } }
+    func invitationClaim(_ id: UUID) -> InvitationClaim? { invitationClaims.first { $0.invitationID == id } }
+    func isInvitationRevoked(_ id: UUID) -> Bool { invitationRevocations.contains { $0.invitationID == id } }
 }

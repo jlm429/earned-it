@@ -23,6 +23,10 @@ final class EarnedItUITests: XCTestCase {
     }
 
     func testPartialSetupDuplicatePreventionAndConfirmedResetAtLargeType() throws {
+        reveal(app.buttons["join-family"])
+        XCTAssertTrue(app.buttons["join-family"].exists)
+        reveal(app.buttons["create-family"])
+        XCTAssertTrue(app.buttons["create-family"].exists)
         createFamily()
         relaunch(largeType: true)
         XCTAssertTrue(app.navigationBars["Family Setup"].waitForExistence(timeout: 8))
@@ -44,6 +48,9 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
         keepScreenshot("empty-parent-largest-text")
         tap("family-management")
+        reveal(app.buttons["invite-profile"])
+        XCTAssertTrue(app.buttons["invite-profile"].exists)
+        XCTAssertFalse(app.buttons["manage-apple-sharing"].exists)
         tap("household-settings")
         tap("clear-all-data")
         tap("Cancel")
@@ -371,8 +378,9 @@ final class EarnedItUITests: XCTestCase {
     private func checkJoinFailureKeepsFreshSetup() throws {
         tap("join-family")
         keepScreenshot("native-join-existing-family")
-        tap("find-families")
-        XCTAssertTrue(app.alerts["Unable to Connect"].waitForExistence(timeout: 5))
+        fill("invitation-code", with: "23456789AB")
+        tap("accept-invitation")
+        XCTAssertTrue(app.alerts["Unable to Join"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'iCloud sharing is unavailable'")).firstMatch.exists)
         keepScreenshot("unsigned-simulator-sharing-dependency")
         tap("OK")

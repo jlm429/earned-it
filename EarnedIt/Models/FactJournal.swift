@@ -38,6 +38,23 @@ struct CloudLocation: Codable, Equatable, Identifiable {
     var id: String { "\(ownerName)/\(zoneName)" }
 }
 
+enum PendingInvitationPhase: String, Codable, Equatable {
+    case acceptingAccess
+    case awaitingRedemption
+    case cleanupRequired
+}
+
+struct PendingInvitationAcceptance: Codable, Equatable {
+    let location: CloudLocation
+    let cloudParticipantID: String
+    let retainedFactIDs: [UUID]?
+    let accessExistedBeforeAttempt: Bool?
+    var accountLockAttemptID: UUID?
+    var invitationID: UUID?
+    var expiresAt: Date?
+    var phase: PendingInvitationPhase
+}
+
 struct DeviceSession: Codable, Equatable {
     var deviceID = UUID()
     var householdID: UUID?
@@ -46,4 +63,10 @@ struct DeviceSession: Codable, Equatable {
     var location: CloudLocation?
     var cloudCanWrite: Bool?
     var celebratedWeeks: [String]?
+    /// Preserves only the profile selected by an older owner-account installation.
+    /// New joins set an empty array and rely on an invitation claim or shared grant.
+    var legacyProfileIDs: [UUID]?
+    var pendingInvitationAcceptance: PendingInvitationAcceptance?
+    var accountMembershipLockAttemptID: UUID?
+    var accountMembershipClaimBinding: String?
 }

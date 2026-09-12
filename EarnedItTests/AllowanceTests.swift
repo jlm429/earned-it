@@ -187,6 +187,12 @@ final class AllowanceTests: XCTestCase {
                                        transport: TestTransport(server: server, account: "owner"),
                                        clock: { family.clock.now }, automaticSync: false)
         try await other.joinExisting(family.store.session.location!)
+        try other.requestProfiles([family.parent.id], deviceName: "Existing parent installation")
+        try await other.synchronize()
+        try await family.store.synchronize()
+        try family.store.approve(XCTUnwrap(family.store.pendingRequests.first), memberIDs: [family.parent.id])
+        try await family.store.synchronize()
+        try await other.synchronize()
         try other.selectProfile(family.parent.id)
         family.move(to: "2026-09-14T16:00:00Z")
         try family.store.saveAllowance(memberID: family.hanna.id, text: "20.50", currencyCode: "USD", locale: us)

@@ -5,6 +5,7 @@ import CloudKit
 @MainActor
 @Observable
 final class HouseholdStore {
+    private static let pendingInvitationCleanupRetryDelay: TimeInterval = 30
     private let repository: HouseholdRepository
     private let transport: (any HouseholdTransport)?
     private let clock: () -> Date
@@ -22,6 +23,7 @@ final class HouseholdStore {
     var errorMessage: String?
     private var syncTask: Task<Void, Never>?
     private var activeSync: Task<Void, Error>?
+    private var invitationCleanupTail: Task<Void, Never>?
     private var syncAgain = false
     private var facts: [HouseholdFact] = []
 
@@ -35,6 +37,7 @@ final class HouseholdStore {
         today = clock()
         cloudIsReadOnly = session.location != nil && session.cloudCanWrite != true
         try reload()
+        try migrateLegacyProfileAccess()
     }
 
     var household: Household? { snapshot.household }
@@ -51,6 +54,15 @@ final class HouseholdStore {
     }
     var currentRequest: ProfileRequest? {
         snapshot.requests.last { $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID }
+    }
+    var familyInvitations: [FamilyInvitation] { snapshot.invitations.sorted { $0.createdAt > $1.createdAt } }
+    var pendingInvitationCleanupID: String? {
+        guard let pending = session.pendingInvitationAcceptance else { return nil }
+        return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")/\(pending.phase.rawValue)"
+    }
+
+    func cloudAccountDidChange() {
+        transport?.accountDidChange()
     }
 
     func dailyList(on date: Date? = nil) -> [DailyChore] {
@@ -149,6 +161,7 @@ final class HouseholdStore {
         var updated = session
         updated.householdID = household.id
         updated.selectedMemberID = parent.id
+        updated.legacyProfileIDs = []
         let created = [
             HouseholdFact(id: UUID(), householdID: household.id, sequence: 1, authorDeviceID: session.deviceID,
                           authorMemberID: parent.id, body: .household(household)),
@@ -298,16 +311,126 @@ final class HouseholdStore {
                                        cloudParticipantID: grant.cloudParticipantID, memberIDs: [], approvedBy: parent.id)))
     }
 
+    func invitationStatus(_ invitation: FamilyInvitation) -> InvitationLifecycleStatus {
+        snapshot.invitationStatus(invitation, now: clock())
+    }
+
+    func createChildInvitation(memberID: UUID) async throws -> IssuedFamilyInvitation {
+        try requireParent()
+        guard let member = snapshot.member(memberID), member.role == .child,
+              snapshot.isActive(member, on: day) else { throw HouseholdError.permission }
+        return try await issueInvitation(for: member, adding: nil)
+    }
+
+    func createParentInvitation(name: String, avatar: AvatarOption) async throws -> IssuedFamilyInvitation {
+        try requireParent()
+        guard let household else { throw HouseholdError.noHousehold }
+        let name = try validatedName(name)
+        guard !snapshot.members.contains(where: {
+            $0.role == .parent && $0.archivedFrom == nil
+                && $0.displayName.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }) else { throw HouseholdError.duplicateName }
+        let member = FamilyMember(id: UUID(), householdID: household.id, displayName: name, role: .parent,
+                                  avatar: avatar, joinedDay: day)
+        return try await issueInvitation(for: member, adding: member)
+    }
+
+    func revokeInvitation(_ invitation: FamilyInvitation) async throws {
+        try requireParent()
+        guard snapshot.invitation(invitation.id) == invitation,
+              snapshot.invitationClaim(invitation.id)?.deviceID != session.deviceID,
+              let parent = selectedMember, let transport, let location = session.location else {
+            throw HouseholdError.permission
+        }
+        try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID, from: location)
+        var bodies: [HouseholdFactBody] = [
+            .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
+                                                       revokedByMemberID: parent.id))
+        ]
+        if snapshot.invitationClaim(invitation.id) == nil, invitation.role == .parent,
+           var unclaimedParent = snapshot.member(invitation.memberID) {
+            unclaimedParent.archivedFrom = day
+            bodies.append(.member(unclaimedParent))
+        }
+        try append(bodies)
+        try await synchronize()
+    }
+
+    private func issueInvitation(for member: FamilyMember, adding newMember: FamilyMember?) async throws
+        -> IssuedFamilyInvitation {
+        try requireParent()
+        guard let household, member.householdID == household.id, member.role == .parent || newMember == nil else {
+            throw HouseholdError.permission
+        }
+        if session.location?.isOwner == true {
+            try await pruneUnavailableInvitationAccess()
+        }
+        let code = try InvitationCode.generate()
+        if session.location == nil { try await connect() }
+        try await synchronize()
+        guard let transport, let location = session.location, let parent = selectedMember else {
+            throw HouseholdError.cloudUnavailable
+        }
+        let now = try await transport.invitationValidationTime(in: location, clientTime: clock())
+        let issuedMember = newMember.map {
+            FamilyMember(id: $0.id, householdID: $0.householdID, displayName: $0.displayName,
+                         role: $0.role, avatar: $0.avatar,
+                         joinedDay: CivilDay(now, calendar: household.calendar), archivedFrom: $0.archivedFrom)
+        }
+        let access = try await transport.createInvitationAccess(for: location, title: household.name, role: member.role)
+        let invitation = FamilyInvitation(id: UUID(), householdID: household.id, claimFactID: UUID(),
+                                          memberID: member.id, role: member.role,
+                                          codeDigest: InvitationCode.digest(code)!, createdAt: now,
+                                          expiresAt: now.addingTimeInterval(InvitationCode.lifetime),
+                                          createdByMemberID: parent.id,
+                                          cloudShareParticipantID: access.participantID)
+        do {
+            var bodies: [HouseholdFactBody] = []
+            if let issuedMember { bodies.append(.member(issuedMember)) }
+            bodies.append(.invitation(invitation))
+            try append(bodies)
+            try await synchronize()
+            return IssuedFamilyInvitation(invitation: invitation, code: code, shareURL: access.url)
+        } catch {
+            try? await transport.revokeInvitationAccess(participantID: access.participantID, from: location)
+            if snapshot.invitation(invitation.id) != nil {
+                var cleanup: [HouseholdFactBody] = [
+                    .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
+                                                               revokedByMemberID: parent.id))
+                ]
+                if var unsharedParent = issuedMember {
+                    unsharedParent.archivedFrom = day
+                    cleanup.append(.member(unsharedParent))
+                }
+                try? append(cleanup)
+            }
+            throw error
+        }
+    }
+
     func connect() async throws {
         try requireParent()
         guard let household, let transport else { throw HouseholdError.cloudUnavailable }
-        guard session.location == nil else { try await synchronize(); return }
+        if session.location != nil {
+            try await synchronize()
+            try await reconcileAccountMembershipLock()
+            return
+        }
         let connectingSession = session
         let participant = try await transport.participantID()
         guard session.deviceID == connectingSession.deviceID,
               session.householdID == connectingSession.householdID, session.location == nil else {
             throw HouseholdError.noHousehold
         }
+        let binding = AccountMembershipBinding.owner(householdID: household.id)
+        let lock = try await acquireAccountMembershipLock(householdID: household.id,
+                                                          attemptID: session.accountMembershipLockAttemptID,
+                                                          matching: binding)
+        var provisional = session
+        provisional.cloudParticipantID = participant
+        provisional.accountMembershipLockAttemptID = lock.attemptID
+        try repository.commit(facts: [], session: provisional)
+        session = provisional
         let location = try await transport.createZone(for: household)
         guard session.deviceID == connectingSession.deviceID,
               session.householdID == connectingSession.householdID, session.location == nil else {
@@ -316,9 +439,18 @@ final class HouseholdStore {
         var updated = session
         updated.location = location
         updated.cloudParticipantID = participant
+        updated.accountMembershipLockAttemptID = lock.attemptID
         try repository.commit(facts: [], session: updated)
         session = updated
         try await synchronize()
+        let active = try await transport.activateAccountMembershipLock(householdID: household.id,
+                                                                        attemptID: lock.attemptID,
+                                                                        claimBinding: binding, now: clock())
+        var connected = session
+        connected.accountMembershipLockAttemptID = active.attemptID
+        connected.accountMembershipClaimBinding = binding
+        try repository.commit(facts: [], session: connected)
+        session = connected
     }
 
     func discoverFamilies() async throws -> [CloudFamily] {
@@ -328,43 +460,325 @@ final class HouseholdStore {
         return try await transport.discoverFamilies()
     }
 
+    func discoverOwnerRecoveries() async throws -> [CloudFamily] {
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        let candidates = try await filteredOwnerRecoveryCandidates()
+        guard candidates.count == 1 else { return [] }
+        return [candidates[0].family]
+    }
+
+    func recoverOwnerFamily(_ location: CloudLocation) async throws {
+        guard session.householdID == nil, location.isOwner else { throw HouseholdError.invitationUnavailable }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let participant = try await transport.participantID()
+        let binding = AccountMembershipBinding.owner(householdID: location.householdID)
+        if let existing = try await transport.accountMembershipLock(), existing.state == .active,
+           (existing.householdID != location.householdID || existing.claimBinding != binding) {
+            throw HouseholdError.accountMembershipConflict
+        }
+        let candidates = try await filteredOwnerRecoveryCandidates()
+        guard candidates.count == 1, candidates[0].family.location == location else {
+            throw HouseholdError.invitationUnavailable
+        }
+        let member = candidates[0].member
+        let attemptID = session.accountMembershipLockAttemptID ?? UUID()
+        let lock = try await acquireAccountMembershipLock(householdID: location.householdID,
+                                                          attemptID: attemptID, matching: binding)
+        if session.accountMembershipLockAttemptID != lock.attemptID || session.cloudParticipantID != participant {
+            var provisional = session
+            provisional.accountMembershipLockAttemptID = lock.attemptID
+            provisional.cloudParticipantID = participant
+            try repository.commit(facts: [], session: provisional)
+            session = provisional
+        }
+        let refreshed: (family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])
+        do {
+            let refreshedCandidates = try await filteredOwnerRecoveryCandidates()
+            guard refreshedCandidates.count == 1, let candidate = refreshedCandidates.first,
+                  candidate.family.location == location,
+                  candidate.member.id == member.id else { throw HouseholdError.invitationUnavailable }
+            refreshed = candidate
+        } catch {
+            if lock.state == .provisional, lock.attemptID == attemptID {
+                if (try? await transport.releaseAccountMembershipLock(
+                    householdID: location.householdID, attemptID: attemptID,
+                    expectedParticipantID: participant, now: clock()
+                )) == true {
+                    var cleared = session
+                    cleared.accountMembershipLockAttemptID = nil
+                    do {
+                        try repository.commit(facts: [], session: cleared)
+                        session = cleared
+                    } catch {}
+                }
+            }
+            throw error
+        }
+        let active = try await transport.activateAccountMembershipLock(householdID: location.householdID,
+                                                                        attemptID: lock.attemptID,
+                                                                        claimBinding: binding, now: clock())
+        var updated = session
+        updated.householdID = location.householdID
+        updated.location = location
+        updated.cloudParticipantID = participant
+        updated.selectedMemberID = member.id
+        updated.cloudCanWrite = true
+        updated.legacyProfileIDs = [member.id]
+        updated.accountMembershipLockAttemptID = active.attemptID
+        updated.accountMembershipClaimBinding = binding
+        try repository.commit(facts: refreshed.facts, session: updated, uploaded: true)
+        session = updated
+        try reload()
+        cloudIsReadOnly = false
+        syncMessage = "Family connected"
+    }
+
     func join(url: URL) async throws {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
-        let location = try await transport.accept(url: url)
-        try await importFamily(location, participant: participant)
+        let location = try await transport.invitationLocation(for: url)
+        var binding = location.isOwner ? AccountMembershipBinding.owner(householdID: location.householdID) : nil
+        if binding == nil, try await transport.hasAcceptedAccess(to: location) {
+            let remote = try await transport.fetch(from: location)
+            try validate(remote, householdID: location.householdID)
+            binding = try membershipBinding(in: HouseholdSnapshot(facts: remote), location: location,
+                                              participant: participant)
+        }
+        let lock = try await acquireAccountMembershipLock(householdID: location.householdID,
+                                                          attemptID: session.accountMembershipLockAttemptID,
+                                                          matching: binding)
+        if session.accountMembershipLockAttemptID != lock.attemptID || session.cloudParticipantID != participant {
+            var updated = session
+            updated.accountMembershipLockAttemptID = lock.attemptID
+            updated.cloudParticipantID = participant
+            try repository.commit(facts: [], session: updated)
+            session = updated
+        }
+        try await transport.accept(url: url, expected: location)
+        try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
+    }
+
+    func join(url: URL, invitationCode: String) async throws {
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        try await retryInvitationCleanup()
+        let participant = try await transport.participantID()
+        let location = try await transport.invitationLocation(for: url)
+        if try await resumeAccountMembership(participant: participant, requestedLocation: location,
+                                             invitationCode: invitationCode) { return }
+        try await prepareInvitationAcceptance(url: url, location: location, participant: participant)
+        do { try await redeemInvitation(invitationCode, in: location, participant: participant) }
+        catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
+        catch {
+            let redemptionError = error
+            try await abandonPendingInvitationAcceptance(preserving: redemptionError)
+        }
+    }
+
+    func redeemInvitation(_ text: String) async throws {
+        guard let credential = InvitationCredential(text: text) else { throw HouseholdError.invitationNotFound }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        if let location = session.location, let participant = session.cloudParticipantID {
+            do {
+                if let shareURL = credential.shareURL,
+                   session.pendingInvitationAcceptance?.phase == .awaitingRedemption {
+                    guard try await transport.invitationLocation(for: shareURL) == location else {
+                        throw HouseholdError.invitationNotFound
+                    }
+                }
+                try await redeemInvitation(credential.code, in: location, participant: participant)
+            }
+            catch {
+                guard session.pendingInvitationAcceptance?.phase == .awaitingRedemption else { throw error }
+                if let cloudError = error as? CKError, Self.isRetryableInvitationError(cloudError) { throw error }
+                try await abandonPendingInvitationAcceptance(preserving: error)
+            }
+            return
+        }
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        try await retryInvitationCleanup()
+        let participant = try await transport.participantID()
+        if let shareURL = credential.shareURL {
+            let location = try await transport.invitationLocation(for: shareURL)
+            if try await resumeAccountMembership(participant: participant, requestedLocation: location,
+                                                 invitationCode: credential.code) { return }
+            try await prepareInvitationAcceptance(url: shareURL, location: location, participant: participant)
+            do { try await redeemInvitation(credential.code, in: location, participant: participant) }
+            catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
+            catch {
+                try await abandonPendingInvitationAcceptance(preserving: error)
+            }
+            return
+        }
+        if try await resumeAccountMembership(participant: participant, requestedLocation: nil,
+                                             invitationCode: credential.code) { return }
+        let families = try await transport.discoverFamilies()
+        for family in families {
+            let remote = try await transport.fetch(from: family.location)
+            let imported = HouseholdSnapshot(facts: remote)
+            if imported.invitation(matchingCode: credential.code) != nil {
+                try await redeemInvitation(credential.code, in: family.location, participant: participant, remote: remote)
+                return
+            }
+        }
+        throw HouseholdError.invitationNotFound
     }
 
     func accept(metadata: CKShare.Metadata) async {
         do {
-            guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
             guard let transport else { throw HouseholdError.cloudUnavailable }
-            let participant = try await transport.participantID()
-            let location = try await transport.accept(metadata: metadata)
-            try await importFamily(location, participant: participant)
+            let location = try transport.invitationLocation(for: metadata)
+            try await acceptSystemInvitation(location: location) {
+                try await transport.accept(metadata: metadata, expected: location)
+            }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    func acceptSystemInvitation(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        try await retryInvitationCleanup()
+        let participant = try await transport.participantID()
+        if try await resumeAccountMembership(participant: participant, requestedLocation: location,
+                                             invitationCode: nil) { return }
+        let accessExisted = try await transport.hasAcceptedAccess(to: location)
+        let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
+        try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                             accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
+        do {
+            try await acceptance()
+            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            try await identifyPendingInvitation(in: location)
+            try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
+        }
+        catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
+        catch { try await abandonPendingInvitationAcceptance(preserving: error) }
     }
 
     func joinExisting(_ location: CloudLocation) async throws {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
-        try await importFamily(location, participant: transport.participantID())
+        let participant = try await transport.participantID()
+        let binding = location.isOwner ? AccountMembershipBinding.owner(householdID: location.householdID) : nil
+        let lock = try await acquireAccountMembershipLock(householdID: location.householdID,
+                                                          attemptID: session.accountMembershipLockAttemptID,
+                                                          matching: binding)
+        try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
     }
 
-    private func importFamily(_ location: CloudLocation, participant: String) async throws {
+    private func redeemInvitation(_ code: String, in location: CloudLocation, participant: String,
+                                  remote suppliedFacts: [HouseholdFact]? = nil) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard session.householdID == nil || session.householdID == location.householdID else {
+            throw HouseholdError.alreadyHasHousehold
+        }
+        let remote: [HouseholdFact]
+        if let suppliedFacts { remote = suppliedFacts }
+        else { remote = try await transport.fetch(from: location) }
+        try validate(remote, householdID: location.householdID)
+        let imported = HouseholdSnapshot(facts: remote)
+        try validateCompleteFamily(imported, householdID: location.householdID)
+        if let membership = try imported.committedAccountMembership(participantID: participant) {
+            guard InvitationCode.digest(code) == membership.claim.codeDigest else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            let canWrite = try await transport.canWrite(to: location)
+            guard canWrite else { throw HouseholdError.readOnly }
+            let lock = try await activateAccountMembershipLock(
+                location: location, claimBinding: AccountMembershipBinding.invitation(membership)
+            )
+            try attach(remote: remote, location: location, participant: participant,
+                       membership: membership, cloudCanWrite: canWrite,
+                       accountLockAttemptID: lock.attemptID)
+            return
+        }
+        guard let invitation = imported.invitation(matchingCode: code),
+              let member = imported.member(invitation.memberID), member.role == invitation.role,
+              invitation.householdID == location.householdID else { throw HouseholdError.invitationNotFound }
+        if imported.isInvitationRevoked(invitation.id) { throw HouseholdError.invitationRevoked }
+        guard try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
+                                                      in: location) else {
+            throw HouseholdError.invitationNotFound
+        }
+        let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
+        guard let importedHousehold = imported.household,
+              imported.isActive(member, on: CivilDay(validationTime, calendar: importedHousehold.calendar)) else {
+            throw HouseholdError.invitationUnavailable
+        }
+        if let existing = imported.invitationClaim(invitation.id) {
+            _ = existing
+            throw HouseholdError.invitationConsumed
+        }
+        guard validationTime < invitation.expiresAt else { throw HouseholdError.invitationExpired }
+        guard try await transport.canWrite(to: location) else { throw HouseholdError.readOnly }
+        let attemptID: UUID
+        if let pending = session.pendingInvitationAcceptance, pending.location == location,
+           let pendingAttemptID = pending.accountLockAttemptID {
+            attemptID = pendingAttemptID
+        } else {
+            attemptID = try await acquireAccountMembershipLock(householdID: location.householdID).attemptID
+            try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                                 accessExistedBeforeAttempt: true, attemptID: attemptID)
+            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            var pending = try requirePendingInvitation(location: location)
+            pending.invitationID = invitation.id
+            pending.expiresAt = invitation.expiresAt
+            try persistPendingInvitation(pending)
+        }
+        let previousSequence = remote.map(\.sequence).max() ?? 0
+        guard previousSequence < Int64.max - 1 else { throw HouseholdError.malformedData }
+        let claim = InvitationClaim(invitationID: invitation.id, deviceID: session.deviceID,
+                                    cloudParticipantID: participant, memberID: invitation.memberID,
+                                    codeDigest: invitation.codeDigest, claimedAt: validationTime)
+        let invitationFact = HouseholdFact(id: invitation.claimFactID, householdID: location.householdID,
+                                           sequence: previousSequence + 1, authorDeviceID: session.deviceID,
+                                           authorMemberID: nil, body: .invitationClaim(claim))
+        let accountFact = HouseholdFact(id: InvitationCode.accountClaimID(householdID: location.householdID,
+                                                                          participantID: participant,
+                                                                          generationID: invitation.id),
+                                        householdID: location.householdID, sequence: previousSequence + 2,
+                                        authorDeviceID: session.deviceID, authorMemberID: nil,
+                                        body: .invitationClaim(claim))
+        let confirmedClaims: [HouseholdFact]
+        do {
+            confirmedClaims = try await transport.claimInvitation([invitationFact, accountFact], in: location)
+        } catch HouseholdError.invitationConsumed {
+            let refreshed = try await transport.fetch(from: location)
+            try validate(refreshed, householdID: location.householdID)
+            let refreshedSnapshot = HouseholdSnapshot(facts: refreshed)
+            if let membership = try refreshedSnapshot.committedAccountMembership(participantID: participant),
+               membership.claim.codeDigest == invitation.codeDigest {
+                let canWrite = try await transport.canWrite(to: location)
+                let lock = try await activateAccountMembershipLock(
+                    location: location, claimBinding: AccountMembershipBinding.invitation(membership),
+                    attemptID: attemptID
+                )
+                try attach(remote: refreshed, location: location, participant: participant,
+                           membership: membership, cloudCanWrite: canWrite,
+                           accountLockAttemptID: lock.attemptID)
+                return
+            }
+            throw HouseholdError.invitationConsumed
+        }
+        let membership = AccountFamilyMembership(invitation: invitation, claim: claim, member: member)
+        let lock = try await activateAccountMembershipLock(
+            location: location, claimBinding: AccountMembershipBinding.invitation(membership),
+            attemptID: attemptID
+        )
+        try attach(remote: remote + confirmedClaims, location: location, participant: participant,
+                   membership: membership, cloudCanWrite: true,
+                   accountLockAttemptID: lock.attemptID)
+        syncMessage = "Family joined"
+    }
+
+    private func importFamily(_ location: CloudLocation, participant: String,
+                              accountLockAttemptID: UUID? = nil) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let remote = try await transport.fetch(from: location)
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
-        guard imported.household?.id == location.householdID else { throw HouseholdError.invitation }
-        guard imported.household?.isSetupComplete == true,
-              imported.members.contains(where: { $0.role == .parent }),
-              imported.members.contains(where: { $0.role == .child }),
-              imported.revisions.allSatisfy({ revision in revision.memberIDs.allSatisfy { imported.member($0) != nil } }),
-              imported.completions.allSatisfy({ contribution in
-                  imported.member(contribution.memberID) != nil && imported.revisions.contains { $0.id == contribution.revisionID }
-              }) else { throw HouseholdError.familyStillSyncing }
+        try validateCompleteFamily(imported, householdID: location.householdID)
         let canWrite = try await transport.canWrite(to: location)
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         var updated = session
@@ -373,6 +787,9 @@ final class HouseholdStore {
         updated.cloudParticipantID = participant
         updated.selectedMemberID = nil
         updated.cloudCanWrite = canWrite
+        updated.legacyProfileIDs = []
+        updated.accountMembershipLockAttemptID = accountLockAttemptID
+        updated.accountMembershipClaimBinding = nil
         try repository.commit(facts: remote, session: updated, uploaded: true)
         session = updated
         cloudIsReadOnly = !canWrite
@@ -380,12 +797,591 @@ final class HouseholdStore {
         syncMessage = "Family connected"
     }
 
-    func makeShare() async throws -> CKShare {
-        try requireParent()
-        if session.location == nil { try await connect() }
-        try await synchronize()
-        guard let transport, let location = session.location, location.isOwner else { throw HouseholdError.permission }
-        return try await transport.share(for: location, title: household?.name ?? "Earned It Family")
+    private func attach(remote: [HouseholdFact], location: CloudLocation, participant: String,
+                        membership: AccountFamilyMembership, cloudCanWrite: Bool,
+                        accountLockAttemptID: UUID) throws {
+        let imported = HouseholdSnapshot(facts: remote)
+        guard let committed = try imported.committedAccountMembership(participantID: participant),
+              AccountMembershipBinding.invitation(committed) == AccountMembershipBinding.invitation(membership) else {
+            throw HouseholdError.malformedData
+        }
+        var updated = session
+        updated.householdID = location.householdID
+        updated.location = location
+        updated.cloudParticipantID = participant
+        updated.selectedMemberID = membership.member.id
+        updated.cloudCanWrite = cloudCanWrite
+        updated.legacyProfileIDs = []
+        updated.pendingInvitationAcceptance = nil
+        updated.accountMembershipLockAttemptID = accountLockAttemptID
+        updated.accountMembershipClaimBinding = AccountMembershipBinding.invitation(membership)
+        try repository.commit(facts: remote, session: updated, uploaded: true)
+        session = updated
+        cloudIsReadOnly = !cloudCanWrite
+        try reload()
+    }
+
+    private func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID? = nil,
+                                              matching claimBinding: String? = nil) async throws
+        -> AccountMembershipLock {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let candidate = attemptID ?? UUID()
+        var lock = try await transport.acquireAccountMembershipLock(
+            householdID: householdID,
+            attemptID: candidate,
+            leaseDuration: InvitationCode.lifetime,
+            clientTime: clock()
+        )
+        if lock.state == .provisional, lock.householdID == householdID, lock.attemptID == candidate {
+            return lock
+        }
+        if lock.state == .active, lock.householdID == householdID,
+           let claimBinding, lock.claimBinding == claimBinding {
+            if let localBinding = session.accountMembershipClaimBinding, localBinding != claimBinding {
+                throw HouseholdError.accountMembershipConflict
+            }
+            return lock
+        }
+        if lock.state == .active, session.householdID == nil {
+            try await reconcileInactiveAccountMembershipLock(lock)
+            lock = try await transport.acquireAccountMembershipLock(
+                householdID: householdID,
+                attemptID: candidate,
+                leaseDuration: InvitationCode.lifetime,
+                clientTime: clock()
+            )
+            if lock.state == .provisional, lock.householdID == householdID, lock.attemptID == candidate {
+                return lock
+            }
+        }
+        let validationTime = try await transport.accountMembershipValidationTime(clientTime: clock())
+        if lock.state == .provisional, lock.expiresAt <= validationTime {
+            try await reconcileExpiredAccountMembershipLock(lock)
+            lock = try await transport.acquireAccountMembershipLock(
+                householdID: householdID,
+                attemptID: candidate,
+                leaseDuration: InvitationCode.lifetime,
+                clientTime: clock()
+            )
+            if lock.state == .provisional, lock.householdID == householdID, lock.attemptID == candidate {
+                return lock
+            }
+            if lock.state == .active, lock.householdID == householdID,
+               let claimBinding, lock.claimBinding == claimBinding {
+                return lock
+            }
+        }
+        throw HouseholdError.accountMembershipConflict
+    }
+
+    private func reconcileInactiveAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let participant = try await transport.participantID()
+        guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
+            guard try await transport.releaseAccountMembershipLock(householdID: lock.householdID,
+                                                                   attemptID: lock.attemptID,
+                                                                   expectedParticipantID: participant,
+                                                                   now: clock()) else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            return
+        }
+        let remote = try await transport.fetch(from: location)
+        try validate(remote, householdID: location.householdID)
+        let imported = HouseholdSnapshot(facts: remote)
+        guard let current = try membershipBinding(in: imported, location: location, participant: participant),
+              current == lock.claimBinding else { throw HouseholdError.accountMembershipConflict }
+        throw HouseholdError.accountMembershipConflict
+    }
+
+    private func reconcileExpiredAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let participant = try await transport.participantID()
+        guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
+            guard try await transport.releaseAccountMembershipLock(householdID: lock.householdID,
+                                                                   attemptID: lock.attemptID,
+                                                                   expectedParticipantID: participant,
+                                                                   now: clock()) else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            return
+        }
+        let remote = try await transport.fetch(from: location)
+        do {
+            try validate(remote, householdID: location.householdID)
+            let imported = HouseholdSnapshot(facts: remote)
+            if let binding = try membershipBinding(in: imported, location: location,
+                                                   participant: participant) {
+                _ = try await transport.activateAccountMembershipLock(householdID: lock.householdID,
+                                                                       attemptID: lock.attemptID,
+                                                                       claimBinding: binding, now: clock())
+                return
+            }
+        } catch is HouseholdError {
+            throw HouseholdError.accountMembershipConflict
+        }
+        throw HouseholdError.accountMembershipConflict
+    }
+
+    private func membershipBinding(in imported: HouseholdSnapshot, location: CloudLocation,
+                                   participant: String) throws -> String? {
+        guard imported.household?.id == location.householdID else { return nil }
+        if location.isOwner { return AccountMembershipBinding.owner(householdID: location.householdID) }
+        if let membership = try imported.committedAccountMembership(participantID: participant) {
+            return AccountMembershipBinding.invitation(membership)
+        }
+        if imported.grants.contains(where: { grant in
+            grant.cloudParticipantID == participant && grant.memberIDs.contains { imported.member($0) != nil }
+        }) {
+            return AccountMembershipBinding.legacyShared(householdID: location.householdID,
+                                                         participantID: participant)
+        }
+        return nil
+    }
+
+    private func ownerRecoveryMember(in imported: HouseholdSnapshot) -> FamilyMember? {
+        guard imported.household != nil else { return nil }
+        let invitedParentIDs = Set(imported.invitations.compactMap { invitation -> UUID? in
+            invitation.role == .parent ? invitation.memberID : nil
+        })
+        let candidates = imported.members.filter {
+            $0.role == .parent && $0.archivedFrom == nil && !invitedParentIDs.contains($0.id)
+        }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    private func ownerRecoveryCandidates(restrictedTo householdID: UUID? = nil) async throws
+        -> [(family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])] {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        var candidates: [(family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])] = []
+        for family in try await transport.discoverFamilies()
+        where family.location.isOwner && (householdID == nil || family.location.householdID == householdID) {
+            if let candidate = try await ownerRecoveryCandidate(for: family) {
+                candidates.append(candidate)
+            }
+        }
+        return candidates
+    }
+
+    private func filteredOwnerRecoveryCandidates() async throws
+        -> [(family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])] {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard let lock = try await transport.accountMembershipLock(), lock.state == .active else {
+            return try await ownerRecoveryCandidates()
+        }
+        guard lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID) else {
+            return []
+        }
+        return try await ownerRecoveryCandidates(restrictedTo: lock.householdID)
+    }
+
+    private func ownerRecoveryCandidate(for family: CloudFamily) async throws
+        -> (family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])? {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let remote = try await transport.fetch(from: family.location)
+        try validate(remote, householdID: family.location.householdID)
+        let imported = HouseholdSnapshot(facts: remote)
+        try validateCompleteFamily(imported, householdID: family.location.householdID)
+        guard let member = ownerRecoveryMember(in: imported) else { return nil }
+        return (family, member, remote)
+    }
+
+    private func activateAccountMembershipLock(location: CloudLocation, claimBinding: String,
+                                               attemptID suppliedAttemptID: UUID? = nil) async throws
+        -> AccountMembershipLock {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let attemptID: UUID
+        if let existing = suppliedAttemptID ?? session.pendingInvitationAcceptance?.accountLockAttemptID {
+            attemptID = existing
+        } else {
+            let acquired = try await acquireAccountMembershipLock(householdID: location.householdID,
+                                                                  matching: claimBinding)
+            attemptID = acquired.attemptID
+        }
+        return try await transport.activateAccountMembershipLock(
+            householdID: location.householdID,
+            attemptID: attemptID,
+            claimBinding: claimBinding,
+            now: clock()
+        )
+    }
+
+    private func prepareInvitationAcceptance(url: URL, location: CloudLocation, participant: String) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let accessExisted = try await transport.hasAcceptedAccess(to: location)
+        let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
+        try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                             accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
+        do {
+            try await transport.accept(url: url, expected: location)
+            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            try await identifyPendingInvitation(in: location)
+        } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
+            throw cloudError
+        } catch {
+            try await abandonPendingInvitationAcceptance(preserving: error)
+        }
+    }
+
+    private func beginPendingInvitationAcceptance(location: CloudLocation, participant: String,
+                                                  accessExistedBeforeAttempt: Bool, attemptID: UUID) throws {
+        guard session.householdID == nil, session.pendingInvitationAcceptance == nil else {
+            throw HouseholdError.alreadyHasHousehold
+        }
+        let retainedFactIDs = try repository.facts(householdID: location.householdID).map(\.id)
+        var updated = session
+        updated.pendingInvitationAcceptance = PendingInvitationAcceptance(
+            location: location,
+            cloudParticipantID: participant,
+            retainedFactIDs: retainedFactIDs,
+            accessExistedBeforeAttempt: accessExistedBeforeAttempt,
+            accountLockAttemptID: attemptID,
+            invitationID: nil,
+            expiresAt: nil,
+            phase: .acceptingAccess
+        )
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    private func requirePendingInvitation(location: CloudLocation) throws -> PendingInvitationAcceptance {
+        guard let pending = session.pendingInvitationAcceptance, pending.location == location else {
+            throw HouseholdError.invitationNotFound
+        }
+        return pending
+    }
+
+    private func confirmPendingInvitationAcceptance(location: CloudLocation, participant: String) throws {
+        guard var pending = session.pendingInvitationAcceptance,
+              pending.location == location,
+              pending.cloudParticipantID == participant,
+              pending.phase == .acceptingAccess else { throw HouseholdError.invitationNotFound }
+        pending.phase = .awaitingRedemption
+        var updated = session
+        updated.pendingInvitationAcceptance = pending
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    private func identifyPendingInvitation(in location: CloudLocation) async throws {
+        guard var pending = session.pendingInvitationAcceptance,
+              pending.location == location,
+              pending.phase == .awaitingRedemption,
+              let transport else { throw HouseholdError.invitationNotFound }
+        let remote = try await transport.fetch(from: location)
+        try validate(remote, householdID: location.householdID)
+        let imported = HouseholdSnapshot(facts: remote)
+        try validateCompleteFamily(imported, householdID: location.householdID)
+        let invitation = try await matchedPendingInvitation(in: imported, location: location)
+        pending.invitationID = invitation.id
+        pending.expiresAt = invitation.expiresAt
+        try persistPendingInvitation(pending)
+        let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
+        switch imported.invitationStatus(invitation, now: validationTime) {
+        case .available: return
+        case .expired: throw HouseholdError.invitationExpired
+        case .revoked: throw HouseholdError.invitationRevoked
+        case .consumed: throw HouseholdError.invitationConsumed
+        }
+    }
+
+    private func matchedPendingInvitation(in imported: HouseholdSnapshot,
+                                          location: CloudLocation) async throws -> FamilyInvitation {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        var matches: [FamilyInvitation] = []
+        for invitation in imported.invitations {
+            if try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
+                                                       in: location) {
+                matches.append(invitation)
+            }
+        }
+        guard matches.count == 1, let invitation = matches.first else {
+            throw HouseholdError.invitationNotFound
+        }
+        return invitation
+    }
+
+    private func persistPendingInvitation(_ pending: PendingInvitationAcceptance) throws {
+        var updated = session
+        updated.pendingInvitationAcceptance = pending
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    private func markPendingInvitationForCleanup(_ pending: PendingInvitationAcceptance) throws {
+        var cleanup = pending
+        cleanup.phase = .cleanupRequired
+        var updated = session
+        updated.householdID = nil
+        updated.selectedMemberID = nil
+        updated.cloudParticipantID = nil
+        updated.location = nil
+        updated.cloudCanWrite = nil
+        updated.legacyProfileIDs = nil
+        updated.pendingInvitationAcceptance = cleanup
+        try repository.discardFacts(householdID: pending.location.householdID,
+                                    retaining: Set(pending.retainedFactIDs ?? []), updating: updated)
+        session = updated
+        facts = []
+        rejectedChanges = [:]
+        snapshot = HouseholdSnapshot()
+        cloudAccessBlocked = false
+        cloudIsReadOnly = false
+        syncMessage = "On this device"
+    }
+
+    private func abandonPendingInvitationAcceptance(preserving error: Error) async throws -> Never {
+        guard let pending = session.pendingInvitationAcceptance else { throw error }
+        if pending.phase != .cleanupRequired {
+            try markPendingInvitationForCleanup(pending)
+        }
+        do { try await retryInvitationCleanup() } catch {}
+        throw error
+    }
+
+    private nonisolated static func isRetryableInvitationError(_ error: CKError) -> Bool {
+        switch error.code {
+        case .networkFailure, .networkUnavailable, .serviceUnavailable, .requestRateLimited,
+             .zoneBusy, .notAuthenticated, .quotaExceeded:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func pendingInvitationCleanupDelay() async throws -> TimeInterval? {
+        guard let pending = session.pendingInvitationAcceptance else { return nil }
+        if pending.phase == .cleanupRequired {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+        guard pending.phase == .awaitingRedemption else { return nil }
+        guard let expiration = pending.expiresAt else {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        do {
+            let validationTime = try await transport.invitationValidationTime(
+                in: pending.location, clientTime: clock()
+            )
+            return min(max(0, expiration.timeIntervalSince(validationTime)), InvitationCode.lifetime)
+        } catch let error as CKError where Self.isRetryableInvitationError(error) {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+    }
+
+    func retryScheduledInvitationCleanup() async throws -> TimeInterval? {
+        do {
+            try await retryInvitationCleanup()
+            return nil
+        } catch let error as CKError where Self.isRetryableInvitationError(error) {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+    }
+
+    func retryInvitationCleanup() async throws {
+        let predecessor = invitationCleanupTail
+        let cleanup = Task { @MainActor in
+            await predecessor?.value
+            try Task.checkCancellation()
+            try await performInvitationCleanup()
+        }
+        invitationCleanupTail = Task { _ = try? await cleanup.value }
+        try await withTaskCancellationHandler {
+            try await cleanup.value
+        } onCancel: {
+            cleanup.cancel()
+        }
+    }
+
+    private func performInvitationCleanup() async throws {
+        try Task.checkCancellation()
+        guard var pending = session.pendingInvitationAcceptance else { return }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard try await transport.participantID() == pending.cloudParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
+        try Task.checkCancellation()
+        if pending.accountLockAttemptID == nil {
+            pending.accountLockAttemptID = try await acquireAccountMembershipLock(
+                householdID: pending.location.householdID
+            ).attemptID
+            try persistPendingInvitation(pending)
+        }
+        let remote = try await accessibleFacts(at: pending.location)
+        try Task.checkCancellation()
+        if let remote {
+            try validate(remote, householdID: pending.location.householdID)
+            let imported = HouseholdSnapshot(facts: remote)
+            try validateCompleteFamily(imported, householdID: pending.location.householdID)
+            if let membership = try imported.committedAccountMembership(
+                participantID: pending.cloudParticipantID
+            ) {
+                let canWrite = try await transport.canWrite(to: pending.location)
+                let lock = try await activateAccountMembershipLock(
+                    location: pending.location, claimBinding: AccountMembershipBinding.invitation(membership),
+                    attemptID: pending.accountLockAttemptID
+                )
+                try attach(remote: remote, location: pending.location, participant: pending.cloudParticipantID,
+                           membership: membership, cloudCanWrite: canWrite,
+                           accountLockAttemptID: lock.attemptID)
+                return
+            }
+            if pending.phase == .awaitingRedemption {
+                if pending.invitationID == nil || pending.expiresAt == nil {
+                    let invitation = try await matchedPendingInvitation(in: imported, location: pending.location)
+                    pending.invitationID = invitation.id
+                    pending.expiresAt = invitation.expiresAt
+                    try persistPendingInvitation(pending)
+                }
+                let validationTime = try await transport.invitationValidationTime(
+                    in: pending.location, clientTime: clock()
+                )
+                if let invitationID = pending.invitationID,
+                   let invitation = imported.invitation(invitationID),
+                   !imported.isInvitationRevoked(invitationID),
+                   imported.invitationClaim(invitationID) == nil,
+                   validationTime < (pending.expiresAt ?? invitation.expiresAt) {
+                    if session.householdID == nil {
+                        try await importFamily(pending.location, participant: pending.cloudParticipantID,
+                                               accountLockAttemptID: pending.accountLockAttemptID)
+                    }
+                    return
+                }
+            }
+        }
+        try Task.checkCancellation()
+        try markPendingInvitationForCleanup(pending)
+        if pending.accessExistedBeforeAttempt == false {
+            try Task.checkCancellation()
+            try await transport.leave(pending.location, expectedParticipantID: pending.cloudParticipantID)
+        }
+        if let attemptID = pending.accountLockAttemptID {
+            try Task.checkCancellation()
+            guard try await transport.releaseAccountMembershipLock(householdID: pending.location.householdID,
+                                                                   attemptID: attemptID,
+                                                                   expectedParticipantID: pending.cloudParticipantID,
+                                                                   now: clock()) else {
+                throw HouseholdError.accountMembershipConflict
+            }
+        }
+        try Task.checkCancellation()
+        var updated = session
+        updated.pendingInvitationAcceptance = nil
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    func reconcileAccountMembershipLock() async throws {
+        guard session.pendingInvitationAcceptance == nil,
+              let location = session.location,
+              let participant = session.cloudParticipantID,
+              let transport else { return }
+        guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+        let remote = try await transport.fetch(from: location)
+        try validate(remote, householdID: location.householdID)
+        let imported = HouseholdSnapshot(facts: remote)
+        try await reconcileAccountMembershipLock(imported: imported, location: location,
+                                                  participant: participant)
+    }
+
+    private func reconcileAccountMembershipLock(imported: HouseholdSnapshot, location: CloudLocation,
+                                                participant: String) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard let binding = try membershipBinding(in: imported, location: location, participant: participant) else {
+            return
+        }
+        do {
+            if let localBinding = session.accountMembershipClaimBinding, localBinding != binding {
+                throw HouseholdError.accountMembershipConflict
+            }
+            let lock = try await acquireAccountMembershipLock(
+                householdID: location.householdID,
+                attemptID: session.accountMembershipLockAttemptID,
+                matching: binding
+            )
+            let active = try await transport.activateAccountMembershipLock(
+                householdID: location.householdID,
+                attemptID: lock.attemptID,
+                claimBinding: binding,
+                now: clock()
+            )
+            if session.accountMembershipLockAttemptID != active.attemptID
+                || session.accountMembershipClaimBinding != binding {
+                var updated = session
+                updated.accountMembershipLockAttemptID = active.attemptID
+                updated.accountMembershipClaimBinding = binding
+                try repository.commit(facts: [], session: updated)
+                session = updated
+            }
+        } catch HouseholdError.accountMembershipConflict {
+            var updated = session
+            updated.cloudCanWrite = false
+            try repository.commit(facts: [], session: updated)
+            session = updated
+            cloudIsReadOnly = true
+            throw HouseholdError.accountMembershipConflict
+        }
+    }
+
+    private func accessibleFacts(at location: CloudLocation) async throws -> [HouseholdFact]? {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        do { return try await transport.fetch(from: location) }
+        catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound
+            || error.code == .permissionFailure {
+            return nil
+        }
+    }
+
+    private func resumeAccountMembership(participant: String, requestedLocation: CloudLocation?,
+                                         invitationCode: String?) async throws -> Bool {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        var located: [(CloudLocation, [HouseholdFact], AccountFamilyMembership)] = []
+        for family in try await transport.discoverFamilies() {
+            if let requestedLocation, family.location != requestedLocation { continue }
+            let remote = try await transport.fetch(from: family.location)
+            try validate(remote, householdID: family.location.householdID)
+            let imported = HouseholdSnapshot(facts: remote)
+            try validateCompleteFamily(imported, householdID: family.location.householdID)
+            if let membership = try imported.committedAccountMembership(participantID: participant) {
+                located.append((family.location, remote, membership))
+            }
+        }
+        guard located.count <= 1 else { throw HouseholdError.accountMembershipConflict }
+        guard let existing = located.first else { return false }
+        let codeMatches = invitationCode.map { InvitationCode.digest($0) == existing.2.claim.codeDigest } ?? true
+        guard requestedLocation == nil || requestedLocation == existing.0, codeMatches else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        let canWrite = try await transport.canWrite(to: existing.0)
+        guard canWrite else { throw HouseholdError.readOnly }
+        let lock = try await activateAccountMembershipLock(
+            location: existing.0, claimBinding: AccountMembershipBinding.invitation(existing.2)
+        )
+        try attach(remote: existing.1, location: existing.0, participant: participant,
+                   membership: existing.2, cloudCanWrite: canWrite,
+                   accountLockAttemptID: lock.attemptID)
+        return true
+    }
+
+    private func pruneUnavailableInvitationAccess() async throws {
+        guard let transport, let location = session.location, location.isOwner else { return }
+        let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
+        for invitation in snapshot.invitations where snapshot.invitationClaim(invitation.id) == nil
+            && (snapshot.isInvitationRevoked(invitation.id) || validationTime >= invitation.expiresAt) {
+            try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID,
+                                                       from: location)
+        }
+    }
+
+    private func validateCompleteFamily(_ imported: HouseholdSnapshot, householdID: UUID) throws {
+        guard imported.household?.id == householdID else { throw HouseholdError.invitation }
+        guard imported.household?.isSetupComplete == true,
+              imported.members.contains(where: { $0.role == .parent }),
+              imported.members.contains(where: { $0.role == .child }),
+              imported.revisions.allSatisfy({ revision in revision.memberIDs.allSatisfy { imported.member($0) != nil } }),
+              imported.completions.allSatisfy({ contribution in
+                  imported.member(contribution.memberID) != nil && imported.revisions.contains { $0.id == contribution.revisionID }
+              }) else { throw HouseholdError.familyStillSyncing }
     }
 
     func synchronize() async throws {
@@ -410,6 +1406,9 @@ final class HouseholdStore {
             guard participant == session.cloudParticipantID else { throw HouseholdError.wrongAccount }
             let remote = try await transport.fetch(from: location)
             try validate(remote, householdID: location.householdID)
+            let remoteSnapshot = HouseholdSnapshot(facts: remote)
+            try await reconcileAccountMembershipLock(imported: remoteSnapshot, location: location,
+                                                      participant: participant)
             cloudIsReadOnly = try await !transport.canWrite(to: location)
             var updated = session
             updated.cloudCanWrite = !cloudIsReadOnly
@@ -446,10 +1445,36 @@ final class HouseholdStore {
             lastSyncedAt = clock()
             syncMessage = "Up to date"
         } catch {
+            var accountLockReleased = false
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
+                if [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code),
+                   let attemptID = session.accountMembershipLockAttemptID,
+                   let expectedParticipantID = session.cloudParticipantID {
+                    do {
+                        if try await transport.participantID() == expectedParticipantID {
+                            accountLockReleased = try await transport.releaseAccountMembershipLock(
+                                householdID: location.householdID, attemptID: attemptID,
+                                expectedParticipantID: expectedParticipantID, now: clock()
+                            )
+                        }
+                    } catch {
+                        accountLockReleased = false
+                    }
+                }
             } else {
                 cloudAccessBlocked = error as? HouseholdError == .wrongAccount || error as? HouseholdError == .malformedData
+            }
+            if cloudAccessBlocked {
+                var updated = session
+                updated.cloudCanWrite = false
+                if accountLockReleased {
+                    updated.accountMembershipLockAttemptID = nil
+                    updated.accountMembershipClaimBinding = nil
+                }
+                try? repository.commit(facts: [], session: updated)
+                session = updated
+                cloudIsReadOnly = true
             }
             syncMessage = "Sync needs attention. Changes are kept."
             throw error
@@ -495,13 +1520,19 @@ final class HouseholdStore {
     }
 
     private func append(_ body: HouseholdFactBody) throws {
+        try append([body])
+    }
+
+    private func append(_ bodies: [HouseholdFactBody]) throws {
         guard let householdID = session.householdID else { throw HouseholdError.noHousehold }
         let previousSequence = facts.map(\.sequence).max() ?? 0
-        guard previousSequence < Int64.max else { throw HouseholdError.malformedData }
-        let sequence = previousSequence + 1
-        let fact = HouseholdFact(id: UUID(), householdID: householdID, sequence: sequence,
-                                 authorDeviceID: session.deviceID, authorMemberID: selectedMember?.id, body: body)
-        try repository.commit(facts: [fact])
+        guard bodies.count <= Int64.max - previousSequence else { throw HouseholdError.malformedData }
+        let actorID = selectedMember?.id
+        let appended = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: householdID, sequence: previousSequence + Int64(index) + 1,
+                          authorDeviceID: session.deviceID, authorMemberID: actorID, body: body)
+        }
+        try repository.commit(facts: appended)
         try reload()
         scheduleSync()
     }
@@ -512,6 +1543,19 @@ final class HouseholdStore {
         rejectedChanges = try session.householdID.map { try repository.rejections(householdID: $0) } ?? [:]
     }
 
+    private func migrateLegacyProfileAccess() throws {
+        guard household != nil, session.legacyProfileIDs == nil else { return }
+        var updated = session
+        if household?.creatorDeviceID != session.deviceID, session.location?.isOwner == true,
+           let selected = session.selectedMemberID, snapshot.member(selected) != nil {
+            updated.legacyProfileIDs = [selected]
+        } else {
+            updated.legacyProfileIDs = []
+        }
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
     private func authorizePending(_ pending: [HouseholdFact]) throws {
         let approvedIDs = Set(profiles.map(\.id))
         for fact in pending {
@@ -519,6 +1563,11 @@ final class HouseholdStore {
                 guard request.deviceID == session.deviceID, request.cloudParticipantID == session.cloudParticipantID else {
                     throw HouseholdError.permission
                 }
+                continue
+            }
+            if case .invitationClaim(let claim) = fact.body {
+                guard claim.deviceID == session.deviceID,
+                      claim.cloudParticipantID == session.cloudParticipantID else { throw HouseholdError.permission }
                 continue
             }
             guard let memberID = fact.authorMemberID, approvedIDs.contains(memberID),
@@ -547,6 +1596,11 @@ final class HouseholdStore {
         case .grant(let value):
             return hasMembers(value.memberIDs + [value.approvedBy])
                 && available.requests.contains { $0.id == value.requestID }
+        case .invitation(let value): return hasMembers([value.memberID, value.createdByMemberID])
+        case .invitationClaim(let value):
+            return hasMembers([value.memberID]) && available.invitation(value.invitationID) != nil
+        case .invitationRevocation(let value):
+            return hasMembers([value.revokedByMemberID]) && available.invitation(value.invitationID) != nil
         }
     }
 
@@ -557,7 +1611,10 @@ final class HouseholdStore {
     }
 
     private func validate(_ facts: [HouseholdFact], householdID: UUID) throws {
-        guard facts.allSatisfy({ $0.householdID == householdID && $0.sequence > 0 }) else { throw HouseholdError.malformedData }
+        guard Set(facts.map(\.id)).count == facts.count,
+              facts.allSatisfy({ $0.householdID == householdID && $0.sequence > 0 }) else {
+            throw HouseholdError.malformedData
+        }
         for fact in facts {
             switch fact.body {
             case .household(let value):
@@ -570,8 +1627,43 @@ final class HouseholdStore {
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
             case .chore(let value):
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
+            case .invitation(let value):
+                guard value.householdID == householdID, value.createdAt < value.expiresAt,
+                      value.expiresAt.timeIntervalSince(value.createdAt) <= InvitationCode.lifetime,
+                      value.codeDigest.count == 64, !value.cloudShareParticipantID.isEmpty,
+                      fact.authorMemberID == value.createdByMemberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .invitationClaim(let value):
+                guard fact.authorMemberID == nil, fact.authorDeviceID == value.deviceID,
+                      !value.cloudParticipantID.isEmpty, value.codeDigest.count == 64 else {
+                    throw HouseholdError.malformedData
+                }
+            case .invitationRevocation(let value):
+                guard fact.authorMemberID == value.revokedByMemberID else { throw HouseholdError.malformedData }
             default: break
             }
         }
+        let resolved = HouseholdSnapshot(facts: facts)
+        guard Set(resolved.invitations.map(\.claimFactID)).count == resolved.invitations.count else {
+            throw HouseholdError.malformedData
+        }
+        for invitation in resolved.invitations {
+            guard let member = resolved.member(invitation.memberID), member.role == invitation.role,
+                  resolved.member(invitation.createdByMemberID)?.role == .parent else {
+                throw HouseholdError.malformedData
+            }
+            if let claim = resolved.invitationClaim(invitation.id) {
+                guard claim.memberID == invitation.memberID, claim.codeDigest == invitation.codeDigest,
+                      facts.contains(where: { $0.id == invitation.claimFactID && $0.body == .invitationClaim(claim) }) else {
+                    throw HouseholdError.malformedData
+                }
+            }
+        }
+        guard resolved.invitationClaims.allSatisfy({ resolved.invitation($0.invitationID) != nil }),
+              resolved.invitationRevocations.allSatisfy({ revocation in
+                  resolved.invitation(revocation.invitationID) != nil
+                      && resolved.member(revocation.revokedByMemberID)?.role == .parent
+              }) else { throw HouseholdError.malformedData }
     }
 }

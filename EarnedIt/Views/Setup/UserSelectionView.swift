@@ -2,8 +2,9 @@ import SwiftUI
 
 struct UserSelectionView: View {
     @Environment(HouseholdStore.self) private var store
-    @State private var requestedIDs: Set<UUID> = []
-    @State private var deviceName = "Family device"
+    @State private var invitationCode = ""
+    @State private var redeeming = false
+    @State private var scanning = false
 
     var body: some View {
         NavigationStack {
@@ -30,7 +31,7 @@ struct UserSelectionView: View {
                         }
                     }
                     if store.profiles.isEmpty {
-                        profileRequest
+                        invitationAccess
                         NavigationLink("Connection Settings") { HouseholdSettingsView() }
                     }
                     SyncStatusView()
@@ -39,32 +40,57 @@ struct UserSelectionView: View {
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("Profiles")
+            .sheet(isPresented: $scanning) {
+                InvitationScannerSheet { payload in
+                    if let credential = InvitationCredential(text: payload) { invitationCode = credential.code }
+                    redeem(payload)
+                }
+            }
             .accessibilityIdentifier("profile-selection")
         }
     }
 
-    private var profileRequest: some View {
+    private var invitationAccess: some View {
         SectionCard {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Connect your profiles").font(.title2.bold())
-                Text("Choose the people who use this installation. A parent will approve your request in Family & Sharing.")
-                TextField("Device label", text: $deviceName).textFieldStyle(.roundedBorder)
-                ForEach(store.snapshot.members.filter { store.snapshot.isActive($0, on: store.day) }) { member in
-                    Toggle("\(member.displayName) · \(member.role.title)", isOn: Binding(
-                        get: { requestedIDs.contains(member.id) },
-                        set: { if $0 { requestedIDs.insert(member.id) } else { requestedIDs.remove(member.id) } }
-                    ))
-                }
+                Label("Finish joining", systemImage: "person.crop.circle.badge.checkmark")
+                    .font(.title2.bold())
+                Text("Enter or scan the one-time code a parent created for this profile. You cannot choose a different role or family member here.")
+                TextField("XXXX-XXXX-XX", text: $invitationCode)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .textContentType(.oneTimeCode)
+                    .font(.body.monospaced())
+                    .accessibilityIdentifier("connected-invitation-code")
                 if store.currentRequest != nil {
-                    Text("Request sent. Refresh after a parent approves.").foregroundStyle(.secondary)
+                    Text("A request from an older app version is still pending. A parent can approve it, or send a new invitation code.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                Button("Request Profiles") {
-                    store.perform { try store.requestProfiles(Array(requestedIDs), deviceName: deviceName) }
+                VStack(spacing: 10) {
+                    Button("Use Invitation") { redeem(invitationCode) }
+                        .buttonStyle(.borderedProminent)
+                        .frame(maxWidth: .infinity)
+                        .disabled(redeeming || InvitationCode.normalized(invitationCode) == nil)
+                        .accessibilityIdentifier("redeem-connected-invitation")
+                    Button("Scan", systemImage: "qrcode.viewfinder") { scanning = true }
+                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity)
+                        .disabled(redeeming)
                 }
-                .disabled(requestedIDs.isEmpty || store.cloudIsReadOnly)
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("request-profiles")
+                if redeeming { ProgressView("Checking invitation…") }
             }
+        }
+    }
+
+    private func redeem(_ text: String) {
+        guard !redeeming else { return }
+        redeeming = true
+        Task {
+            defer { redeeming = false }
+            do { try await store.redeemInvitation(text) }
+            catch { store.errorMessage = error.localizedDescription }
         }
     }
 }

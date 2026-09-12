@@ -1,4 +1,3 @@
-import CloudKit
 import SwiftUI
 
 struct FamilyManagementView: View {
@@ -8,7 +7,8 @@ struct FamilyManagementView: View {
     @State private var editing: FamilyMember?
     @State private var archiving: FamilyMember?
     @State private var approving: ProfileRequest?
-    @State private var cloudShare: SharePresentation?
+    @State private var inviting = false
+    @State private var revokingInvitation: FamilyInvitation?
     @State private var busy = false
 
     var body: some View {
@@ -40,17 +40,33 @@ struct FamilyManagementView: View {
                     Button("Connect Family to iCloud") { run { try await store.connect() } }
                         .disabled(busy).accessibilityIdentifier("connect-icloud")
                 }
-                if store.session.location == nil || store.session.location?.isOwner == true {
-                    Button("Invite or Manage Sharing", systemImage: "person.badge.plus") {
-                        run { cloudShare = SharePresentation(share: try await store.makeShare()) }
-                    }
-                    .disabled(busy).accessibilityIdentifier("invite-family")
-                } else {
-                    Text("The family owner manages iCloud invitations. You can approve profile requests below.")
+                Button("Invite a Parent or Child", systemImage: "person.badge.plus") { inviting = true }
+                    .disabled(busy)
+                    .accessibilityIdentifier("invite-profile")
+                if store.session.location != nil, store.session.location?.isOwner != true {
+                    Text("Apple requires the family owner to create and revoke participant access. Other approved parents retain full family management access in Earned It.")
                 }
-                Text("Invite trusted family members. An iCloud editor can change all shared records. Profile permissions guide this app’s controls; they are not an iCloud security boundary.")
+                Text("Each invitation is bound to one role and profile, expires after 24 hours, and uses Apple’s private one-time sharing access.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if busy { ProgressView("Connecting…") }
+            }
+            if !store.familyInvitations.isEmpty {
+                Section("Invitations") {
+                    ForEach(store.familyInvitations) { invitation in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(invitationMember(invitation)).font(.headline)
+                            Label(invitationStatusText(invitation), systemImage: invitationStatusSymbol(invitation))
+                                .font(.caption).foregroundStyle(.secondary)
+                            if store.invitationStatus(invitation) != .revoked {
+                                Button(store.invitationStatus(invitation) == .consumed ? "Remove Installation Access" : "Revoke Invitation",
+                                       role: .destructive) {
+                                    revokingInvitation = invitation
+                                }
+                                .accessibilityIdentifier("revoke-invitation")
+                            }
+                        }
+                    }
+                }
             }
             if !store.pendingRequests.isEmpty {
                 Section("Profile requests") {
@@ -86,12 +102,7 @@ struct FamilyManagementView: View {
         .navigationTitle("Family & Sharing")
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
-        .sheet(item: $cloudShare) { presentation in
-            CloudSharingView(share: presentation.share) { error in
-                if let error { store.errorMessage = error.localizedDescription }
-                store.scheduleSync()
-            }
-        }
+        .sheet(isPresented: $inviting) { FamilyInvitationView() }
         .alert("Archive family member?", isPresented: Binding(
             get: { archiving != nil }, set: { if !$0 { archiving = nil } }
         )) {
@@ -112,11 +123,45 @@ struct FamilyManagementView: View {
         } message: {
             Text(approving.map { "\($0.deviceName) can switch between: \(profileNames($0.memberIDs)). Parent profiles can manage the family." } ?? "")
         }
+        .alert("Revoke this invitation?", isPresented: Binding(
+            get: { revokingInvitation != nil }, set: { if !$0 { revokingInvitation = nil } }
+        )) {
+            Button("Revoke Access", role: .destructive) {
+                if let invitation = revokingInvitation { run { try await store.revokeInvitation(invitation) } }
+                revokingInvitation = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The code will stop working. If it was already used, this installation loses Apple and profile access without changing family data.")
+        }
         .accessibilityIdentifier("family-management-screen")
     }
 
     private func profileNames(_ ids: [UUID]) -> String {
         ids.compactMap { store.snapshot.member($0) }.map { "\($0.displayName) (\($0.role.title))" }.joined(separator: ", ")
+    }
+
+    private func invitationMember(_ invitation: FamilyInvitation) -> String {
+        guard let member = store.snapshot.member(invitation.memberID) else { return invitation.role.title }
+        return "\(member.displayName) · \(member.role.title)"
+    }
+
+    private func invitationStatusText(_ invitation: FamilyInvitation) -> String {
+        switch store.invitationStatus(invitation) {
+        case .available: "Expires \(invitation.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+        case .expired: "Expired"
+        case .revoked: "Revoked"
+        case .consumed: "Joined"
+        }
+    }
+
+    private func invitationStatusSymbol(_ invitation: FamilyInvitation) -> String {
+        switch store.invitationStatus(invitation) {
+        case .available: "clock"
+        case .expired: "clock.badge.exclamationmark"
+        case .revoked: "xmark.shield"
+        case .consumed: "checkmark.shield"
+        }
     }
 
     private func run(_ action: @escaping () async throws -> Void) {
@@ -125,34 +170,5 @@ struct FamilyManagementView: View {
             defer { busy = false }
             do { try await action() } catch { store.errorMessage = error.localizedDescription }
         }
-    }
-}
-
-private struct SharePresentation: Identifiable {
-    let id = UUID()
-    let share: CKShare
-}
-
-struct CloudSharingView: UIViewControllerRepresentable {
-    let share: CKShare
-    let onCompletion: (Error?) -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator(onCompletion: onCompletion) }
-    func makeUIViewController(context: Context) -> UICloudSharingController {
-        let controller = UICloudSharingController(share: share,
-            container: CKContainer(identifier: CloudKitHouseholdTransport.containerIdentifier))
-        controller.availablePermissions = [.allowPrivate, .allowReadWrite]
-        controller.delegate = context.coordinator
-        return controller
-    }
-    func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
-
-    final class Coordinator: NSObject, UICloudSharingControllerDelegate {
-        let onCompletion: (Error?) -> Void
-        init(onCompletion: @escaping (Error?) -> Void) { self.onCompletion = onCompletion }
-        func itemTitle(for csc: UICloudSharingController) -> String? { "Earned It Family" }
-        func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) { onCompletion(error) }
-        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) { onCompletion(nil) }
-        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) { onCompletion(nil) }
     }
 }
