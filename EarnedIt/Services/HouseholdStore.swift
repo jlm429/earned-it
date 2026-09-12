@@ -921,12 +921,11 @@ final class HouseholdStore {
 
     private func ownerRecoveryMember(in imported: HouseholdSnapshot) -> FamilyMember? {
         guard imported.household != nil else { return nil }
-        let claimedParentIDs = Set(imported.invitationClaims.compactMap { claim -> UUID? in
-            guard let invitation = imported.invitation(claim.invitationID), invitation.role == .parent else { return nil }
-            return claim.memberID
+        let invitedParentIDs = Set(imported.invitations.compactMap { invitation -> UUID? in
+            invitation.role == .parent ? invitation.memberID : nil
         })
         let candidates = imported.members.filter {
-            $0.role == .parent && $0.archivedFrom == nil && !claimedParentIDs.contains($0.id)
+            $0.role == .parent && $0.archivedFrom == nil && !invitedParentIDs.contains($0.id)
         }
         return candidates.count == 1 ? candidates[0] : nil
     }
@@ -1292,8 +1291,9 @@ final class HouseholdStore {
 
     private func pruneUnavailableInvitationAccess() async throws {
         guard let transport, let location = session.location, location.isOwner else { return }
+        let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
         for invitation in snapshot.invitations where snapshot.invitationClaim(invitation.id) == nil
-            && (snapshot.isInvitationRevoked(invitation.id) || clock() >= invitation.expiresAt) {
+            && (snapshot.isInvitationRevoked(invitation.id) || validationTime >= invitation.expiresAt) {
             try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID,
                                                        from: location)
         }

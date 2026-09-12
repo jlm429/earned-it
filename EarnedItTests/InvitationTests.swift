@@ -351,6 +351,37 @@ final class InvitationTests: XCTestCase {
         XCTAssertTrue(recoveries.isEmpty)
     }
 
+    func testUnclaimedInvitedParentDoesNotMakeOwnerRecoveryAmbiguous() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        _ = try await family.store.createParentInvitation(name: "Invited Parent", avatar: .fox)
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "owner"),
+                                             clock: { family.clock.now }, automaticSync: false)
+
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+
+        XCTAssertEqual(recoveries.map(\.location.householdID), [family.store.household!.id])
+        try await replacement.recoverOwnerFamily(try XCTUnwrap(recoveries.first).location)
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+    }
+
+    func testExpiredUnclaimedInvitedParentDoesNotMakeOwnerRecoveryAmbiguous() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createParentInvitation(name: "Expired Parent", avatar: .fox)
+        server.authoritativeTime = invitation.invitation.expiresAt.addingTimeInterval(1)
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "owner"),
+                                             clock: { family.clock.now }, automaticSync: false)
+
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+
+        XCTAssertEqual(recoveries.map(\.location.householdID), [family.store.household!.id])
+        try await replacement.recoverOwnerFamily(try XCTUnwrap(recoveries.first).location)
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+    }
+
     func testOwnerRecoveryDiscoveryLeavesAmbiguousLegacyHouseholdsUnlocked() async throws {
         let server = TestCloudServer()
         let first = try TestFamily(transport: TestTransport(server: server, account: "legacy-owner"))
@@ -450,6 +481,32 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(invitation.invitation.createdAt, server.authoritativeTime)
         XCTAssertEqual(invitation.invitation.expiresAt,
                        server.authoritativeTime!.addingTimeInterval(InvitationCode.lifetime))
+    }
+
+    func testInvitationPruningDoesNotRevokeValidAccessWhenOwnerClockIsAhead() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        family.clock.set("2027-09-07T16:00:00Z")
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+
+        _ = try await family.store.createChildInvitation(memberID: family.alek.id)
+
+        let zone = try XCTUnwrap(server.zones[family.store.session.location!.zoneName])
+        XCTAssertTrue(zone.pendingInvitationParticipants.contains(invitation.invitation.cloudShareParticipantID))
+    }
+
+    func testInvitationPruningRevokesExpiredAccessWhenOwnerClockIsBehind() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        family.clock.set("2026-09-07T16:00:00Z")
+        server.authoritativeTime = invitation.invitation.expiresAt.addingTimeInterval(1)
+
+        _ = try await family.store.createChildInvitation(memberID: family.alek.id)
+
+        let zone = try XCTUnwrap(server.zones[family.store.session.location!.zoneName])
+        XCTAssertFalse(zone.pendingInvitationParticipants.contains(invitation.invitation.cloudShareParticipantID))
     }
 
     func testRevokedInvitedParentDoesNotMakeOwnerRecoveryAmbiguous() async throws {
