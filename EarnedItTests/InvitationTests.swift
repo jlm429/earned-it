@@ -175,10 +175,45 @@ final class InvitationTests: XCTestCase {
 
         joining = try HouseholdStore(repository: repository, transport: transport,
                                      clock: { family.clock.now }, automaticSync: false)
+        transport.account = "different-account"
+        await XCTAssertThrowsErrorAsync(try await joining!.retryInvitationCleanup(), expected: .wrongAccount)
+        XCTAssertEqual(joining!.session.pendingInvitationAcceptance?.phase, .cleanupRequired)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+
+        transport.account = "joining-child"
         try await joining!.retryInvitationCleanup()
         XCTAssertNil(joining!.session.pendingInvitationAcceptance)
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
         XCTAssertEqual(transport.leaveAttempts, 2)
+    }
+
+    func testInvitationClaimSequenceOverflowFailsSafely() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let zoneName = invitation.shareURL.lastPathComponent
+        let invitationFact = try XCTUnwrap(server.zones[zoneName]?.facts.values.first { fact in
+            if case .invitation(let value) = fact.body { return value.id == invitation.invitation.id }
+            return false
+        })
+        server.zones[zoneName]?.facts[invitationFact.id] = HouseholdFact(
+            id: invitationFact.id,
+            householdID: invitationFact.householdID,
+            sequence: Int64.max,
+            authorDeviceID: invitationFact.authorDeviceID,
+            authorMemberID: invitationFact.authorMemberID,
+            body: invitationFact.body
+        )
+        let transport = TestTransport(server: server, account: "overflow-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+
+        await XCTAssertThrowsErrorAsync(try await joining.redeemInvitation(invitation.qrPayload),
+                                        expected: .malformedData)
+        XCTAssertNil(joining.household)
+        XCTAssertFalse(server.zones[zoneName]!.participants.contains("overflow-child"))
+        XCTAssertNil(server.zones[zoneName]!.facts[invitation.invitation.claimFactID])
     }
 
     func testSystemAcceptedInvitationRollsBackWhenCodeRedemptionFails() async throws {

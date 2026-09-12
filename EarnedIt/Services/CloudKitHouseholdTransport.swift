@@ -71,7 +71,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     func leave(_ location: CloudLocation) async throws {
         guard !location.isOwner else { return }
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
-        _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID)
+        do { _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID) }
+        catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {}
     }
 
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {

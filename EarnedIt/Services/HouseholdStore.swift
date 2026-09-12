@@ -538,7 +538,9 @@ final class HouseholdStore {
         }
         guard clock() < invitation.expiresAt else { throw HouseholdError.invitationExpired }
         guard try await transport.canWrite(to: location) else { throw HouseholdError.readOnly }
-        let sequence = (remote.map(\.sequence).max() ?? 0) + 1
+        let previousSequence = remote.map(\.sequence).max() ?? 0
+        guard previousSequence < Int64.max else { throw HouseholdError.malformedData }
+        let sequence = previousSequence + 1
         let claim = InvitationClaim(invitationID: invitation.id, deviceID: session.deviceID,
                                     cloudParticipantID: participant, memberID: invitation.memberID,
                                     codeDigest: invitation.codeDigest, claimedAt: clock())
@@ -632,6 +634,9 @@ final class HouseholdStore {
         guard let pending = session.pendingInvitationAcceptance,
               pending.phase == .cleanupRequired else { return }
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard try await transport.participantID() == pending.cloudParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
         try await transport.leave(pending.location)
         var updated = session
         updated.pendingInvitationAcceptance = nil
