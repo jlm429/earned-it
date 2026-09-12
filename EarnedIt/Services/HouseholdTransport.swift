@@ -15,8 +15,13 @@ protocol HouseholdTransport {
     func discoverFamilies() async throws -> [CloudFamily]
     func accept(url: URL) async throws -> CloudLocation
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation
+    func leave(_ location: CloudLocation) async throws
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact]
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws
     func share(for location: CloudLocation, title: String) async throws -> CKShare
+    func createInvitationAccess(for location: CloudLocation, title: String, role: UserRole) async throws -> CloudInvitationAccess
+    func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws
+    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool
+    func claimInvitation(_ fact: HouseholdFact, in location: CloudLocation) async throws -> HouseholdFact
     func canWrite(to location: CloudLocation) async throws -> Bool
 }

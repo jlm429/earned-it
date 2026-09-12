@@ -107,14 +107,14 @@ final class SharingTests: XCTestCase {
         let family = try TestFamily(transport: ownerTransport)
         let id = try family.chore()
         try await family.store.connect()
+        let invitation = try await family.store.createChildInvitation(memberID: family.alek.id)
         let peer = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
                                       transport: TestTransport(server: server, account: "owner"),
                                       clock: { family.clock.now }, automaticSync: false)
-        let discovered = try await peer.discoverFamilies()
-        try await peer.joinExisting(discovered[0].location)
+        try await peer.redeemInvitation(invitation.qrPayload)
         XCTAssertNotEqual(peer.session.deviceID, family.store.session.deviceID)
         try family.complete(id, as: family.hanna)
-        try peer.selectProfile(family.alek.id)
+        XCTAssertEqual(peer.selectedMember?.id, family.alek.id)
         try peer.setCompletion(choreID: id, memberID: family.alek.id, date: family.clock.now, state: .done)
         try await family.store.synchronize()
         try await peer.synchronize()
@@ -257,15 +257,15 @@ final class SharingTests: XCTestCase {
         let facts = try family.repository.facts(householdID: family.store.household!.id)
         XCTAssertEqual(HouseholdSnapshot(facts: facts), HouseholdSnapshot(facts: facts.reversed()))
     }
-    func testRecordedRequiredAssignmentSurvivesOfflineAnyOneRevision() async throws {
+    func testLosingRequiredAssignmentBecomesHistoryAfterOfflineReassignment() async throws {
         try await checkRecordedAssignment(state: .done)
     }
 
-    func testRecordedMissedAssignmentSurvivesOfflineAnyOneRevision() async throws {
+    func testLosingMissedAssignmentBecomesHistoryAfterOfflineReassignment() async throws {
         try await checkRecordedAssignment(state: .missed)
     }
 
-    func testRecordedReversalAssignmentSurvivesOfflineAnyOneRevision() async throws {
+    func testLosingReversalAssignmentBecomesHistoryAfterOfflineReassignment() async throws {
         try await checkRecordedAssignment(state: .unmarked)
     }
 
@@ -278,9 +278,10 @@ final class SharingTests: XCTestCase {
                                       transport: TestTransport(server: server, account: "owner"),
                                       clock: { family.clock.now }, automaticSync: false)
         try await peer.joinExisting(family.store.session.location!)
+        try await authorizeLegacyInstallation(peer, memberIDs: [family.parent.id], parentStore: family.store)
         family.move(to: "2026-09-13T16:00:00Z")
         try family.store.saveChore(choreID: id, weekday: .monday, title: "Water plants",
-                                  mode: .anyOne, memberIDs: [family.hanna.id, family.alek.id])
+                                  mode: .particular, memberIDs: [family.alek.id])
         family.move(to: "2026-09-14T16:00:00Z")
         try peer.selectProfile(family.parent.id)
         try peer.setCompletion(choreID: id, memberID: family.hanna.id, date: family.clock.now, state: state)
@@ -289,17 +290,15 @@ final class SharingTests: XCTestCase {
         try await family.store.synchronize()
         XCTAssertEqual(peer.snapshot, family.store.snapshot)
         let chore = try XCTUnwrap(peer.dailyList().first)
-        XCTAssertEqual(chore.configuration.mode, .anyOne)
-        XCTAssertEqual(chore.requiredCompletionCount, 2)
+        XCTAssertEqual(chore.configuration.mode, .particular)
+        XCTAssertEqual(chore.requiredCompletionCount, 1)
         XCTAssertFalse(chore.isFullyComplete)
-        XCTAssertEqual(Set(chore.remainingMembers.map(\.id)), state.isAccountedFor ? [family.alek.id] : [family.hanna.id, family.alek.id])
-        XCTAssertEqual(peer.weekFacts(for: family.hanna.id)[0].accountedCount, state.isAccountedFor ? 1 : 0)
-        XCTAssertEqual(peer.weekFacts(for: family.hanna.id)[0].expectedCount, 1)
+        XCTAssertEqual(chore.remainingMembers.map(\.id), [family.alek.id])
+        XCTAssertEqual(peer.weekFacts(for: family.hanna.id)[0].accountedCount, 0)
+        XCTAssertEqual(peer.weekFacts(for: family.hanna.id)[0].expectedCount, 0)
         XCTAssertEqual(peer.weekFacts(for: family.alek.id)[0].expectedCount, 1)
         XCTAssertEqual(peer.weekFacts(for: family.alek.id)[0].accountedCount, 0)
-        try peer.setCompletion(choreID: id, memberID: family.hanna.id, date: family.clock.now, state: .unmarked)
-        XCTAssertEqual(peer.dailyList()[0].requiredCompletionCount, 2)
-        XCTAssertEqual(peer.dailyList()[0].creditState(for: family.hanna.id), .unmarked)
+        XCTAssertEqual(chore.historicalContributions.map(\.state), [state])
     }
 
     func testRejectedOfflineCompletionAllowsRequestsAndRecoversAfterApproval() async throws {
@@ -352,6 +351,7 @@ final class SharingTests: XCTestCase {
                                       transport: TestTransport(server: server, account: "owner"),
                                       clock: { family.clock.now }, automaticSync: false)
         try await peer.joinExisting(family.store.session.location!)
+        try await authorizeLegacyInstallation(peer, memberIDs: [second.id], parentStore: family.store)
         try peer.selectProfile(second.id)
         try peer.archiveMember(family.parent.id)
         try family.store.archiveMember(second.id)
@@ -399,6 +399,7 @@ final class SharingTests: XCTestCase {
                                       clock: { family.clock.now }, automaticSync: false)
         let location = family.store.session.location!
         try await peer.joinExisting(location)
+        try await authorizeLegacyInstallation(peer, memberIDs: [family.hanna.id, family.parent.id], parentStore: family.store)
         try peer.selectProfile(family.hanna.id)
         try peer.setCompletion(choreID: chore, memberID: family.hanna.id, date: family.clock.now, state: .done)
         let completion = try XCTUnwrap(repository.pending(householdID: location.householdID).first)
@@ -433,6 +434,7 @@ final class SharingTests: XCTestCase {
                                       clock: { family.clock.now }, automaticSync: false)
         let location = family.store.session.location!
         try await peer.joinExisting(location)
+        try await authorizeLegacyInstallation(peer, memberIDs: [second.id, family.hanna.id], parentStore: family.store)
         try peer.selectProfile(second.id)
         let rejectedChore = try peer.saveChore(weekday: .monday, title: "Offline chore", mode: .all, memberIDs: [])
         try peer.selectProfile(family.hanna.id)
@@ -673,6 +675,16 @@ final class SharingTests: XCTestCase {
         try await store.synchronize()
         try store.selectProfile(family.parent.id)
         return (family, server, store, repository, transport)
+    }
+
+    private func authorizeLegacyInstallation(_ store: HouseholdStore, memberIDs: [UUID],
+                                             parentStore: HouseholdStore) async throws {
+        try store.requestProfiles(memberIDs, deviceName: "Existing shared installation")
+        try await store.synchronize()
+        try await parentStore.synchronize()
+        try parentStore.approve(XCTUnwrap(parentStore.pendingRequests.first), memberIDs: memberIDs)
+        try await parentStore.synchronize()
+        try await store.synchronize()
     }
 
     private func checkLocalDisconnect(_ fixture: ParentInstallation) throws {

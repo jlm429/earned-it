@@ -35,6 +35,7 @@ final class HouseholdStore {
         today = clock()
         cloudIsReadOnly = session.location != nil && session.cloudCanWrite != true
         try reload()
+        try migrateLegacyProfileAccess()
     }
 
     var household: Household? { snapshot.household }
@@ -52,6 +53,7 @@ final class HouseholdStore {
     var currentRequest: ProfileRequest? {
         snapshot.requests.last { $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID }
     }
+    var familyInvitations: [FamilyInvitation] { snapshot.invitations.sorted { $0.createdAt > $1.createdAt } }
 
     func dailyList(on date: Date? = nil) -> [DailyChore] {
         ChoreRules.dailyList(snapshot: snapshot, day: CivilDay(date ?? today, calendar: calendar), today: day)
@@ -149,6 +151,7 @@ final class HouseholdStore {
         var updated = session
         updated.householdID = household.id
         updated.selectedMemberID = parent.id
+        updated.legacyProfileIDs = []
         let created = [
             HouseholdFact(id: UUID(), householdID: household.id, sequence: 1, authorDeviceID: session.deviceID,
                           authorMemberID: parent.id, body: .household(household)),
@@ -298,6 +301,95 @@ final class HouseholdStore {
                                        cloudParticipantID: grant.cloudParticipantID, memberIDs: [], approvedBy: parent.id)))
     }
 
+    func invitationStatus(_ invitation: FamilyInvitation) -> InvitationLifecycleStatus {
+        snapshot.invitationStatus(invitation, now: clock())
+    }
+
+    func createChildInvitation(memberID: UUID) async throws -> IssuedFamilyInvitation {
+        try requireParent()
+        guard let member = snapshot.member(memberID), member.role == .child,
+              snapshot.isActive(member, on: day) else { throw HouseholdError.permission }
+        return try await issueInvitation(for: member, adding: nil)
+    }
+
+    func createParentInvitation(name: String, avatar: AvatarOption) async throws -> IssuedFamilyInvitation {
+        try requireParent()
+        guard let household else { throw HouseholdError.noHousehold }
+        let name = try validatedName(name)
+        guard !snapshot.members.contains(where: {
+            $0.role == .parent && $0.archivedFrom == nil
+                && $0.displayName.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }) else { throw HouseholdError.duplicateName }
+        let member = FamilyMember(id: UUID(), householdID: household.id, displayName: name, role: .parent,
+                                  avatar: avatar, joinedDay: day)
+        return try await issueInvitation(for: member, adding: member)
+    }
+
+    func revokeInvitation(_ invitation: FamilyInvitation) async throws {
+        try requireParent()
+        guard snapshot.invitation(invitation.id) == invitation,
+              snapshot.invitationClaim(invitation.id)?.deviceID != session.deviceID,
+              let parent = selectedMember, let transport, let location = session.location else {
+            throw HouseholdError.permission
+        }
+        try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID, from: location)
+        var bodies: [HouseholdFactBody] = [
+            .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
+                                                       revokedByMemberID: parent.id))
+        ]
+        if snapshot.invitationClaim(invitation.id) == nil, invitation.role == .parent,
+           var unclaimedParent = snapshot.member(invitation.memberID) {
+            unclaimedParent.archivedFrom = day
+            bodies.append(.member(unclaimedParent))
+        }
+        try append(bodies)
+        try await synchronize()
+    }
+
+    private func issueInvitation(for member: FamilyMember, adding newMember: FamilyMember?) async throws
+        -> IssuedFamilyInvitation {
+        try requireParent()
+        guard let household, member.householdID == household.id, member.role == .parent || newMember == nil else {
+            throw HouseholdError.permission
+        }
+        let code = try InvitationCode.generate()
+        if session.location == nil { try await connect() }
+        try await synchronize()
+        guard let transport, let location = session.location, let parent = selectedMember else {
+            throw HouseholdError.cloudUnavailable
+        }
+        let access = try await transport.createInvitationAccess(for: location, title: household.name, role: member.role)
+        let now = clock()
+        let invitation = FamilyInvitation(id: UUID(), householdID: household.id, claimFactID: UUID(),
+                                          memberID: member.id, role: member.role,
+                                          codeDigest: InvitationCode.digest(code)!, createdAt: now,
+                                          expiresAt: now.addingTimeInterval(InvitationCode.lifetime),
+                                          createdByMemberID: parent.id,
+                                          cloudShareParticipantID: access.participantID)
+        do {
+            var bodies: [HouseholdFactBody] = []
+            if let newMember { bodies.append(.member(newMember)) }
+            bodies.append(.invitation(invitation))
+            try append(bodies)
+            try await synchronize()
+            return IssuedFamilyInvitation(invitation: invitation, code: code, shareURL: access.url)
+        } catch {
+            try? await transport.revokeInvitationAccess(participantID: access.participantID, from: location)
+            if snapshot.invitation(invitation.id) != nil {
+                var cleanup: [HouseholdFactBody] = [
+                    .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
+                                                               revokedByMemberID: parent.id))
+                ]
+                if var unsharedParent = newMember {
+                    unsharedParent.archivedFrom = day
+                    cleanup.append(.member(unsharedParent))
+                }
+                try? append(cleanup)
+            }
+            throw error
+        }
+    }
+
     func connect() async throws {
         try requireParent()
         guard let household, let transport else { throw HouseholdError.cloudUnavailable }
@@ -336,6 +428,48 @@ final class HouseholdStore {
         try await importFamily(location, participant: participant)
     }
 
+    func join(url: URL, invitationCode: String) async throws {
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let participant = try await transport.participantID()
+        let location = try await transport.accept(url: url)
+        do { try await redeemInvitation(invitationCode, in: location, participant: participant) }
+        catch {
+            try? await transport.leave(location)
+            throw error
+        }
+    }
+
+    func redeemInvitation(_ text: String) async throws {
+        guard let credential = InvitationCredential(text: text) else { throw HouseholdError.invitationNotFound }
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        if let location = session.location, let participant = session.cloudParticipantID {
+            try await redeemInvitation(credential.code, in: location, participant: participant)
+            return
+        }
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        let participant = try await transport.participantID()
+        if let shareURL = credential.shareURL {
+            let location = try await transport.accept(url: shareURL)
+            do { try await redeemInvitation(credential.code, in: location, participant: participant) }
+            catch {
+                try? await transport.leave(location)
+                throw error
+            }
+            return
+        }
+        let families = try await transport.discoverFamilies()
+        for family in families {
+            let remote = try await transport.fetch(from: family.location)
+            let imported = HouseholdSnapshot(facts: remote)
+            if imported.invitation(matchingCode: credential.code) != nil {
+                try await redeemInvitation(credential.code, in: family.location, participant: participant, remote: remote)
+                return
+            }
+        }
+        throw HouseholdError.invitationNotFound
+    }
+
     func accept(metadata: CKShare.Metadata) async {
         do {
             guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
@@ -352,19 +486,62 @@ final class HouseholdStore {
         try await importFamily(location, participant: transport.participantID())
     }
 
+    private func redeemInvitation(_ code: String, in location: CloudLocation, participant: String,
+                                  remote suppliedFacts: [HouseholdFact]? = nil) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard session.householdID == nil || session.householdID == location.householdID else {
+            throw HouseholdError.alreadyHasHousehold
+        }
+        let remote: [HouseholdFact]
+        if let suppliedFacts { remote = suppliedFacts }
+        else { remote = try await transport.fetch(from: location) }
+        try validate(remote, householdID: location.householdID)
+        let imported = HouseholdSnapshot(facts: remote)
+        try validateCompleteFamily(imported, householdID: location.householdID)
+        guard let invitation = imported.invitation(matchingCode: code),
+              let member = imported.member(invitation.memberID), member.role == invitation.role,
+              invitation.householdID == location.householdID else { throw HouseholdError.invitationNotFound }
+        if imported.isInvitationRevoked(invitation.id) { throw HouseholdError.invitationRevoked }
+        guard let importedHousehold = imported.household,
+              imported.isActive(member, on: CivilDay(clock(), calendar: importedHousehold.calendar)) else {
+            throw HouseholdError.invitationUnavailable
+        }
+        guard try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
+                                                      in: location) else {
+            throw HouseholdError.invitationNotFound
+        }
+        if let existing = imported.invitationClaim(invitation.id) {
+            guard existing.deviceID == session.deviceID, existing.cloudParticipantID == participant,
+                  existing.memberID == invitation.memberID, existing.codeDigest == invitation.codeDigest else {
+                throw HouseholdError.invitationConsumed
+            }
+            let canWrite = try await transport.canWrite(to: location)
+            guard canWrite else { throw HouseholdError.readOnly }
+            try attach(remote: remote, location: location, participant: participant,
+                       selectedMemberID: invitation.memberID, cloudCanWrite: canWrite)
+            return
+        }
+        guard clock() < invitation.expiresAt else { throw HouseholdError.invitationExpired }
+        guard try await transport.canWrite(to: location) else { throw HouseholdError.readOnly }
+        let sequence = (remote.map(\.sequence).max() ?? 0) + 1
+        let claim = InvitationClaim(invitationID: invitation.id, deviceID: session.deviceID,
+                                    cloudParticipantID: participant, memberID: invitation.memberID,
+                                    codeDigest: invitation.codeDigest, claimedAt: clock())
+        let fact = HouseholdFact(id: invitation.claimFactID, householdID: location.householdID, sequence: sequence,
+                                 authorDeviceID: session.deviceID, authorMemberID: nil,
+                                 body: .invitationClaim(claim))
+        let confirmedClaim = try await transport.claimInvitation(fact, in: location)
+        try attach(remote: remote + [confirmedClaim], location: location, participant: participant,
+                   selectedMemberID: invitation.memberID, cloudCanWrite: true)
+        syncMessage = "Family joined"
+    }
+
     private func importFamily(_ location: CloudLocation, participant: String) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let remote = try await transport.fetch(from: location)
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
-        guard imported.household?.id == location.householdID else { throw HouseholdError.invitation }
-        guard imported.household?.isSetupComplete == true,
-              imported.members.contains(where: { $0.role == .parent }),
-              imported.members.contains(where: { $0.role == .child }),
-              imported.revisions.allSatisfy({ revision in revision.memberIDs.allSatisfy { imported.member($0) != nil } }),
-              imported.completions.allSatisfy({ contribution in
-                  imported.member(contribution.memberID) != nil && imported.revisions.contains { $0.id == contribution.revisionID }
-              }) else { throw HouseholdError.familyStillSyncing }
+        try validateCompleteFamily(imported, householdID: location.householdID)
         let canWrite = try await transport.canWrite(to: location)
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         var updated = session
@@ -373,11 +550,38 @@ final class HouseholdStore {
         updated.cloudParticipantID = participant
         updated.selectedMemberID = nil
         updated.cloudCanWrite = canWrite
+        updated.legacyProfileIDs = []
         try repository.commit(facts: remote, session: updated, uploaded: true)
         session = updated
         cloudIsReadOnly = !canWrite
         try reload()
         syncMessage = "Family connected"
+    }
+
+    private func attach(remote: [HouseholdFact], location: CloudLocation, participant: String,
+                        selectedMemberID: UUID, cloudCanWrite: Bool) throws {
+        var updated = session
+        updated.householdID = location.householdID
+        updated.location = location
+        updated.cloudParticipantID = participant
+        updated.selectedMemberID = selectedMemberID
+        updated.cloudCanWrite = cloudCanWrite
+        updated.legacyProfileIDs = []
+        try repository.commit(facts: remote, session: updated, uploaded: true)
+        session = updated
+        cloudIsReadOnly = !cloudCanWrite
+        try reload()
+    }
+
+    private func validateCompleteFamily(_ imported: HouseholdSnapshot, householdID: UUID) throws {
+        guard imported.household?.id == householdID else { throw HouseholdError.invitation }
+        guard imported.household?.isSetupComplete == true,
+              imported.members.contains(where: { $0.role == .parent }),
+              imported.members.contains(where: { $0.role == .child }),
+              imported.revisions.allSatisfy({ revision in revision.memberIDs.allSatisfy { imported.member($0) != nil } }),
+              imported.completions.allSatisfy({ contribution in
+                  imported.member(contribution.memberID) != nil && imported.revisions.contains { $0.id == contribution.revisionID }
+              }) else { throw HouseholdError.familyStillSyncing }
     }
 
     func makeShare() async throws -> CKShare {
@@ -451,6 +655,13 @@ final class HouseholdStore {
             } else {
                 cloudAccessBlocked = error as? HouseholdError == .wrongAccount || error as? HouseholdError == .malformedData
             }
+            if cloudAccessBlocked {
+                var updated = session
+                updated.cloudCanWrite = false
+                try? repository.commit(facts: [], session: updated)
+                session = updated
+                cloudIsReadOnly = true
+            }
             syncMessage = "Sync needs attention. Changes are kept."
             throw error
         }
@@ -495,13 +706,19 @@ final class HouseholdStore {
     }
 
     private func append(_ body: HouseholdFactBody) throws {
+        try append([body])
+    }
+
+    private func append(_ bodies: [HouseholdFactBody]) throws {
         guard let householdID = session.householdID else { throw HouseholdError.noHousehold }
         let previousSequence = facts.map(\.sequence).max() ?? 0
-        guard previousSequence < Int64.max else { throw HouseholdError.malformedData }
-        let sequence = previousSequence + 1
-        let fact = HouseholdFact(id: UUID(), householdID: householdID, sequence: sequence,
-                                 authorDeviceID: session.deviceID, authorMemberID: selectedMember?.id, body: body)
-        try repository.commit(facts: [fact])
+        guard bodies.count <= Int64.max - previousSequence else { throw HouseholdError.malformedData }
+        let actorID = selectedMember?.id
+        let appended = bodies.enumerated().map { index, body in
+            HouseholdFact(id: UUID(), householdID: householdID, sequence: previousSequence + Int64(index) + 1,
+                          authorDeviceID: session.deviceID, authorMemberID: actorID, body: body)
+        }
+        try repository.commit(facts: appended)
         try reload()
         scheduleSync()
     }
@@ -512,6 +729,19 @@ final class HouseholdStore {
         rejectedChanges = try session.householdID.map { try repository.rejections(householdID: $0) } ?? [:]
     }
 
+    private func migrateLegacyProfileAccess() throws {
+        guard household != nil, session.legacyProfileIDs == nil else { return }
+        var updated = session
+        if household?.creatorDeviceID != session.deviceID, session.location?.isOwner == true,
+           let selected = session.selectedMemberID, snapshot.member(selected) != nil {
+            updated.legacyProfileIDs = [selected]
+        } else {
+            updated.legacyProfileIDs = []
+        }
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
     private func authorizePending(_ pending: [HouseholdFact]) throws {
         let approvedIDs = Set(profiles.map(\.id))
         for fact in pending {
@@ -519,6 +749,11 @@ final class HouseholdStore {
                 guard request.deviceID == session.deviceID, request.cloudParticipantID == session.cloudParticipantID else {
                     throw HouseholdError.permission
                 }
+                continue
+            }
+            if case .invitationClaim(let claim) = fact.body {
+                guard claim.deviceID == session.deviceID,
+                      claim.cloudParticipantID == session.cloudParticipantID else { throw HouseholdError.permission }
                 continue
             }
             guard let memberID = fact.authorMemberID, approvedIDs.contains(memberID),
@@ -547,6 +782,11 @@ final class HouseholdStore {
         case .grant(let value):
             return hasMembers(value.memberIDs + [value.approvedBy])
                 && available.requests.contains { $0.id == value.requestID }
+        case .invitation(let value): return hasMembers([value.memberID, value.createdByMemberID])
+        case .invitationClaim(let value):
+            return hasMembers([value.memberID]) && available.invitation(value.invitationID) != nil
+        case .invitationRevocation(let value):
+            return hasMembers([value.revokedByMemberID]) && available.invitation(value.invitationID) != nil
         }
     }
 
@@ -557,7 +797,10 @@ final class HouseholdStore {
     }
 
     private func validate(_ facts: [HouseholdFact], householdID: UUID) throws {
-        guard facts.allSatisfy({ $0.householdID == householdID && $0.sequence > 0 }) else { throw HouseholdError.malformedData }
+        guard Set(facts.map(\.id)).count == facts.count,
+              facts.allSatisfy({ $0.householdID == householdID && $0.sequence > 0 }) else {
+            throw HouseholdError.malformedData
+        }
         for fact in facts {
             switch fact.body {
             case .household(let value):
@@ -570,8 +813,43 @@ final class HouseholdStore {
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
             case .chore(let value):
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
+            case .invitation(let value):
+                guard value.householdID == householdID, value.createdAt < value.expiresAt,
+                      value.expiresAt.timeIntervalSince(value.createdAt) <= InvitationCode.lifetime,
+                      value.codeDigest.count == 64, !value.cloudShareParticipantID.isEmpty,
+                      fact.authorMemberID == value.createdByMemberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .invitationClaim(let value):
+                guard fact.authorMemberID == nil, fact.authorDeviceID == value.deviceID,
+                      !value.cloudParticipantID.isEmpty, value.codeDigest.count == 64 else {
+                    throw HouseholdError.malformedData
+                }
+            case .invitationRevocation(let value):
+                guard fact.authorMemberID == value.revokedByMemberID else { throw HouseholdError.malformedData }
             default: break
             }
         }
+        let resolved = HouseholdSnapshot(facts: facts)
+        guard Set(resolved.invitations.map(\.claimFactID)).count == resolved.invitations.count else {
+            throw HouseholdError.malformedData
+        }
+        for invitation in resolved.invitations {
+            guard let member = resolved.member(invitation.memberID), member.role == invitation.role,
+                  resolved.member(invitation.createdByMemberID)?.role == .parent else {
+                throw HouseholdError.malformedData
+            }
+            if let claim = resolved.invitationClaim(invitation.id) {
+                guard claim.memberID == invitation.memberID, claim.codeDigest == invitation.codeDigest,
+                      facts.contains(where: { $0.id == invitation.claimFactID && $0.body == .invitationClaim(claim) }) else {
+                    throw HouseholdError.malformedData
+                }
+            }
+        }
+        guard resolved.invitationClaims.allSatisfy({ resolved.invitation($0.invitationID) != nil }),
+              resolved.invitationRevocations.allSatisfy({ revocation in
+                  resolved.invitation(revocation.invitationID) != nil
+                      && resolved.member(revocation.revokedByMemberID)?.role == .parent
+              }) else { throw HouseholdError.malformedData }
     }
 }

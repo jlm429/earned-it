@@ -42,10 +42,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func accept(url: URL) async throws -> CloudLocation {
         guard url.scheme == "https", let host = url.host,
-              host == "icloud.com" || host.hasSuffix(".icloud.com") else { throw HouseholdError.invitation }
-        let metadatas = try await container.shareMetadatas(for: [url])
-        guard let metadata = try metadatas[url]?.get() else { throw HouseholdError.invitation }
-        return try await accept(metadata: metadata)
+              host == "icloud.com" || host.hasSuffix(".icloud.com") else {
+            throw HouseholdError.invitationUnavailable
+        }
+        do {
+            let metadatas = try await container.shareMetadatas(for: [url])
+            guard let metadata = try metadatas[url]?.get() else { throw HouseholdError.invitationUnavailable }
+            return try await accept(metadata: metadata)
+        } catch let error as CKError where error.code == .unknownItem || error.code == .permissionFailure {
+            throw HouseholdError.invitationUnavailable
+        }
     }
 
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation {
@@ -60,6 +66,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             _ = try result.get()
         }
         return location
+    }
+
+    func leave(_ location: CloudLocation) async throws {
+        guard !location.isOwner else { return }
+        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
+        _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID)
     }
 
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
@@ -96,15 +108,9 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     static func uploadConfirmed(_ facts: [HouseholdFact], to location: CloudLocation,
                                 save: (CKRecord) async throws -> CKRecord) async throws {
-        let zoneID = CKRecordZone.ID(zoneName: location.zoneName, ownerName: location.ownerName)
         for fact in facts.sorted(by: HouseholdFact.precedes) {
             guard fact.householdID == location.householdID else { throw HouseholdError.malformedData }
-            let record = CKRecord(recordType: "HouseholdFact",
-                                  recordID: CKRecord.ID(recordName: fact.id.uuidString, zoneID: zoneID))
-            let data = try JSONEncoder().encode(fact)
-            guard data.count < 900_000 else { throw HouseholdError.malformedData }
-            record["payload"] = data as CKRecordValue
-            record["formatVersion"] = 1 as CKRecordValue
+            let record = try record(for: fact, location: location)
             do { _ = try await save(record) } catch let error as CKError {
                 guard error.code == .serverRecordChanged,
                       let server = error.serverRecord, try decode(server) == fact else { throw error }
@@ -113,14 +119,14 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     func share(for location: CloudLocation, title: String) async throws -> CKShare {
-        guard location.isOwner else { throw HouseholdError.permission }
         let id = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
         do {
-            guard let share = try await container.privateCloudDatabase.record(for: id) as? CKShare else {
+            guard let share = try await database(for: location).record(for: id) as? CKShare else {
                 throw HouseholdError.malformedData
             }
             return share
         } catch let error as CKError where error.code == .unknownItem {
+            guard location.isOwner else { throw HouseholdError.invitation }
             let share = CKShare(recordZoneID: zoneID(for: location))
             share.publicPermission = .none
             share[CKShare.SystemFieldKey.title] = title as CKRecordValue
@@ -128,6 +134,64 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 throw HouseholdError.malformedData
             }
             return saved
+        }
+    }
+
+    func createInvitationAccess(for location: CloudLocation, title: String,
+                                role: UserRole) async throws -> CloudInvitationAccess {
+        let share = try await share(for: location, title: title)
+        let mayManage: Bool
+        if location.isOwner {
+            mayManage = true
+        } else if #available(iOS 26.0, *) {
+            mayManage = share.currentUserParticipant?.role == .administrator
+        } else {
+            mayManage = false
+        }
+        guard mayManage else { throw HouseholdError.invitationOwnerRequired }
+
+        let participant = CKShare.Participant.oneTimeURLParticipant()
+        participant.permission = .readWrite
+        if role == .parent, #available(iOS 26.0, *) {
+            participant.role = .administrator
+        } else {
+            participant.role = .privateUser
+        }
+        share.addParticipant(participant)
+        guard let saved = try await database(for: location).save(share) as? CKShare,
+              let url = oneTimeURL(in: saved, participantID: participant.participantID) else {
+            throw HouseholdError.invitation
+        }
+        return CloudInvitationAccess(participantID: participant.participantID, url: url)
+    }
+
+    func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
+        let share = try await share(for: location, title: "Earned It Family")
+        guard let participant = share.participants.first(where: { $0.participantID == participantID }) else { return }
+        share.removeParticipant(participant)
+        _ = try await database(for: location).save(share)
+    }
+
+    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
+        let share = try await share(for: location, title: "Earned It Family")
+        return share.currentUserParticipant?.participantID == participantID
+    }
+
+    func claimInvitation(_ fact: HouseholdFact, in location: CloudLocation) async throws -> HouseholdFact {
+        guard case .invitationClaim = fact.body else { throw HouseholdError.malformedData }
+        let record = try Self.record(for: fact, location: location)
+        do {
+            let results = try await database(for: location).modifyRecords(
+                saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
+            )
+            guard let result = results.saveResults[record.recordID] else { throw HouseholdError.malformedData }
+            return try Self.decode(result.get())
+        } catch let error as CKError where error.code == .serverRecordChanged {
+            if let server = error.serverRecord {
+                let serverFact = try Self.decode(server)
+                if Self.isSameInvitationClaim(serverFact, as: fact) { return serverFact }
+            }
+            throw HouseholdError.invitationConsumed
         }
     }
 
@@ -147,6 +211,33 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         let fact = try JSONDecoder().decode(HouseholdFact.self, from: payload)
         guard record.recordID.recordName == fact.id.uuidString else { throw HouseholdError.malformedData }
         return fact
+    }
+
+    private static func record(for fact: HouseholdFact, location: CloudLocation) throws -> CKRecord {
+        let zoneID = CKRecordZone.ID(zoneName: location.zoneName, ownerName: location.ownerName)
+        let record = CKRecord(recordType: "HouseholdFact",
+                              recordID: CKRecord.ID(recordName: fact.id.uuidString, zoneID: zoneID))
+        let data = try JSONEncoder().encode(fact)
+        guard data.count < 900_000 else { throw HouseholdError.malformedData }
+        record["payload"] = data as CKRecordValue
+        record["formatVersion"] = 1 as CKRecordValue
+        return record
+    }
+
+    private static func isSameInvitationClaim(_ lhs: HouseholdFact, as rhs: HouseholdFact) -> Bool {
+        guard lhs.id == rhs.id, lhs.householdID == rhs.householdID,
+              lhs.authorDeviceID == rhs.authorDeviceID, lhs.authorMemberID == nil, rhs.authorMemberID == nil,
+              case .invitationClaim(let left) = lhs.body,
+              case .invitationClaim(let right) = rhs.body else { return false }
+        return left.invitationID == right.invitationID && left.deviceID == right.deviceID
+            && left.cloudParticipantID == right.cloudParticipantID && left.memberID == right.memberID
+            && left.codeDigest == right.codeDigest
+    }
+
+    private func oneTimeURL(in share: CKShare, participantID: CKShare.Participant.ID) -> URL? {
+        if #available(iOS 26.0, *) { return share.oneTimeURL(for: participantID) }
+        let selector = NSSelectorFromString("oneTimeURLForParticipantID:")
+        return share.perform(selector, with: participantID)?.takeUnretainedValue() as? URL
     }
 
     private func database(for location: CloudLocation) -> CKDatabase {

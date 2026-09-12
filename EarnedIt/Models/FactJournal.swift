@@ -46,4 +46,7 @@ struct DeviceSession: Codable, Equatable {
     var location: CloudLocation?
     var cloudCanWrite: Bool?
     var celebratedWeeks: [String]?
+    /// Preserves only the profile selected by an older owner-account installation.
+    /// New joins set an empty array and rely on an invitation claim or shared grant.
+    var legacyProfileIDs: [UUID]?
 }

@@ -4,6 +4,8 @@ enum HouseholdError: LocalizedError, Equatable {
     case invalidAllowance, completionLocked
     case permission, invalidName, duplicateName, missingChildren, invalidAssignment, unavailableDay
     case noHousehold, alreadyHasHousehold, cloudUnavailable, wrongAccount, invitation, readOnly
+    case invitationNotFound, invitationExpired, invitationRevoked, invitationConsumed, invitationUnavailable
+    case invitationOwnerRequired
     case missingProfile, lastParent, pendingChanges, malformedData, familyStillSyncing
 
     var errorDescription: String? {
@@ -21,6 +23,12 @@ enum HouseholdError: LocalizedError, Equatable {
         case .cloudUnavailable: "iCloud sharing is unavailable. Sign in to iCloud on a device with the app's iCloud capability enabled, then try again. Local changes are kept."
         case .wrongAccount: "The iCloud account has changed. Switch back to the connected account before syncing this family."
         case .invitation: "Use an Earned It iCloud family invitation. Ask a parent to send it from Family & Sharing."
+        case .invitationNotFound: "That invitation code does not match a family available to this iCloud account. Open the Apple invitation first, then try the code again."
+        case .invitationExpired: "That invitation has expired. Ask a parent for a new one."
+        case .invitationRevoked: "That invitation was revoked. Ask a parent for a new one."
+        case .invitationConsumed: "That invitation has already been used. Ask a parent for a new one."
+        case .invitationUnavailable: "That invitation or family profile is no longer available. Ask a parent for a new invitation."
+        case .invitationOwnerRequired: "This iCloud version only lets the family owner add another person. Ask the owner to create this invitation."
         case .readOnly: "This invitation permits viewing only. Ask the family owner for permission to make changes."
         case .missingProfile: "A parent needs to approve profiles for this installation."
         case .lastParent: "Keep at least one active parent. Switch profiles before archiving yourself."
@@ -34,12 +42,21 @@ enum HouseholdError: LocalizedError, Equatable {
 enum PermissionService {
     static func availableProfiles(snapshot: HouseholdSnapshot, session: DeviceSession, day: CivilDay) -> [FamilyMember] {
         guard let household = snapshot.household else { return [] }
-        let hasOwnerAccess = session.location?.isOwner == true ||
-            (session.location == nil && household.creatorDeviceID == session.deviceID)
+        let hasCreatorAccess = household.creatorDeviceID == session.deviceID
         let granted = snapshot.grants.first {
             $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID
         }?.memberIDs ?? []
-        return snapshot.members.filter { snapshot.isActive($0, on: day) && (hasOwnerAccess || granted.contains($0.id)) }
+        let invited = snapshot.invitations.compactMap { invitation -> UUID? in
+            guard !snapshot.isInvitationRevoked(invitation.id),
+                  let claim = snapshot.invitationClaim(invitation.id),
+                  claim.deviceID == session.deviceID,
+                  claim.cloudParticipantID == session.cloudParticipantID,
+                  claim.memberID == invitation.memberID,
+                  claim.codeDigest == invitation.codeDigest else { return nil }
+            return invitation.memberID
+        }
+        let authorized = Set(granted + invited + (session.legacyProfileIDs ?? []))
+        return snapshot.members.filter { snapshot.isActive($0, on: day) && (hasCreatorAccess || authorized.contains($0.id)) }
     }
 
     static func requireParent(_ actor: FamilyMember?) throws {
