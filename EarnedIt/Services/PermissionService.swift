@@ -5,7 +5,7 @@ enum HouseholdError: LocalizedError, Equatable {
     case permission, invalidName, duplicateName, missingChildren, invalidAssignment, unavailableDay
     case noHousehold, alreadyHasHousehold, cloudUnavailable, wrongAccount, invitation, readOnly
     case invitationNotFound, invitationExpired, invitationRevoked, invitationConsumed, invitationUnavailable
-    case invitationOwnerRequired
+    case invitationOwnerRequired, accountMembershipConflict
     case missingProfile, lastParent, pendingChanges, malformedData, familyStillSyncing
 
     var errorDescription: String? {
@@ -29,6 +29,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .invitationConsumed: "That invitation has already been used. Ask a parent for a new one."
         case .invitationUnavailable: "That invitation or family profile is no longer available. Ask a parent for a new invitation."
         case .invitationOwnerRequired: "This iCloud version only lets the family owner add another person. Ask the owner to create this invitation."
+        case .accountMembershipConflict: "This iCloud account already belongs to an Earned It family member. Use that member, or ask the family owner to remove this account before joining again."
         case .readOnly: "This invitation permits viewing only. Ask the family owner for permission to make changes."
         case .missingProfile: "A parent needs to approve profiles for this installation."
         case .lastParent: "Keep at least one active parent. Switch profiles before archiving yourself."
@@ -46,14 +47,11 @@ enum PermissionService {
         let granted = snapshot.grants.first {
             $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID
         }?.memberIDs ?? []
-        let invited = snapshot.invitations.compactMap { invitation -> UUID? in
-            guard !snapshot.isInvitationRevoked(invitation.id),
-                  let claim = snapshot.invitationClaim(invitation.id),
-                  claim.deviceID == session.deviceID,
-                  claim.cloudParticipantID == session.cloudParticipantID,
-                  claim.memberID == invitation.memberID,
-                  claim.codeDigest == invitation.codeDigest else { return nil }
-            return invitation.memberID
+        var invited: [UUID] = []
+        if let participant = session.cloudParticipantID,
+           let membership = try? snapshot.accountMembership(participantID: participant,
+                                                            now: day.date(in: household.calendar)) {
+            invited = [membership.member.id]
         }
         let authorized = Set(granted + invited + (session.legacyProfileIDs ?? []))
         return snapshot.members.filter { snapshot.isActive($0, on: day) && (hasCreatorAccess || authorized.contains($0.id)) }

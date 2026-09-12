@@ -29,6 +29,16 @@ struct RootView: View {
             catch { store.errorMessage = error.localizedDescription }
             await acceptInvitation()
         }
+        .task(id: store.pendingInvitationExpiration) {
+            guard let expiration = store.pendingInvitationExpiration else { return }
+            do {
+                try await Task.sleep(for: .seconds(max(0, expiration.timeIntervalSinceNow)))
+                try await store.retryInvitationCleanup()
+            } catch is CancellationError {
+            } catch {
+                store.errorMessage = error.localizedDescription
+            }
+        }
         .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)-\(store.midnightTimerRevision)") {
             guard scenePhase == .active else { return }
             let delay = max(0, store.nextHouseholdMidnight.timeIntervalSince(store.today))

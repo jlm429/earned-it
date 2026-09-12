@@ -49,6 +49,8 @@ struct PendingInvitationAcceptance: Codable, Equatable {
     let cloudParticipantID: String
     let retainedFactIDs: [UUID]?
     let accessExistedBeforeAttempt: Bool?
+    var invitationID: UUID?
+    var expiresAt: Date?
     var phase: PendingInvitationPhase
 }
 

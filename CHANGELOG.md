@@ -9,7 +9,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 - First run now clearly separates creating a new family as its first approved parent from joining an existing family with a parent-issued invitation.
 - Parents choose whether an invitation grants a new parent profile or one exact existing child profile. Joining devices cannot choose or escalate their role, family, or sibling profile.
 - Private Apple one-time invitations can be shared natively or shown as QR codes, with a ten-character code for manual entry. Codes expire after 24 hours, are stored only as digests, and are claimed once.
-- Invalid, expired, revoked, consumed, and cross-family invitations fail without creating a replacement household. Failed link redemption removes newly accepted Apple access without revoking access that predated the attempt.
+- Invalid, expired, revoked, consumed, and cross-family invitations fail without creating a replacement household. Unfinished acceptance expires safely, while a valid same-account claim preserves the exact existing member across concurrent installations and replacement devices.
 - Existing profile grants remain valid. Older owner-account installations retain only their previously selected profile, while fresh owner-account installations receive no blanket family authority.
 - Parent and child invitations use private-user participants on every supported iOS version so invited parents retain household write access. Apple participant management remains owner-only, and all new participants use role-bound invitations.
 

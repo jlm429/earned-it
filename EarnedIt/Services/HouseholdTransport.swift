@@ -27,6 +27,6 @@ protocol HouseholdTransport {
     func createInvitationAccess(for location: CloudLocation, title: String, role: UserRole) async throws -> CloudInvitationAccess
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool
-    func claimInvitation(_ fact: HouseholdFact, in location: CloudLocation) async throws -> HouseholdFact
+    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact]
     func canWrite(to location: CloudLocation) async throws -> Bool
 }

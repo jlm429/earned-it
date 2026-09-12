@@ -67,6 +67,7 @@ final class TestTransport: HouseholdTransport {
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
+    var acceptErrorAfterHook: Error?
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
@@ -106,6 +107,7 @@ final class TestTransport: HouseholdTransport {
         guard try await invitationLocation(for: url) == location,
               let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitationNotFound }
         await beforeAccept?()
+        if let acceptErrorAfterHook { throw acceptErrorAfterHook }
         if let participantID = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
             .first(where: { $0.name == "invitation" })?.value {
             guard zone.pendingInvitationParticipants.contains(participantID) else { throw HouseholdError.invitationConsumed }
@@ -167,15 +169,22 @@ final class TestTransport: HouseholdTransport {
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
         server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
     }
-    func claimInvitation(_ fact: HouseholdFact, in location: CloudLocation) async throws -> HouseholdFact {
-        guard server.writeAllowed, case .invitationClaim = fact.body else { throw HouseholdError.readOnly }
-        if let existing = server.zones[location.zoneName]?.facts[fact.id] {
-            guard Self.isSameInvitationClaim(existing, as: fact) else { throw HouseholdError.invitationConsumed }
-            return existing
+    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
+        guard server.writeAllowed, facts.count == 2,
+              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+            throw HouseholdError.readOnly
         }
-        server.zones[location.zoneName]?.facts[fact.id] = fact
-        uploadedIDs.append(fact.id)
-        return fact
+        for fact in facts {
+            if let existing = server.zones[location.zoneName]?.facts[fact.id],
+               !Self.isSameInvitationClaim(existing, as: fact) {
+                throw HouseholdError.invitationConsumed
+            }
+        }
+        for fact in facts {
+            server.zones[location.zoneName]?.facts[fact.id] = fact
+            uploadedIDs.append(fact.id)
+        }
+        return facts
     }
     func canWrite(to location: CloudLocation) async throws -> Bool { server.writeAllowed }
 

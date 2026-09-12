@@ -30,6 +30,13 @@ struct IssuedFamilyInvitation: Identifiable, Equatable {
     }
 }
 
+/// One CloudKit participant has at most one active household claim, which fixes its exact member and role.
+struct AccountFamilyMembership {
+    let invitation: FamilyInvitation
+    let claim: InvitationClaim
+    let member: FamilyMember
+}
+
 struct InvitationCredential: Equatable {
     let code: String
     let shareURL: URL?
@@ -81,6 +88,15 @@ enum InvitationCode {
         return SHA256.hash(data: Data(normalized.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    static func accountClaimID(householdID: UUID, participantID: String) -> UUID {
+        let digest = SHA256.hash(data: Data("\(householdID.uuidString)/\(participantID)".utf8))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
     private static func format(_ raw: String) -> String {
         let characters = Array(raw)
         return String(characters[0..<4]) + "-" + String(characters[4..<8]) + "-" + String(characters[8..<10])
@@ -98,5 +114,23 @@ extension HouseholdSnapshot {
         if invitationClaim(invitation.id) != nil { return .consumed }
         if now >= invitation.expiresAt { return .expired }
         return .available
+    }
+
+    func accountMembership(participantID: String, now: Date) throws -> AccountFamilyMembership? {
+        guard let household else { return nil }
+        let day = CivilDay(now, calendar: household.calendar)
+        let memberships = invitationClaims.compactMap { claim -> AccountFamilyMembership? in
+            guard claim.cloudParticipantID == participantID,
+                  let invitation = invitation(claim.invitationID),
+                  !isInvitationRevoked(invitation.id),
+                  invitation.memberID == claim.memberID,
+                  invitation.codeDigest == claim.codeDigest,
+                  let member = member(claim.memberID),
+                  member.role == invitation.role,
+                  isActive(member, on: day) else { return nil }
+            return AccountFamilyMembership(invitation: invitation, claim: claim, member: member)
+        }
+        guard memberships.count <= 1 else { throw HouseholdError.malformedData }
+        return memberships.first
     }
 }

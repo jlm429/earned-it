@@ -208,21 +208,54 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         return share.currentUserParticipant?.participantID == participantID
     }
 
-    func claimInvitation(_ fact: HouseholdFact, in location: CloudLocation) async throws -> HouseholdFact {
-        guard case .invitationClaim = fact.body else { throw HouseholdError.malformedData }
-        let record = try Self.record(for: fact, location: location)
+    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
+        guard facts.count == 2,
+              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+            throw HouseholdError.malformedData
+        }
+        let records = try facts.map { try Self.record(for: $0, location: location) }
+        let database = database(for: location)
         do {
-            let results = try await database(for: location).modifyRecords(
-                saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
+            let results = try await database.modifyRecords(
+                saving: records, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
             )
-            guard let result = results.saveResults[record.recordID] else { throw HouseholdError.malformedData }
-            return try Self.decode(result.get())
-        } catch let error as CKError where error.code == .serverRecordChanged {
-            if let server = error.serverRecord {
-                let serverFact = try Self.decode(server)
-                if Self.isSameInvitationClaim(serverFact, as: fact) { return serverFact }
+            for (fact, record) in zip(facts, records) {
+                guard let result = results.saveResults[record.recordID],
+                      Self.isSameInvitationClaim(try Self.decode(result.get()), as: fact) else {
+                    throw HouseholdError.invitationConsumed
+                }
             }
-            throw HouseholdError.invitationConsumed
+            return facts
+        } catch {
+            var missing: [HouseholdFact] = []
+            for fact in facts {
+                let id = CKRecord.ID(recordName: fact.id.uuidString, zoneID: zoneID(for: location))
+                do {
+                    let existing = try Self.decode(try await database.record(for: id))
+                    guard Self.isSameInvitationClaim(existing, as: fact) else {
+                        throw HouseholdError.invitationConsumed
+                    }
+                } catch let cloudError as CKError where cloudError.code == .unknownItem {
+                    missing.append(fact)
+                }
+            }
+            guard !missing.isEmpty else { return facts }
+            let missingRecords = try missing.map { try Self.record(for: $0, location: location) }
+            do {
+                let results = try await database.modifyRecords(
+                    saving: missingRecords, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
+                )
+                for (fact, record) in zip(missing, missingRecords) {
+                    guard let result = results.saveResults[record.recordID],
+                          Self.isSameInvitationClaim(try Self.decode(result.get()), as: fact) else {
+                        throw HouseholdError.invitationConsumed
+                    }
+                }
+                return facts
+            } catch let cloudError as CKError where cloudError.code == .serverRecordChanged
+                || cloudError.code == .batchRequestFailed || cloudError.code == .partialFailure {
+                throw HouseholdError.invitationConsumed
+            }
         }
     }
 

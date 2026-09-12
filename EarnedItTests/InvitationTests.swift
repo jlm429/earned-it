@@ -188,7 +188,7 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 2)
     }
 
-    func testFailedInvitationReusePreservesPreexistingAccountAccess() async throws {
+    func testSameAccountInvitationReuseRecoversExactMembership() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
@@ -201,21 +201,76 @@ final class InvitationTests: XCTestCase {
         let secondTransport = TestTransport(server: server, account: "shared-account")
         let second = try HouseholdStore(repository: secondRepository, transport: secondTransport,
                                         clock: { family.clock.now }, automaticSync: false)
-        var observedPreexistingAccess = false
-        secondTransport.beforeAccept = {
-            let persisted = try? secondRepository.session()
-            observedPreexistingAccess = persisted?.pendingInvitationAcceptance?.accessExistedBeforeAttempt == true
-        }
-
-        await XCTAssertThrowsErrorAsync(try await second.redeemInvitation(invitation.qrPayload),
-                                        expected: .invitationConsumed)
-        XCTAssertTrue(observedPreexistingAccess)
-        XCTAssertNil(second.household)
+        try await second.redeemInvitation(invitation.qrPayload)
+        XCTAssertEqual(second.household?.id, family.store.household?.id)
+        XCTAssertEqual(second.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(second.profiles.map(\.id), [family.hanna.id])
         XCTAssertNil(second.session.pendingInvitationAcceptance)
         XCTAssertEqual(secondTransport.leaveAttempts, 0)
         XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
         try await first.synchronize()
         XCTAssertEqual(first.selectedMember?.id, family.hanna.id)
+    }
+
+    func testCleanupDefersToConcurrentSameAccountMembershipClaim() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let first = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                       transport: TestTransport(server: server, account: "shared-account"),
+                                       clock: { family.clock.now }, automaticSync: false)
+        let secondTransport = TestTransport(server: server, account: "shared-account")
+        let secondRepository = try HouseholdRepository(inMemory: true)
+        let second = try HouseholdStore(repository: secondRepository,
+                                        transport: secondTransport, clock: { family.clock.now }, automaticSync: false)
+        var firstError: Error?
+        var observedProvisionalState = false
+        secondTransport.beforeAccept = {
+            let pending = try? secondRepository.session().pendingInvitationAcceptance
+            observedProvisionalState = pending?.phase == .acceptingAccess
+                && pending?.accessExistedBeforeAttempt == false
+            do { try await first.redeemInvitation(invitation.qrPayload) }
+            catch { firstError = error }
+        }
+        secondTransport.acceptErrorAfterHook = CKError(.networkFailure)
+
+        do {
+            try await second.redeemInvitation(invitation.qrPayload)
+            XCTFail("The interrupted acceptance should report its transport error")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+        XCTAssertNil(firstError)
+        XCTAssertTrue(observedProvisionalState)
+        XCTAssertEqual(first.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(second.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(secondTransport.leaveAttempts, 0)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
+    }
+
+    func testExistingAccountMembershipBlocksAnotherFamilyAndProfile() async throws {
+        let server = TestCloudServer()
+        let firstFamily = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
+        let hannaInvitation = try await firstFamily.store.createChildInvitation(memberID: firstFamily.hanna.id)
+        let joined = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                        transport: TestTransport(server: server, account: "child-account"),
+                                        clock: { firstFamily.clock.now }, automaticSync: false)
+        try await joined.redeemInvitation(hannaInvitation.qrPayload)
+
+        let siblingInvitation = try await firstFamily.store.createChildInvitation(memberID: firstFamily.alek.id)
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "child-account"),
+                                             clock: { firstFamily.clock.now }, automaticSync: false)
+        await XCTAssertThrowsErrorAsync(try await replacement.redeemInvitation(siblingInvitation.qrPayload),
+                                        expected: .accountMembershipConflict)
+        XCTAssertNil(replacement.household)
+
+        let secondFamily = try TestFamily(transport: TestTransport(server: server, account: "second-owner"))
+        let otherInvitation = try await secondFamily.store.createChildInvitation(memberID: secondFamily.hanna.id)
+        await XCTAssertThrowsErrorAsync(try await replacement.redeemInvitation(otherInvitation.qrPayload),
+                                        expected: .accountMembershipConflict)
+        XCTAssertNil(replacement.household)
+        XCTAssertFalse(server.zones[otherInvitation.shareURL.lastPathComponent]!.participants.contains("child-account"))
     }
 
     func testInvitationClaimSequenceOverflowFailsSafely() async throws {
@@ -266,6 +321,8 @@ final class InvitationTests: XCTestCase {
         XCTAssertTrue(observedProvisionalState)
         XCTAssertEqual(joining.household?.id, family.store.household?.id)
         XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.invitationID, invitation.invitation.id)
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.expiresAt, invitation.invitation.expiresAt)
 
         await XCTAssertThrowsErrorAsync(
             try await joining.redeemInvitation("2345-6789-AB"),
@@ -275,6 +332,45 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertTrue(try repository.facts(householdID: invitation.invitation.householdID).isEmpty)
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("metadata-child"))
+    }
+
+    func testPendingMetadataAcceptanceExpiresAndLeavesAccess() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "metadata-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+
+        family.move(to: "2026-09-08T17:00:01Z")
+        try await joining.retryInvitationCleanup()
+        XCTAssertNil(joining.household)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+        XCTAssertFalse(server.zones[location.zoneName]!.participants.contains("metadata-child"))
+    }
+
+    func testRevokedPendingMetadataAcceptanceLeavesAccess() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "metadata-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+
+        try await family.store.revokeInvitation(invitation.invitation)
+        try await joining.retryInvitationCleanup()
+        XCTAssertNil(joining.household)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertFalse(server.zones[location.zoneName]!.participants.contains("metadata-child"))
     }
 
     func testPendingSystemAcceptanceRejectsPackagedShareFromAnotherFamily() async throws {
