@@ -32,7 +32,8 @@ protocol HouseholdTransport {
         -> AccountMembershipLock
     func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                        claimBinding: String, now: Date) async throws -> AccountMembershipLock
-    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
+                                      now: Date) async throws -> Bool
     func membershipLocation(householdID: UUID) async throws -> CloudLocation?
     func createZone(for household: Household) async throws -> CloudLocation
     func discoverFamilies() async throws -> [CloudFamily]
@@ -43,7 +44,7 @@ protocol HouseholdTransport {
     func accept(url: URL, expected location: CloudLocation) async throws
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation
     func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws
-    func leave(_ location: CloudLocation) async throws
+    func leave(_ location: CloudLocation, expectedParticipantID: String) async throws
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact]
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws
     func share(for location: CloudLocation, title: String) async throws -> CKShare

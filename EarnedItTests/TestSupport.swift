@@ -78,6 +78,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
     var beforeLeave: (() async -> Void)?
+    var beforeAccountLockRelease: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
@@ -129,7 +130,11 @@ final class TestTransport: HouseholdTransport {
         server.accountMembershipLocks[account] = existing
         return existing
     }
-    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool {
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
+                                      now: Date) async throws -> Bool {
+        await beforeAccountLockRelease?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
         if accountLockReleaseFailures > 0 {
             accountLockReleaseFailures -= 1
             throw CKError(.networkFailure)
@@ -193,9 +198,11 @@ final class TestTransport: HouseholdTransport {
     func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws {
         throw HouseholdError.invitation
     }
-    func leave(_ location: CloudLocation) async throws {
+    func leave(_ location: CloudLocation, expectedParticipantID: String) async throws {
         leaveAttempts += 1
         await beforeLeave?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
         if let leaveError { throw leaveError }
         if leaveFailures > 0 {
             leaveFailures -= 1

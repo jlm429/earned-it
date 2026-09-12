@@ -79,8 +79,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
-    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, now: Date) async throws -> Bool {
-        let result = try await updateAccountMembershipLock { existing in
+    func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
+                                      now: Date) async throws -> Bool {
+        try Task.checkCancellation()
+        guard try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        try Task.checkCancellation()
+        let result = try await updateAccountMembershipLock(expectedParticipantID: expectedParticipantID) { existing in
             guard var existing else {
                 return AccountMembershipLock(householdID: householdID, attemptID: attemptID, state: .released,
                                              expiresAt: now, claimBinding: nil)
@@ -197,7 +201,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
-    func leave(_ location: CloudLocation) async throws {
+    func leave(_ location: CloudLocation, expectedParticipantID: String) async throws {
+        try Task.checkCancellation()
+        guard try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        try Task.checkCancellation()
         guard !location.isOwner else { return }
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
         do { _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID) }
@@ -405,6 +412,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     private func updateAccountMembershipLock(
+        expectedParticipantID: String? = nil,
         _ update: (AccountMembershipLock?) throws -> AccountMembershipLock
     ) async throws -> AccountMembershipLock {
         let database = container.privateCloudDatabase
@@ -423,6 +431,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             record["payload"] = try JSONEncoder().encode(next) as CKRecordValue
             record["formatVersion"] = 1 as CKRecordValue
             do {
+                try Task.checkCancellation()
+                if let expectedParticipantID,
+                   try await participantID() != expectedParticipantID { throw HouseholdError.wrongAccount }
+                try Task.checkCancellation()
                 let results = try await database.modifyRecords(saving: [record], deleting: [],
                                                                savePolicy: .ifServerRecordUnchanged, atomically: true)
                 guard let result = results.saveResults[recordID] else { throw HouseholdError.malformedData }

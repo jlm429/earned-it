@@ -23,7 +23,7 @@ final class HouseholdStore {
     var errorMessage: String?
     private var syncTask: Task<Void, Never>?
     private var activeSync: Task<Void, Error>?
-    private var activeInvitationCleanup: Task<Void, Error>?
+    private var invitationCleanupTail: Task<Void, Never>?
     private var syncAgain = false
     private var facts: [HouseholdFact] = []
 
@@ -496,8 +496,10 @@ final class HouseholdStore {
             refreshed = candidate
         } catch {
             if lock.state == .provisional, lock.attemptID == attemptID {
-                if (try? await transport.releaseAccountMembershipLock(householdID: location.householdID,
-                                                                      attemptID: attemptID, now: clock())) == true {
+                if (try? await transport.releaseAccountMembershipLock(
+                    householdID: location.householdID, attemptID: attemptID,
+                    expectedParticipantID: participant, now: clock()
+                )) == true {
                     var cleared = session
                     cleared.accountMembershipLockAttemptID = nil
                     do {
@@ -867,9 +869,12 @@ final class HouseholdStore {
 
     private func reconcileInactiveAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        let participant = try await transport.participantID()
         guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
             guard try await transport.releaseAccountMembershipLock(householdID: lock.householdID,
-                                                                   attemptID: lock.attemptID, now: clock()) else {
+                                                                   attemptID: lock.attemptID,
+                                                                   expectedParticipantID: participant,
+                                                                   now: clock()) else {
                 throw HouseholdError.accountMembershipConflict
             }
             return
@@ -877,7 +882,6 @@ final class HouseholdStore {
         let remote = try await transport.fetch(from: location)
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
-        let participant = try await transport.participantID()
         guard let current = try membershipBinding(in: imported, location: location, participant: participant),
               current == lock.claimBinding else { throw HouseholdError.accountMembershipConflict }
         throw HouseholdError.accountMembershipConflict
@@ -885,9 +889,12 @@ final class HouseholdStore {
 
     private func reconcileExpiredAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        let participant = try await transport.participantID()
         guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
             guard try await transport.releaseAccountMembershipLock(householdID: lock.householdID,
-                                                                   attemptID: lock.attemptID, now: clock()) else {
+                                                                   attemptID: lock.attemptID,
+                                                                   expectedParticipantID: participant,
+                                                                   now: clock()) else {
                 throw HouseholdError.accountMembershipConflict
             }
             return
@@ -896,7 +903,6 @@ final class HouseholdStore {
         do {
             try validate(remote, householdID: location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
-            let participant = try await transport.participantID()
             if let binding = try membershipBinding(in: imported, location: location,
                                                    participant: participant) {
                 _ = try await transport.activateAccountMembershipLock(householdID: lock.householdID,
@@ -1166,21 +1172,28 @@ final class HouseholdStore {
     }
 
     func retryInvitationCleanup() async throws {
-        if let activeInvitationCleanup {
-            return try await activeInvitationCleanup.value
+        let predecessor = invitationCleanupTail
+        let cleanup = Task { @MainActor in
+            await predecessor?.value
+            try Task.checkCancellation()
+            try await performInvitationCleanup()
         }
-        let task = Task { try await performInvitationCleanup() }
-        activeInvitationCleanup = task
-        defer { activeInvitationCleanup = nil }
-        try await task.value
+        invitationCleanupTail = Task { _ = try? await cleanup.value }
+        try await withTaskCancellationHandler {
+            try await cleanup.value
+        } onCancel: {
+            cleanup.cancel()
+        }
     }
 
     private func performInvitationCleanup() async throws {
+        try Task.checkCancellation()
         guard var pending = session.pendingInvitationAcceptance else { return }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         guard try await transport.participantID() == pending.cloudParticipantID else {
             throw HouseholdError.wrongAccount
         }
+        try Task.checkCancellation()
         if pending.accountLockAttemptID == nil {
             pending.accountLockAttemptID = try await acquireAccountMembershipLock(
                 householdID: pending.location.householdID
@@ -1188,6 +1201,7 @@ final class HouseholdStore {
             try persistPendingInvitation(pending)
         }
         let remote = try await accessibleFacts(at: pending.location)
+        try Task.checkCancellation()
         if let remote {
             try validate(remote, householdID: pending.location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
@@ -1227,16 +1241,22 @@ final class HouseholdStore {
                 }
             }
         }
+        try Task.checkCancellation()
         try markPendingInvitationForCleanup(pending)
         if pending.accessExistedBeforeAttempt == false {
-            try await transport.leave(pending.location)
+            try Task.checkCancellation()
+            try await transport.leave(pending.location, expectedParticipantID: pending.cloudParticipantID)
         }
         if let attemptID = pending.accountLockAttemptID {
+            try Task.checkCancellation()
             guard try await transport.releaseAccountMembershipLock(householdID: pending.location.householdID,
-                                                                   attemptID: attemptID, now: clock()) else {
+                                                                   attemptID: attemptID,
+                                                                   expectedParticipantID: pending.cloudParticipantID,
+                                                                   now: clock()) else {
                 throw HouseholdError.accountMembershipConflict
             }
         }
+        try Task.checkCancellation()
         var updated = session
         updated.pendingInvitationAcceptance = nil
         try repository.commit(facts: [], session: updated)
@@ -1421,11 +1441,13 @@ final class HouseholdStore {
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
                 if [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code),
-                   let attemptID = session.accountMembershipLockAttemptID {
+                   let attemptID = session.accountMembershipLockAttemptID,
+                   let expectedParticipantID = session.cloudParticipantID {
                     do {
-                        if try await transport.participantID() == session.cloudParticipantID {
+                        if try await transport.participantID() == expectedParticipantID {
                             accountLockReleased = try await transport.releaseAccountMembershipLock(
-                                householdID: location.householdID, attemptID: attemptID, now: clock()
+                                householdID: location.householdID, attemptID: attemptID,
+                                expectedParticipantID: expectedParticipantID, now: clock()
                             )
                         }
                     } catch {

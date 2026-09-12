@@ -224,7 +224,7 @@ final class InvitationTests: XCTestCase {
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
     }
 
-    func testAccountChangeResumesCleanupWithoutOverlappingAttempts() async throws {
+    func testAccountChangeResumesCleanupAndRepeatedAttemptsConverge() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
@@ -259,6 +259,122 @@ final class InvitationTests: XCTestCase {
         let settledRetry = try await joining.retryScheduledInvitationCleanup()
         XCTAssertNil(settledRetry)
         XCTAssertEqual(transport.leaveAttempts, 2)
+    }
+
+    func testCleanupCancellationDuringValidationRetainsPendingAccess() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+
+        transport.beforeFetch = { withUnsafeCurrentTask { $0?.cancel() } }
+        let cleanup = Task { try await joining.retryInvitationCleanup() }
+        do {
+            try await cleanup.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        }
+
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .provisional)
+    }
+
+    func testCleanupCancellationDuringLeaveDoesNotMutateAccess() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+
+        transport.beforeLeave = { withUnsafeCurrentTask { $0?.cancel() } }
+        let cleanup = Task { try await joining.retryInvitationCleanup() }
+        do {
+            try await cleanup.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        }
+
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .provisional)
+    }
+
+    func testCleanupRevalidatesAccountBeforeLeaveAndLockRelease() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+
+        transport.beforeLeave = { transport.account = "different-account" }
+        await XCTAssertThrowsErrorAsync(try await joining.retryInvitationCleanup(), expected: .wrongAccount)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertNil(server.accountMembershipLocks["different-account"])
+
+        transport.account = "joining-child"
+        transport.beforeLeave = nil
+        transport.beforeAccountLockRelease = { transport.account = "different-account" }
+        await XCTAssertThrowsErrorAsync(try await joining.retryInvitationCleanup(), expected: .wrongAccount)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .provisional)
+        XCTAssertNil(server.accountMembershipLocks["different-account"])
+
+        transport.account = "joining-child"
+        transport.beforeAccountLockRelease = nil
+        try await joining.retryInvitationCleanup()
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .released)
+    }
+
+    func testCleanupCancellationBeforeLockReleaseRetainsPendingAttempt() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+
+        transport.beforeAccountLockRelease = { withUnsafeCurrentTask { $0?.cancel() } }
+        let cleanup = Task { try await joining.retryInvitationCleanup() }
+        do {
+            try await cleanup.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        }
+
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .provisional)
+
+        transport.beforeAccountLockRelease = nil
+        try await joining.retryInvitationCleanup()
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .released)
     }
 
     func testSameAccountInvitationReuseRecoversExactMembership() async throws {
@@ -725,12 +841,12 @@ final class InvitationTests: XCTestCase {
             expected: .accountMembershipConflict
         )
         let mismatchedRelease = try await transport.releaseAccountMembershipLock(
-            householdID: household, attemptID: UUID(), now: now
+            householdID: household, attemptID: UUID(), expectedParticipantID: "shared-account", now: now
         )
         XCTAssertFalse(mismatchedRelease)
         XCTAssertEqual(server.accountMembershipLocks["shared-account"]?.state, .active)
         let matchingRelease = try await transport.releaseAccountMembershipLock(
-            householdID: household, attemptID: attempt, now: now
+            householdID: household, attemptID: attempt, expectedParticipantID: "shared-account", now: now
         )
         XCTAssertTrue(matchingRelease)
         XCTAssertEqual(server.accountMembershipLocks["shared-account"]?.state, .released)
