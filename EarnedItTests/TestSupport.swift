@@ -81,6 +81,8 @@ final class TestTransport: HouseholdTransport {
     var acceptErrorAfterHook: Error?
     var invitationValidationTimeFailures = 0
     private(set) var leaveAttempts = 0
+    private(set) var leaveMutationEnqueues = 0
+    private(set) var accountLockMutationEnqueues = 0
     var beforeAccept: (() async -> Void)?
     var beforeLeave: (() async -> Void)?
     var beforeLeaveSubmission: (() async -> Void)?
@@ -148,6 +150,7 @@ final class TestTransport: HouseholdTransport {
         try Task.checkCancellation()
         guard account == expectedParticipantID,
               accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        accountLockMutationEnqueues += 1
         if accountLockReleaseFailures > 0 {
             accountLockReleaseFailures -= 1
             throw CKError(.networkFailure)
@@ -221,6 +224,7 @@ final class TestTransport: HouseholdTransport {
         try Task.checkCancellation()
         guard account == expectedParticipantID,
               accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        leaveMutationEnqueues += 1
         if let leaveError { throw leaveError }
         if leaveFailures > 0 {
             leaveFailures -= 1

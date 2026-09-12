@@ -218,7 +218,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         guard accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         guard !location.isOwner else { return }
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
-        do { _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID) }
+        do {
+            try await enqueueModifyRecords(saving: [], deleting: [shareID],
+                                           in: container.sharedCloudDatabase)
+            try Task.checkCancellation()
+            guard accountGeneration == expectedGeneration,
+                  try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        }
         catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound
             || error.code == .permissionFailure {}
     }
@@ -449,16 +455,30 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 try Task.checkCancellation()
                 if let expectedGeneration,
                    accountGeneration != expectedGeneration { throw HouseholdError.wrongAccount }
-                let results = try await database.modifyRecords(saving: [record], deleting: [],
-                                                               savePolicy: .ifServerRecordUnchanged, atomically: true)
-                guard let result = results.saveResults[recordID] else { throw HouseholdError.malformedData }
-                return try decodeAccountMembershipLock(result.get())
+                try await enqueueModifyRecords(saving: [record], deleting: [], in: database)
+                try Task.checkCancellation()
+                if let expectedGeneration,
+                   accountGeneration != expectedGeneration { throw HouseholdError.wrongAccount }
+                if let expectedParticipantID,
+                   try await participantID() != expectedParticipantID { throw HouseholdError.wrongAccount }
+                return next
             } catch let error as CKError {
                 guard Self.isAccountMembershipRecordConflict(error, recordID: recordID) else { throw error }
                 continue
             }
         }
         throw HouseholdError.accountMembershipConflict
+    }
+
+    private func enqueueModifyRecords(saving records: [CKRecord], deleting recordIDs: [CKRecord.ID],
+                                      in database: CKDatabase) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let operation = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: recordIDs)
+            operation.savePolicy = .ifServerRecordUnchanged
+            operation.isAtomic = true
+            operation.modifyRecordsResultBlock = { continuation.resume(with: $0) }
+            database.add(operation)
+        }
     }
 
     nonisolated static func isAccountMembershipRecordConflict(_ error: CKError,

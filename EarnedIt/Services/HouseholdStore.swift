@@ -679,7 +679,7 @@ final class HouseholdStore {
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try validateCompleteFamily(imported, householdID: location.householdID)
-        if let membership = try imported.accountMembership(participantID: participant, now: clock()) {
+        if let membership = try imported.committedAccountMembership(participantID: participant) {
             guard InvitationCode.digest(code) == membership.claim.codeDigest else {
                 throw HouseholdError.accountMembershipConflict
             }
@@ -689,7 +689,7 @@ final class HouseholdStore {
                 location: location, claimBinding: AccountMembershipBinding.invitation(membership)
             )
             try attach(remote: remote, location: location, participant: participant,
-                       selectedMemberID: membership.member.id, cloudCanWrite: canWrite,
+                       membership: membership, cloudCanWrite: canWrite,
                        accountLockAttemptID: lock.attemptID)
             return
         }
@@ -747,7 +747,7 @@ final class HouseholdStore {
             let refreshed = try await transport.fetch(from: location)
             try validate(refreshed, householdID: location.householdID)
             let refreshedSnapshot = HouseholdSnapshot(facts: refreshed)
-            if let membership = try refreshedSnapshot.accountMembership(participantID: participant, now: clock()),
+            if let membership = try refreshedSnapshot.committedAccountMembership(participantID: participant),
                membership.claim.codeDigest == invitation.codeDigest {
                 let canWrite = try await transport.canWrite(to: location)
                 let lock = try await activateAccountMembershipLock(
@@ -755,7 +755,7 @@ final class HouseholdStore {
                     attemptID: attemptID
                 )
                 try attach(remote: refreshed, location: location, participant: participant,
-                           selectedMemberID: membership.member.id, cloudCanWrite: canWrite,
+                           membership: membership, cloudCanWrite: canWrite,
                            accountLockAttemptID: lock.attemptID)
                 return
             }
@@ -767,7 +767,7 @@ final class HouseholdStore {
             attemptID: attemptID
         )
         try attach(remote: remote + confirmedClaims, location: location, participant: participant,
-                   selectedMemberID: invitation.memberID, cloudCanWrite: true,
+                   membership: membership, cloudCanWrite: true,
                    accountLockAttemptID: lock.attemptID)
         syncMessage = "Family joined"
     }
@@ -798,15 +798,18 @@ final class HouseholdStore {
     }
 
     private func attach(remote: [HouseholdFact], location: CloudLocation, participant: String,
-                        selectedMemberID: UUID, cloudCanWrite: Bool, accountLockAttemptID: UUID) throws {
+                        membership: AccountFamilyMembership, cloudCanWrite: Bool,
+                        accountLockAttemptID: UUID) throws {
         let imported = HouseholdSnapshot(facts: remote)
-        guard let membership = try imported.accountMembership(participantID: participant, now: clock()),
-              membership.member.id == selectedMemberID else { throw HouseholdError.malformedData }
+        guard let committed = try imported.committedAccountMembership(participantID: participant),
+              AccountMembershipBinding.invitation(committed) == AccountMembershipBinding.invitation(membership) else {
+            throw HouseholdError.malformedData
+        }
         var updated = session
         updated.householdID = location.householdID
         updated.location = location
         updated.cloudParticipantID = participant
-        updated.selectedMemberID = selectedMemberID
+        updated.selectedMemberID = membership.member.id
         updated.cloudCanWrite = cloudCanWrite
         updated.legacyProfileIDs = []
         updated.pendingInvitationAcceptance = nil
@@ -924,7 +927,7 @@ final class HouseholdStore {
                                    participant: String) throws -> String? {
         guard imported.household?.id == location.householdID else { return nil }
         if location.isOwner { return AccountMembershipBinding.owner(householdID: location.householdID) }
-        if let membership = try imported.accountMembership(participantID: participant, now: clock()) {
+        if let membership = try imported.committedAccountMembership(participantID: participant) {
             return AccountMembershipBinding.invitation(membership)
         }
         if imported.grants.contains(where: { grant in
@@ -1210,15 +1213,16 @@ final class HouseholdStore {
             try validate(remote, householdID: pending.location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
             try validateCompleteFamily(imported, householdID: pending.location.householdID)
-            if let membership = try imported.accountMembership(participantID: pending.cloudParticipantID,
-                                                               now: clock()) {
+            if let membership = try imported.committedAccountMembership(
+                participantID: pending.cloudParticipantID
+            ) {
                 let canWrite = try await transport.canWrite(to: pending.location)
                 let lock = try await activateAccountMembershipLock(
                     location: pending.location, claimBinding: AccountMembershipBinding.invitation(membership),
                     attemptID: pending.accountLockAttemptID
                 )
                 try attach(remote: remote, location: pending.location, participant: pending.cloudParticipantID,
-                           selectedMemberID: membership.member.id, cloudCanWrite: canWrite,
+                           membership: membership, cloudCanWrite: canWrite,
                            accountLockAttemptID: lock.attemptID)
                 return
             }
@@ -1338,7 +1342,7 @@ final class HouseholdStore {
             try validate(remote, householdID: family.location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
             try validateCompleteFamily(imported, householdID: family.location.householdID)
-            if let membership = try imported.accountMembership(participantID: participant, now: clock()) {
+            if let membership = try imported.committedAccountMembership(participantID: participant) {
                 located.append((family.location, remote, membership))
             }
         }
@@ -1354,7 +1358,7 @@ final class HouseholdStore {
             location: existing.0, claimBinding: AccountMembershipBinding.invitation(existing.2)
         )
         try attach(remote: existing.1, location: existing.0, participant: participant,
-                   selectedMemberID: existing.2.member.id, cloudCanWrite: canWrite,
+                   membership: existing.2, cloudCanWrite: canWrite,
                    accountLockAttemptID: lock.attemptID)
         return true
     }

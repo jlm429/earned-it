@@ -155,4 +155,21 @@ extension HouseholdSnapshot {
         guard memberships.count <= 1 else { throw HouseholdError.malformedData }
         return memberships.first
     }
+
+    func committedAccountMembership(participantID: String) throws -> AccountFamilyMembership? {
+        guard let household else { return nil }
+        let memberships = invitationClaims.compactMap { claim -> AccountFamilyMembership? in
+            guard claim.cloudParticipantID == participantID,
+                  let invitation = invitation(claim.invitationID),
+                  !isInvitationRevoked(invitation.id),
+                  invitation.memberID == claim.memberID,
+                  invitation.codeDigest == claim.codeDigest,
+                  let member = member(claim.memberID),
+                  member.role == invitation.role,
+                  isActive(member, on: CivilDay(claim.claimedAt, calendar: household.calendar)) else { return nil }
+            return AccountFamilyMembership(invitation: invitation, claim: claim, member: member)
+        }
+        guard memberships.count <= 1 else { throw HouseholdError.malformedData }
+        return memberships.first
+    }
 }

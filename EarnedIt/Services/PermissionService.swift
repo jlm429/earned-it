@@ -48,8 +48,7 @@ enum PermissionService {
             $0.deviceID == session.deviceID && $0.cloudParticipantID == session.cloudParticipantID
         }?.memberIDs ?? []
         if let participant = session.cloudParticipantID,
-           let membership = try? snapshot.accountMembership(participantID: participant,
-                                                            now: day.date(in: household.calendar)) {
+           let membership = try? snapshot.committedAccountMembership(participantID: participant) {
             if membership.member.role == .child {
                 return snapshot.members.filter {
                     $0.id == membership.member.id && snapshot.isActive($0, on: day)
