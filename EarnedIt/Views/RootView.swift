@@ -6,6 +6,7 @@ struct RootView: View {
     @Environment(HouseholdStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
     @State private var invitations = ShareAcceptance.shared
+    @State private var cloudAccountRevision = 0
 
     var body: some View {
         @Bindable var store = store
@@ -26,16 +27,15 @@ struct RootView: View {
         .task {
             store.refreshDate()
             do {
-                try await store.retryInvitationCleanup()
                 try await store.reconcileAccountMembershipLock()
             }
             catch { store.errorMessage = error.localizedDescription }
             await acceptInvitation()
         }
-        .task(id: "\(scenePhase)-\(store.pendingInvitationCleanupID ?? "none")") {
+        .task(id: "\(scenePhase)-\(store.pendingInvitationCleanupID ?? "none")-\(cloudAccountRevision)") {
             guard scenePhase == .active, store.pendingInvitationCleanupID != nil else { return }
             do {
-                var retryDelay: TimeInterval?
+                var retryDelay = try await store.retryScheduledInvitationCleanup()
                 while true {
                     let delay: TimeInterval
                     if let retryDelay {
@@ -63,7 +63,10 @@ struct RootView: View {
             if phase == .active { store.refreshDate() }
         }
         .onChange(of: invitations.pending) { _, _ in Task { await acceptInvitation() } }
-        .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in store.refreshDate() }
+        .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
+            cloudAccountRevision &+= 1
+            store.refreshDate()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in store.refreshDate() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in store.significantTimeChanged() }
         .alert("Unable to Update", isPresented: Binding(

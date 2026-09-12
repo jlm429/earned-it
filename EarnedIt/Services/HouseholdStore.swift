@@ -23,6 +23,7 @@ final class HouseholdStore {
     var errorMessage: String?
     private var syncTask: Task<Void, Never>?
     private var activeSync: Task<Void, Error>?
+    private var activeInvitationCleanup: Task<Void, Error>?
     private var syncAgain = false
     private var facts: [HouseholdFact] = []
 
@@ -56,8 +57,7 @@ final class HouseholdStore {
     }
     var familyInvitations: [FamilyInvitation] { snapshot.invitations.sorted { $0.createdAt > $1.createdAt } }
     var pendingInvitationCleanupID: String? {
-        guard let pending = session.pendingInvitationAcceptance,
-              pending.phase != .acceptingAccess else { return nil }
+        guard let pending = session.pendingInvitationAcceptance else { return nil }
         return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")/\(pending.phase.rawValue)"
     }
 
@@ -1166,6 +1166,16 @@ final class HouseholdStore {
     }
 
     func retryInvitationCleanup() async throws {
+        if let activeInvitationCleanup {
+            return try await activeInvitationCleanup.value
+        }
+        let task = Task { try await performInvitationCleanup() }
+        activeInvitationCleanup = task
+        defer { activeInvitationCleanup = nil }
+        try await task.value
+    }
+
+    private func performInvitationCleanup() async throws {
         guard var pending = session.pendingInvitationAcceptance else { return }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         guard try await transport.participantID() == pending.cloudParticipantID else {

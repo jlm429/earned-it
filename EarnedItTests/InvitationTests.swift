@@ -224,6 +224,43 @@ final class InvitationTests: XCTestCase {
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
     }
 
+    func testAccountChangeResumesCleanupWithoutOverlappingAttempts() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .cleanupRequired)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+
+        transport.account = "different-account"
+        await XCTAssertThrowsErrorAsync(try await joining.retryScheduledInvitationCleanup(), expected: .wrongAccount)
+        XCTAssertEqual(transport.leaveAttempts, 1)
+        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
+
+        transport.account = "joining-child"
+        transport.beforeLeave = { await Task.yield() }
+        async let firstRetry = joining.retryScheduledInvitationCleanup()
+        async let repeatedRetry = joining.retryScheduledInvitationCleanup()
+        let retryResults = try await (firstRetry, repeatedRetry)
+
+        XCTAssertNil(retryResults.0)
+        XCTAssertNil(retryResults.1)
+        XCTAssertEqual(transport.leaveAttempts, 2)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .released)
+
+        let settledRetry = try await joining.retryScheduledInvitationCleanup()
+        XCTAssertNil(settledRetry)
+        XCTAssertEqual(transport.leaveAttempts, 2)
+    }
+
     func testSameAccountInvitationReuseRecoversExactMembership() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

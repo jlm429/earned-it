@@ -77,6 +77,7 @@ final class TestTransport: HouseholdTransport {
     var invitationValidationTimeFailures = 0
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
+    var beforeLeave: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
@@ -194,6 +195,7 @@ final class TestTransport: HouseholdTransport {
     }
     func leave(_ location: CloudLocation) async throws {
         leaveAttempts += 1
+        await beforeLeave?()
         if let leaveError { throw leaveError }
         if leaveFailures > 0 {
             leaveFailures -= 1
