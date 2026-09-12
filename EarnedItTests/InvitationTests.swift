@@ -351,6 +351,77 @@ final class InvitationTests: XCTestCase {
         XCTAssertTrue(recoveries.isEmpty)
     }
 
+    func testOwnerRecoveryDiscoveryLeavesAmbiguousLegacyHouseholdsUnlocked() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "legacy-owner"))
+        try await first.store.connect()
+        server.accountMembershipLocks.removeValue(forKey: "legacy-owner")
+        let second = try TestFamily(transport: TestTransport(server: server, account: "legacy-owner"))
+        try await second.store.connect()
+        server.accountMembershipLocks.removeValue(forKey: "legacy-owner")
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "legacy-owner"),
+                                             clock: { first.clock.now }, automaticSync: false)
+
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+        XCTAssertTrue(recoveries.isEmpty)
+        XCTAssertNil(server.accountMembershipLocks["legacy-owner"])
+    }
+
+    func testOwnerRecoverySelectionRevalidatesMembershipLockRace() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "owner"),
+                                             clock: { family.clock.now }, automaticSync: false)
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+        let candidate = try XCTUnwrap(recoveries.first)
+        let competing = AccountMembershipLock(householdID: family.store.household!.id,
+                                              attemptID: UUID(), state: .active,
+                                              expiresAt: .distantFuture, claimBinding: "competing-membership")
+        server.accountMembershipLocks["owner"] = competing
+
+        await XCTAssertThrowsErrorAsync(try await replacement.recoverOwnerFamily(candidate.location),
+                                        expected: .accountMembershipConflict)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], competing)
+        XCTAssertNil(replacement.household)
+    }
+
+    func testInvitationIssuanceUsesServerTimeDespiteOwnerClockSkew() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        family.clock.set("2027-09-07T16:00:00Z")
+        server.authoritativeTime = ISO8601DateFormatter().date(from: "2026-09-07T16:00:00Z")!
+
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+
+        XCTAssertEqual(invitation.invitation.createdAt, server.authoritativeTime)
+        XCTAssertEqual(invitation.invitation.expiresAt,
+                       server.authoritativeTime!.addingTimeInterval(InvitationCode.lifetime))
+    }
+
+    func testRevokedInvitedParentDoesNotMakeOwnerRecoveryAmbiguous() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createParentInvitation(name: "Invited Parent", avatar: .fox)
+        let invited = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                         transport: TestTransport(server: server, account: "invited-parent"),
+                                         clock: { family.clock.now }, automaticSync: false)
+        try await invited.redeemInvitation(invitation.qrPayload)
+        try await family.store.synchronize()
+        try await family.store.revokeInvitation(invitation.invitation)
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "owner"),
+                                             clock: { family.clock.now }, automaticSync: false)
+
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+        XCTAssertEqual(recoveries.map(\.location.householdID), [family.store.household!.id])
+        try await replacement.recoverOwnerFamily(try XCTUnwrap(recoveries.first).location)
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+    }
+
     func testServerTimePreventsDeviceClockRollbackExtendingInvitation() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
