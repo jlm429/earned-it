@@ -15,9 +15,9 @@ struct SetupView: View {
                 if store.household == nil {
                     Section {
                         Text("Earned It").font(.largeTitle.bold())
-                        Text("A little effort. A shared view of the day.")
+                        Text("One family. The right view for everyone.")
                             .font(.title3)
-                        Text("See who has helped, what’s still to do, and how everyone’s habits are growing.")
+                        Text("Parents manage the shared week. Children see and complete only the work connected to their invited profile.")
                             .foregroundStyle(.secondary)
                     }
                     if creatingFamily {
@@ -40,15 +40,32 @@ struct SetupView: View {
                             Text("Family dates use \(TimeZone.current.identifier). This stays the same when a device travels.")
                         }
                     } else {
-                        Section {
-                            Button("Create Family", systemImage: "house.fill") { creatingFamily = true }
+                        Section("How would you like to begin?") {
+                            Button { creatingFamily = true } label: {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Create a New Family")
+                                        Text("I’m the first parent setting up this family")
+                                            .font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                } icon: { Image(systemName: "house.fill") }
+                            }
                                 .accessibilityIdentifier("create-family")
-                            Button("Join Existing Family", systemImage: "person.2.badge.key") { joiningFamily = true }
+                            Button { joiningFamily = true } label: {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Join an Existing Family")
+                                        Text("I have a parent-issued invitation")
+                                            .font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                } icon: { Image(systemName: "person.2.badge.key") }
+                            }
                                 .accessibilityIdentifier("join-family")
                         }
                     }
                     Section {
-                        Text("Create here first, then invite family with iCloud. Shared devices can use more than one approved profile.")
+                        Label("Joining never creates a second copy of a family or lets a device choose its own authority.",
+                              systemImage: "lock.shield")
                             .foregroundStyle(.secondary)
                     }
                 } else {

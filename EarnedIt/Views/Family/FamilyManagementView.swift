@@ -9,6 +9,8 @@ struct FamilyManagementView: View {
     @State private var archiving: FamilyMember?
     @State private var approving: ProfileRequest?
     @State private var cloudShare: SharePresentation?
+    @State private var inviting = false
+    @State private var revokingInvitation: FamilyInvitation?
     @State private var busy = false
 
     var body: some View {
@@ -40,17 +42,38 @@ struct FamilyManagementView: View {
                     Button("Connect Family to iCloud") { run { try await store.connect() } }
                         .disabled(busy).accessibilityIdentifier("connect-icloud")
                 }
+                Button("Invite a Parent or Child", systemImage: "person.badge.plus") { inviting = true }
+                    .disabled(busy)
+                    .accessibilityIdentifier("invite-profile")
                 if store.session.location == nil || store.session.location?.isOwner == true {
-                    Button("Invite or Manage Sharing", systemImage: "person.badge.plus") {
+                    Button("Manage Apple Sharing", systemImage: "person.2") {
                         run { cloudShare = SharePresentation(share: try await store.makeShare()) }
                     }
-                    .disabled(busy).accessibilityIdentifier("invite-family")
+                    .disabled(busy).accessibilityIdentifier("manage-apple-sharing")
                 } else {
-                    Text("The family owner manages iCloud invitations. You can approve profile requests below.")
+                    Text("On older iOS versions, Apple requires the family owner to add new people. Parent invitations can be managed by any parent designated as a sharing administrator on iOS 26 or later.")
                 }
-                Text("Invite trusted family members. An iCloud editor can change all shared records. Profile permissions guide this app’s controls; they are not an iCloud security boundary.")
+                Text("Each invitation is bound to one role and profile, expires after 24 hours, and uses Apple’s private one-time sharing access.")
                     .font(.footnote).foregroundStyle(.secondary)
                 if busy { ProgressView("Connecting…") }
+            }
+            if !store.familyInvitations.isEmpty {
+                Section("Invitations") {
+                    ForEach(store.familyInvitations) { invitation in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(invitationMember(invitation)).font(.headline)
+                            Label(invitationStatusText(invitation), systemImage: invitationStatusSymbol(invitation))
+                                .font(.caption).foregroundStyle(.secondary)
+                            if store.invitationStatus(invitation) != .revoked {
+                                Button(store.invitationStatus(invitation) == .consumed ? "Remove Installation Access" : "Revoke Invitation",
+                                       role: .destructive) {
+                                    revokingInvitation = invitation
+                                }
+                                .accessibilityIdentifier("revoke-invitation")
+                            }
+                        }
+                    }
+                }
             }
             if !store.pendingRequests.isEmpty {
                 Section("Profile requests") {
@@ -86,6 +109,7 @@ struct FamilyManagementView: View {
         .navigationTitle("Family & Sharing")
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
+        .sheet(isPresented: $inviting) { FamilyInvitationView() }
         .sheet(item: $cloudShare) { presentation in
             CloudSharingView(share: presentation.share) { error in
                 if let error { store.errorMessage = error.localizedDescription }
@@ -112,11 +136,45 @@ struct FamilyManagementView: View {
         } message: {
             Text(approving.map { "\($0.deviceName) can switch between: \(profileNames($0.memberIDs)). Parent profiles can manage the family." } ?? "")
         }
+        .alert("Revoke this invitation?", isPresented: Binding(
+            get: { revokingInvitation != nil }, set: { if !$0 { revokingInvitation = nil } }
+        )) {
+            Button("Revoke Access", role: .destructive) {
+                if let invitation = revokingInvitation { run { try await store.revokeInvitation(invitation) } }
+                revokingInvitation = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The code will stop working. If it was already used, this installation loses Apple and profile access without changing family data.")
+        }
         .accessibilityIdentifier("family-management-screen")
     }
 
     private func profileNames(_ ids: [UUID]) -> String {
         ids.compactMap { store.snapshot.member($0) }.map { "\($0.displayName) (\($0.role.title))" }.joined(separator: ", ")
+    }
+
+    private func invitationMember(_ invitation: FamilyInvitation) -> String {
+        guard let member = store.snapshot.member(invitation.memberID) else { return invitation.role.title }
+        return "\(member.displayName) · \(member.role.title)"
+    }
+
+    private func invitationStatusText(_ invitation: FamilyInvitation) -> String {
+        switch store.invitationStatus(invitation) {
+        case .available: "Expires \(invitation.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+        case .expired: "Expired"
+        case .revoked: "Revoked"
+        case .consumed: "Joined"
+        }
+    }
+
+    private func invitationStatusSymbol(_ invitation: FamilyInvitation) -> String {
+        switch store.invitationStatus(invitation) {
+        case .available: "clock"
+        case .expired: "clock.badge.exclamationmark"
+        case .revoked: "xmark.shield"
+        case .consumed: "checkmark.shield"
+        }
     }
 
     private func run(_ action: @escaping () async throws -> Void) {
