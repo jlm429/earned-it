@@ -23,7 +23,12 @@ struct RootView: View {
         #endif
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
-        .task { store.refreshDate(); await acceptInvitation() }
+        .task {
+            store.refreshDate()
+            do { try await store.retryInvitationCleanup() }
+            catch { store.errorMessage = error.localizedDescription }
+            await acceptInvitation()
+        }
         .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)-\(store.midnightTimerRevision)") {
             guard scenePhase == .active else { return }
             let delay = max(0, store.nextHouseholdMidnight.timeIntervalSince(store.today))

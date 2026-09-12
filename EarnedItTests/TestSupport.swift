@@ -66,6 +66,8 @@ final class TestTransport: HouseholdTransport {
     var account: String
     var fetchError: Error?
     var uploadedIDs: [UUID] = []
+    var leaveFailures = 0
+    private(set) var leaveAttempts = 0
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
@@ -97,6 +99,11 @@ final class TestTransport: HouseholdTransport {
     }
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation { throw HouseholdError.invitation }
     func leave(_ location: CloudLocation) async throws {
+        leaveAttempts += 1
+        if leaveFailures > 0 {
+            leaveFailures -= 1
+            throw CKError(.networkFailure)
+        }
         guard server.zones[location.zoneName]?.owner != account else { return }
         server.zones[location.zoneName]?.participants.remove(account)
         let participantIDs = server.zones[location.zoneName]?.claimedInvitationAccounts

@@ -153,6 +153,57 @@ final class InvitationTests: XCTestCase {
         XCTAssertFalse(server.zones[unavailable.shareURL.lastPathComponent]!.participants.contains("archived"))
     }
 
+    func testFailedRedemptionPersistsCleanupUntilCloudLeaveConverges() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let repository = try HouseholdRepository(inMemory: true)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 1
+        var joining: HouseholdStore? = try HouseholdStore(repository: repository, transport: transport,
+                                                           clock: { family.clock.now }, automaticSync: false)
+
+        await XCTAssertThrowsErrorAsync(
+            try await joining!.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+        XCTAssertNil(joining!.household)
+        XCTAssertNil(joining!.selectedMember)
+        XCTAssertEqual(joining!.session.pendingInvitationAcceptance?.phase, .cleanupRequired)
+        XCTAssertTrue(try repository.facts(householdID: invitation.invitation.householdID).isEmpty)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+
+        joining = try HouseholdStore(repository: repository, transport: transport,
+                                     clock: { family.clock.now }, automaticSync: false)
+        try await joining!.retryInvitationCleanup()
+        XCTAssertNil(joining!.session.pendingInvitationAcceptance)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertEqual(transport.leaveAttempts, 2)
+    }
+
+    func testSystemAcceptedInvitationRollsBackWhenCodeRedemptionFails() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let repository = try HouseholdRepository(inMemory: true)
+        let transport = TestTransport(server: server, account: "metadata-child")
+        let joining = try HouseholdStore(repository: repository, transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+
+        try await joining.acceptSystemInvitation { try await transport.accept(url: invitation.shareURL) }
+        XCTAssertEqual(joining.household?.id, family.store.household?.id)
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
+
+        await XCTAssertThrowsErrorAsync(
+            try await joining.redeemInvitation("2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+        XCTAssertNil(joining.household)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertTrue(try repository.facts(householdID: invitation.invitation.householdID).isEmpty)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("metadata-child"))
+    }
+
     func testPersistedInvitationContainsDigestButNeverClearTextCode() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
