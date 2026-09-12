@@ -225,7 +225,15 @@ final class InvitationTests: XCTestCase {
         let joining = try HouseholdStore(repository: repository, transport: transport,
                                          clock: { family.clock.now }, automaticSync: false)
 
-        try await joining.acceptSystemInvitation { try await transport.accept(url: invitation.shareURL) }
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        var observedProvisionalState = false
+        transport.beforeAccept = {
+            observedProvisionalState = (try? repository.session().pendingInvitationAcceptance?.phase) == .acceptingAccess
+        }
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        XCTAssertTrue(observedProvisionalState)
         XCTAssertEqual(joining.household?.id, family.store.household?.id)
         XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
 
@@ -237,6 +245,34 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertTrue(try repository.facts(householdID: invitation.invitation.householdID).isEmpty)
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("metadata-child"))
+    }
+
+    func testPendingSystemAcceptanceRejectsPackagedShareFromAnotherFamily() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
+        let firstInvitation = try await first.store.createChildInvitation(memberID: first.hanna.id)
+        let second = try TestFamily(transport: TestTransport(server: server, account: "second-owner"))
+        let secondInvitation = try await second.store.createChildInvitation(memberID: second.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { first.clock.now }, automaticSync: false)
+        let firstLocation = try await transport.invitationLocation(for: firstInvitation.shareURL)
+        try await joining.acceptSystemInvitation(location: firstLocation) {
+            try await transport.accept(url: firstInvitation.shareURL, expected: firstLocation)
+        }
+        var components = URLComponents()
+        components.scheme = "earnedit-invitation"
+        components.host = "join"
+        components.queryItems = [
+            URLQueryItem(name: "code", value: firstInvitation.code),
+            URLQueryItem(name: "share", value: secondInvitation.shareURL.absoluteString)
+        ]
+
+        await XCTAssertThrowsErrorAsync(try await joining.redeemInvitation(try XCTUnwrap(components.url).absoluteString),
+                                        expected: .invitationNotFound)
+        XCTAssertNil(joining.household)
+        XCTAssertFalse(server.zones[firstInvitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertFalse(server.zones[secondInvitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
     }
 
     func testPersistedInvitationContainsDigestButNeverClearTextCode() async throws {

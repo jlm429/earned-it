@@ -1,4 +1,3 @@
-import CloudKit
 import SwiftUI
 
 struct FamilyManagementView: View {
@@ -8,7 +7,6 @@ struct FamilyManagementView: View {
     @State private var editing: FamilyMember?
     @State private var archiving: FamilyMember?
     @State private var approving: ProfileRequest?
-    @State private var cloudShare: SharePresentation?
     @State private var inviting = false
     @State private var revokingInvitation: FamilyInvitation?
     @State private var busy = false
@@ -45,13 +43,8 @@ struct FamilyManagementView: View {
                 Button("Invite a Parent or Child", systemImage: "person.badge.plus") { inviting = true }
                     .disabled(busy)
                     .accessibilityIdentifier("invite-profile")
-                if store.session.location == nil || store.session.location?.isOwner == true {
-                    Button("Manage Apple Sharing", systemImage: "person.2") {
-                        run { cloudShare = SharePresentation(share: try await store.makeShare()) }
-                    }
-                    .disabled(busy).accessibilityIdentifier("manage-apple-sharing")
-                } else {
-                    Text("On older iOS versions, Apple requires the family owner to add new people. Parent invitations can be managed by any parent designated as a sharing administrator on iOS 26 or later.")
+                if store.session.location != nil, store.session.location?.isOwner != true {
+                    Text("Apple requires the family owner to create and revoke participant access. Other approved parents retain full family management access in Earned It.")
                 }
                 Text("Each invitation is bound to one role and profile, expires after 24 hours, and uses Apple’s private one-time sharing access.")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -110,12 +103,6 @@ struct FamilyManagementView: View {
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
         .sheet(isPresented: $inviting) { FamilyInvitationView() }
-        .sheet(item: $cloudShare) { presentation in
-            CloudSharingView(share: presentation.share) { error in
-                if let error { store.errorMessage = error.localizedDescription }
-                store.scheduleSync()
-            }
-        }
         .alert("Archive family member?", isPresented: Binding(
             get: { archiving != nil }, set: { if !$0 { archiving = nil } }
         )) {
@@ -183,34 +170,5 @@ struct FamilyManagementView: View {
             defer { busy = false }
             do { try await action() } catch { store.errorMessage = error.localizedDescription }
         }
-    }
-}
-
-private struct SharePresentation: Identifiable {
-    let id = UUID()
-    let share: CKShare
-}
-
-struct CloudSharingView: UIViewControllerRepresentable {
-    let share: CKShare
-    let onCompletion: (Error?) -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator(onCompletion: onCompletion) }
-    func makeUIViewController(context: Context) -> UICloudSharingController {
-        let controller = UICloudSharingController(share: share,
-            container: CKContainer(identifier: CloudKitHouseholdTransport.containerIdentifier))
-        controller.availablePermissions = [.allowPrivate, .allowReadWrite]
-        controller.delegate = context.coordinator
-        return controller
-    }
-    func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
-
-    final class Coordinator: NSObject, UICloudSharingControllerDelegate {
-        let onCompletion: (Error?) -> Void
-        init(onCompletion: @escaping (Error?) -> Void) { self.onCompletion = onCompletion }
-        func itemTitle(for csc: UICloudSharingController) -> String? { "Earned It Family" }
-        func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) { onCompletion(error) }
-        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) { onCompletion(nil) }
-        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) { onCompletion(nil) }
     }
 }

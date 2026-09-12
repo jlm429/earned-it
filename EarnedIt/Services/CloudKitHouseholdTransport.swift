@@ -41,6 +41,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     func accept(url: URL) async throws -> CloudLocation {
+        let location = try await invitationLocation(for: url)
+        try await accept(url: url, expected: location)
+        return location
+    }
+
+    func invitationLocation(for url: URL) async throws -> CloudLocation {
         guard url.scheme == "https", let host = url.host,
               host == "icloud.com" || host.hasSuffix(".icloud.com") else {
             throw HouseholdError.invitationUnavailable
@@ -48,24 +54,48 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         do {
             let metadatas = try await container.shareMetadatas(for: [url])
             guard let metadata = try metadatas[url]?.get() else { throw HouseholdError.invitationUnavailable }
-            return try await accept(metadata: metadata)
+            return try invitationLocation(for: metadata)
+        } catch let error as CKError where error.code == .unknownItem || error.code == .permissionFailure {
+            throw HouseholdError.invitationUnavailable
+        }
+    }
+
+    func invitationLocation(for metadata: CKShare.Metadata) throws -> CloudLocation {
+        guard metadata.containerIdentifier == Self.containerIdentifier,
+              metadata.share.recordID.recordName == CKRecordNameZoneWideShare,
+              let location = location(zoneID: metadata.share.recordID.zoneID, isOwner: metadata.participantRole == .owner) else {
+            throw HouseholdError.invitation
+        }
+        return location
+    }
+
+    func accept(url: URL, expected location: CloudLocation) async throws {
+        guard url.scheme == "https", let host = url.host,
+              host == "icloud.com" || host.hasSuffix(".icloud.com") else {
+            throw HouseholdError.invitationUnavailable
+        }
+        do {
+            let metadatas = try await container.shareMetadatas(for: [url])
+            guard let metadata = try metadatas[url]?.get() else { throw HouseholdError.invitationUnavailable }
+            try await accept(metadata: metadata, expected: location)
         } catch let error as CKError where error.code == .unknownItem || error.code == .permissionFailure {
             throw HouseholdError.invitationUnavailable
         }
     }
 
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation {
-        guard metadata.containerIdentifier == Self.containerIdentifier,
-              metadata.share.recordID.recordName == CKRecordNameZoneWideShare,
-              let location = location(zoneID: metadata.share.recordID.zoneID, isOwner: metadata.participantRole == .owner) else {
-            throw HouseholdError.invitation
-        }
+        let location = try invitationLocation(for: metadata)
+        try await accept(metadata: metadata, expected: location)
+        return location
+    }
+
+    func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws {
+        guard try invitationLocation(for: metadata) == location else { throw HouseholdError.invitationNotFound }
         if metadata.participantRole != .owner && metadata.participantStatus != .accepted {
             let accepted = try await container.accept([metadata])
             guard let result = accepted[metadata] else { throw HouseholdError.invitation }
             _ = try result.get()
         }
-        return location
     }
 
     func leave(_ location: CloudLocation) async throws {
@@ -139,25 +169,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     func createInvitationAccess(for location: CloudLocation, title: String,
-                                role: UserRole) async throws -> CloudInvitationAccess {
+        role: UserRole) async throws -> CloudInvitationAccess {
         let share = try await share(for: location, title: title)
-        let mayManage: Bool
-        if location.isOwner {
-            mayManage = true
-        } else if #available(iOS 26.0, *) {
-            mayManage = share.currentUserParticipant?.role == .administrator
-        } else {
-            mayManage = false
-        }
-        guard mayManage else { throw HouseholdError.invitationOwnerRequired }
+        guard location.isOwner else { throw HouseholdError.invitationOwnerRequired }
 
         let participant = CKShare.Participant.oneTimeURLParticipant()
         participant.permission = .readWrite
-        if role == .parent, #available(iOS 26.0, *) {
-            participant.role = .administrator
-        } else {
-            participant.role = .privateUser
-        }
+        participant.role = .privateUser
         share.addParticipant(participant)
         guard let saved = try await database(for: location).save(share) as? CKShare,
               let url = oneTimeURL(in: saved, participantID: participant.participantID) else {

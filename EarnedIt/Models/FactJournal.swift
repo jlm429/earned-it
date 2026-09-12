@@ -39,6 +39,7 @@ struct CloudLocation: Codable, Equatable, Identifiable {
 }
 
 enum PendingInvitationPhase: String, Codable, Equatable {
+    case acceptingAccess
     case awaitingRedemption
     case cleanupRequired
 }
@@ -46,6 +47,7 @@ enum PendingInvitationPhase: String, Codable, Equatable {
 struct PendingInvitationAcceptance: Codable, Equatable {
     let location: CloudLocation
     let cloudParticipantID: String
+    let retainedFactIDs: [UUID]?
     var phase: PendingInvitationPhase
 }
 

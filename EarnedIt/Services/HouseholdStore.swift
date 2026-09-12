@@ -433,8 +433,7 @@ final class HouseholdStore {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         try await retryInvitationCleanup()
         let participant = try await transport.participantID()
-        let location = try await transport.accept(url: url)
-        try beginPendingInvitationAcceptance(location: location, participant: participant)
+        let location = try await prepareInvitationAcceptance(url: url, participant: participant)
         do { try await redeemInvitation(invitationCode, in: location, participant: participant) }
         catch {
             let redemptionError = error
@@ -446,7 +445,15 @@ final class HouseholdStore {
         guard let credential = InvitationCredential(text: text) else { throw HouseholdError.invitationNotFound }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         if let location = session.location, let participant = session.cloudParticipantID {
-            do { try await redeemInvitation(credential.code, in: location, participant: participant) }
+            do {
+                if let shareURL = credential.shareURL,
+                   session.pendingInvitationAcceptance?.phase == .awaitingRedemption {
+                    guard try await transport.invitationLocation(for: shareURL) == location else {
+                        throw HouseholdError.invitationNotFound
+                    }
+                }
+                try await redeemInvitation(credential.code, in: location, participant: participant)
+            }
             catch {
                 guard session.pendingInvitationAcceptance?.phase == .awaitingRedemption else { throw error }
                 try await abandonPendingInvitationAcceptance(preserving: error)
@@ -457,8 +464,7 @@ final class HouseholdStore {
         try await retryInvitationCleanup()
         let participant = try await transport.participantID()
         if let shareURL = credential.shareURL {
-            let location = try await transport.accept(url: shareURL)
-            try beginPendingInvitationAcceptance(location: location, participant: participant)
+            let location = try await prepareInvitationAcceptance(url: shareURL, participant: participant)
             do { try await redeemInvitation(credential.code, in: location, participant: participant) }
             catch {
                 try await abandonPendingInvitationAcceptance(preserving: error)
@@ -480,18 +486,24 @@ final class HouseholdStore {
     func accept(metadata: CKShare.Metadata) async {
         do {
             guard let transport else { throw HouseholdError.cloudUnavailable }
-            try await acceptSystemInvitation { try await transport.accept(metadata: metadata) }
+            let location = try transport.invitationLocation(for: metadata)
+            try await acceptSystemInvitation(location: location) {
+                try await transport.accept(metadata: metadata, expected: location)
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func acceptSystemInvitation(_ acceptance: () async throws -> CloudLocation) async throws {
+    func acceptSystemInvitation(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         try await retryInvitationCleanup()
         let participant = try await transport.participantID()
-        let location = try await acceptance()
         try beginPendingInvitationAcceptance(location: location, participant: participant)
-        do { try await importFamily(location, participant: participant) }
+        do {
+            try await acceptance()
+            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            try await importFamily(location, participant: participant)
+        }
         catch { try await abandonPendingInvitationAcceptance(preserving: error) }
     }
 
@@ -591,23 +603,50 @@ final class HouseholdStore {
         try reload()
     }
 
+    private func prepareInvitationAcceptance(url: URL, participant: String) async throws -> CloudLocation {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let location = try await transport.invitationLocation(for: url)
+        try beginPendingInvitationAcceptance(location: location, participant: participant)
+        do {
+            try await transport.accept(url: url, expected: location)
+            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            return location
+        } catch {
+            try await abandonPendingInvitationAcceptance(preserving: error)
+        }
+    }
+
     private func beginPendingInvitationAcceptance(location: CloudLocation, participant: String) throws {
         guard session.householdID == nil, session.pendingInvitationAcceptance == nil else {
             throw HouseholdError.alreadyHasHousehold
         }
+        let retainedFactIDs = try repository.facts(householdID: location.householdID).map(\.id)
         var updated = session
         updated.pendingInvitationAcceptance = PendingInvitationAcceptance(
             location: location,
             cloudParticipantID: participant,
-            phase: .awaitingRedemption
+            retainedFactIDs: retainedFactIDs,
+            phase: .acceptingAccess
         )
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    private func confirmPendingInvitationAcceptance(location: CloudLocation, participant: String) throws {
+        guard var pending = session.pendingInvitationAcceptance,
+              pending.location == location,
+              pending.cloudParticipantID == participant,
+              pending.phase == .acceptingAccess else { throw HouseholdError.invitationNotFound }
+        pending.phase = .awaitingRedemption
+        var updated = session
+        updated.pendingInvitationAcceptance = pending
         try repository.commit(facts: [], session: updated)
         session = updated
     }
 
     private func abandonPendingInvitationAcceptance(preserving error: Error) async throws -> Never {
         guard var pending = session.pendingInvitationAcceptance else { throw error }
-        if pending.phase == .awaitingRedemption {
+        if pending.phase != .cleanupRequired {
             pending.phase = .cleanupRequired
             var updated = session
             updated.householdID = nil
@@ -617,7 +656,8 @@ final class HouseholdStore {
             updated.cloudCanWrite = nil
             updated.legacyProfileIDs = nil
             updated.pendingInvitationAcceptance = pending
-            try repository.discardFacts(householdID: pending.location.householdID, updating: updated)
+            try repository.discardFacts(householdID: pending.location.householdID,
+                                        retaining: Set(pending.retainedFactIDs ?? []), updating: updated)
             session = updated
             facts = []
             rejectedChanges = [:]
@@ -632,7 +672,7 @@ final class HouseholdStore {
 
     func retryInvitationCleanup() async throws {
         guard let pending = session.pendingInvitationAcceptance,
-              pending.phase == .cleanupRequired else { return }
+              pending.phase != .awaitingRedemption else { return }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         guard try await transport.participantID() == pending.cloudParticipantID else {
             throw HouseholdError.wrongAccount
@@ -653,14 +693,6 @@ final class HouseholdStore {
               imported.completions.allSatisfy({ contribution in
                   imported.member(contribution.memberID) != nil && imported.revisions.contains { $0.id == contribution.revisionID }
               }) else { throw HouseholdError.familyStillSyncing }
-    }
-
-    func makeShare() async throws -> CKShare {
-        try requireParent()
-        if session.location == nil { try await connect() }
-        try await synchronize()
-        guard let transport, let location = session.location, location.isOwner else { throw HouseholdError.permission }
-        return try await transport.share(for: location, title: household?.name ?? "Earned It Family")
     }
 
     func synchronize() async throws {

@@ -96,9 +96,10 @@ final class HouseholdRepository {
         }
     }
 
-    func discardFacts(householdID: UUID, updating session: DeviceSession) throws {
+    func discardFacts(householdID: UUID, retaining retainedFactIDs: Set<UUID>, updating session: DeviceSession) throws {
         do {
-            for stored in try context.fetch(FetchDescriptor<StoredFact>()) where stored.householdID == householdID {
+            for stored in try context.fetch(FetchDescriptor<StoredFact>())
+                where stored.householdID == householdID && !retainedFactIDs.contains(stored.id) {
                 context.delete(stored)
             }
             if let stored = try context.fetch(FetchDescriptor<StoredSession>()).first {

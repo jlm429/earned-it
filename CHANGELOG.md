@@ -11,7 +11,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 - Private Apple one-time invitations can be shared natively or shown as QR codes, with a ten-character code for manual entry. Codes expire after 24 hours, are stored only as digests, and are claimed once.
 - Invalid, expired, revoked, consumed, and cross-family invitations fail without creating a replacement household. Failed link redemption removes newly accepted Apple access.
 - Existing profile grants remain valid. Older owner-account installations retain only their previously selected profile, while fresh owner-account installations receive no blanket family authority.
-- On iOS 26 and later, invited parents become CloudKit sharing administrators so either approved parent can manage invitations. Apple requires the share owner to manage participants on older iOS versions.
+- Parent and child invitations use private-user participants on every supported iOS version so invited parents retain household write access. Apple participant management remains owner-only, and all new participants use role-bound invitations.
 
 ### Alternating chores
 

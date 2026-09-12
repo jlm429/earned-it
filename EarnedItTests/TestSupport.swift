@@ -68,6 +68,7 @@ final class TestTransport: HouseholdTransport {
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
     private(set) var leaveAttempts = 0
+    var beforeAccept: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
@@ -87,7 +88,20 @@ final class TestTransport: HouseholdTransport {
         }.filter { $0.location.isOwner || server.zones[$0.location.zoneName]!.participants.contains(account) }
     }
     func accept(url: URL) async throws -> CloudLocation {
+        let location = try await invitationLocation(for: url)
+        try await accept(url: url, expected: location)
+        return location
+    }
+    func invitationLocation(for url: URL) async throws -> CloudLocation {
         guard let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitation }
+        return CloudLocation(householdID: zone.householdID, zoneName: url.lastPathComponent,
+                             ownerName: zone.owner, isOwner: zone.owner == account)
+    }
+    func invitationLocation(for metadata: CKShare.Metadata) throws -> CloudLocation { throw HouseholdError.invitation }
+    func accept(url: URL, expected location: CloudLocation) async throws {
+        guard try await invitationLocation(for: url) == location,
+              let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitationNotFound }
+        await beforeAccept?()
         if let participantID = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
             .first(where: { $0.name == "invitation" })?.value {
             guard zone.pendingInvitationParticipants.contains(participantID) else { throw HouseholdError.invitationConsumed }
@@ -95,9 +109,11 @@ final class TestTransport: HouseholdTransport {
             server.zones[url.lastPathComponent]?.claimedInvitationAccounts[participantID] = account
         }
         server.zones[url.lastPathComponent]?.participants.insert(account)
-        return CloudLocation(householdID: zone.householdID, zoneName: url.lastPathComponent, ownerName: zone.owner, isOwner: zone.owner == account)
     }
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation { throw HouseholdError.invitation }
+    func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws {
+        throw HouseholdError.invitation
+    }
     func leave(_ location: CloudLocation) async throws {
         leaveAttempts += 1
         if leaveFailures > 0 {
