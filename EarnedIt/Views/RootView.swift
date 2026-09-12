@@ -35,11 +35,18 @@ struct RootView: View {
         .task(id: "\(scenePhase)-\(store.pendingInvitationCleanupID ?? "none")") {
             guard scenePhase == .active, store.pendingInvitationCleanupID != nil else { return }
             do {
-                while let delay = try await store.pendingInvitationCleanupDelay() {
-                    try await ContinuousClock().sleep(for: .seconds(delay))
-                    if let retryDelay = try await store.retryScheduledInvitationCleanup() {
-                        try await ContinuousClock().sleep(for: .seconds(retryDelay))
+                var retryDelay: TimeInterval?
+                while true {
+                    let delay: TimeInterval
+                    if let retryDelay {
+                        delay = retryDelay
+                    } else if let scheduledDelay = try await store.pendingInvitationCleanupDelay() {
+                        delay = scheduledDelay
+                    } else {
+                        return
                     }
+                    try await ContinuousClock().sleep(for: .seconds(delay))
+                    retryDelay = try await store.retryScheduledInvitationCleanup()
                 }
             } catch is CancellationError {
             } catch {

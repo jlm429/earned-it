@@ -57,8 +57,8 @@ final class HouseholdStore {
     var familyInvitations: [FamilyInvitation] { snapshot.invitations.sorted { $0.createdAt > $1.createdAt } }
     var pendingInvitationCleanupID: String? {
         guard let pending = session.pendingInvitationAcceptance,
-              pending.phase == .awaitingRedemption else { return nil }
-        return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")"
+              pending.phase != .acceptingAccess else { return nil }
+        return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")/\(pending.phase.rawValue)"
     }
 
     func dailyList(on date: Date? = nil) -> [DailyChore] {
@@ -368,6 +368,11 @@ final class HouseholdStore {
             throw HouseholdError.cloudUnavailable
         }
         let now = try await transport.invitationValidationTime(in: location, clientTime: clock())
+        let issuedMember = newMember.map {
+            FamilyMember(id: $0.id, householdID: $0.householdID, displayName: $0.displayName,
+                         role: $0.role, avatar: $0.avatar,
+                         joinedDay: CivilDay(now, calendar: household.calendar), archivedFrom: $0.archivedFrom)
+        }
         let access = try await transport.createInvitationAccess(for: location, title: household.name, role: member.role)
         let invitation = FamilyInvitation(id: UUID(), householdID: household.id, claimFactID: UUID(),
                                           memberID: member.id, role: member.role,
@@ -377,7 +382,7 @@ final class HouseholdStore {
                                           cloudShareParticipantID: access.participantID)
         do {
             var bodies: [HouseholdFactBody] = []
-            if let newMember { bodies.append(.member(newMember)) }
+            if let issuedMember { bodies.append(.member(issuedMember)) }
             bodies.append(.invitation(invitation))
             try append(bodies)
             try await synchronize()
@@ -389,7 +394,7 @@ final class HouseholdStore {
                     .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
                                                                revokedByMemberID: parent.id))
                 ]
-                if var unsharedParent = newMember {
+                if var unsharedParent = issuedMember {
                     unsharedParent.archivedFrom = day
                     cleanup.append(.member(unsharedParent))
                 }
@@ -1132,8 +1137,11 @@ final class HouseholdStore {
     }
 
     func pendingInvitationCleanupDelay() async throws -> TimeInterval? {
-        guard let pending = session.pendingInvitationAcceptance,
-              pending.phase == .awaitingRedemption else { return nil }
+        guard let pending = session.pendingInvitationAcceptance else { return nil }
+        if pending.phase == .cleanupRequired {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
+        guard pending.phase == .awaitingRedemption else { return nil }
         guard let expiration = pending.expiresAt else {
             return Self.pendingInvitationCleanupRetryDelay
         }

@@ -189,6 +189,41 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 2)
     }
 
+    func testScheduledCleanupRetriesLeaveAndLockReleaseWithoutRelaunch() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        transport.leaveFailures = 2
+        transport.accountLockReleaseFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .cleanupRequired)
+        XCTAssertNotNil(joining.pendingInvitationCleanupID)
+
+        for _ in 0..<2 {
+            let cleanupDelay = try await joining.pendingInvitationCleanupDelay()
+            let retryDelay = try await joining.retryScheduledInvitationCleanup()
+            XCTAssertEqual(cleanupDelay, 30)
+            XCTAssertEqual(retryDelay, 30)
+            XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .cleanupRequired)
+        }
+        let finalCleanupDelay = try await joining.pendingInvitationCleanupDelay()
+        let finalRetryDelay = try await joining.retryScheduledInvitationCleanup()
+        XCTAssertEqual(finalCleanupDelay, 30)
+        XCTAssertNil(finalRetryDelay)
+
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertNil(joining.pendingInvitationCleanupID)
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .released)
+        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+    }
+
     func testSameAccountInvitationReuseRecoversExactMembership() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
@@ -481,6 +516,41 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(invitation.invitation.createdAt, server.authoritativeTime)
         XCTAssertEqual(invitation.invitation.expiresAt,
                        server.authoritativeTime!.addingTimeInterval(InvitationCode.lifetime))
+    }
+
+    func testParentInvitationUsesServerJoinedDayWhenOwnerClockIsAhead() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        family.move(to: "2026-09-09T16:00:00Z")
+        server.authoritativeTime = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
+
+        let invitation = try await family.store.createParentInvitation(name: "Parent B", avatar: .fox)
+        let invitedMember = try XCTUnwrap(family.store.snapshot.member(invitation.invitation.memberID))
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                         transport: TestTransport(server: server, account: "parent-b"),
+                                         clock: { server.authoritativeTime! }, automaticSync: false)
+
+        try await joining.redeemInvitation(invitation.qrPayload)
+
+        XCTAssertEqual(invitedMember.joinedDay, CivilDay(server.authoritativeTime!, calendar: family.store.calendar))
+        XCTAssertEqual(joining.selectedMember?.id, invitedMember.id)
+    }
+
+    func testParentInvitationUsesServerJoinedDayWhenOwnerClockIsBehind() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        server.authoritativeTime = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
+
+        let invitation = try await family.store.createParentInvitation(name: "Parent B", avatar: .fox)
+        let invitedMember = try XCTUnwrap(family.store.snapshot.member(invitation.invitation.memberID))
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                         transport: TestTransport(server: server, account: "parent-b"),
+                                         clock: { server.authoritativeTime! }, automaticSync: false)
+
+        try await joining.redeemInvitation(invitation.qrPayload)
+
+        XCTAssertEqual(invitedMember.joinedDay, CivilDay(server.authoritativeTime!, calendar: family.store.calendar))
+        XCTAssertEqual(joining.selectedMember?.id, invitedMember.id)
     }
 
     func testInvitationPruningDoesNotRevokeValidAccessWhenOwnerClockIsAhead() async throws {
