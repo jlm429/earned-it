@@ -451,7 +451,7 @@ final class HouseholdStore {
 
     func discoverOwnerRecoveries() async throws -> [CloudFamily] {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
-        let candidates = try await ownerRecoveryCandidates()
+        let candidates = try await filteredOwnerRecoveryCandidates()
         guard candidates.count == 1 else { return [] }
         return [candidates[0].family]
     }
@@ -460,26 +460,44 @@ final class HouseholdStore {
         guard session.householdID == nil, location.isOwner else { throw HouseholdError.invitationUnavailable }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
-        let candidates = try await ownerRecoveryCandidates()
+        let binding = AccountMembershipBinding.owner(householdID: location.householdID)
+        if let existing = try await transport.accountMembershipLock(), existing.state == .active,
+           (existing.householdID != location.householdID || existing.claimBinding != binding) {
+            throw HouseholdError.accountMembershipConflict
+        }
+        let candidates = try await filteredOwnerRecoveryCandidates()
         guard candidates.count == 1, candidates[0].family.location == location else {
             throw HouseholdError.invitationUnavailable
         }
         let member = candidates[0].member
-        let binding = AccountMembershipBinding.owner(householdID: location.householdID)
-        let attemptID = UUID()
+        let attemptID = session.accountMembershipLockAttemptID ?? UUID()
         let lock = try await acquireAccountMembershipLock(householdID: location.householdID,
                                                           attemptID: attemptID, matching: binding)
+        if session.accountMembershipLockAttemptID != lock.attemptID || session.cloudParticipantID != participant {
+            var provisional = session
+            provisional.accountMembershipLockAttemptID = lock.attemptID
+            provisional.cloudParticipantID = participant
+            try repository.commit(facts: [], session: provisional)
+            session = provisional
+        }
         let refreshed: (family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])
         do {
-            let refreshedCandidates = try await ownerRecoveryCandidates()
+            let refreshedCandidates = try await filteredOwnerRecoveryCandidates()
             guard refreshedCandidates.count == 1, let candidate = refreshedCandidates.first,
                   candidate.family.location == location,
                   candidate.member.id == member.id else { throw HouseholdError.invitationUnavailable }
             refreshed = candidate
         } catch {
             if lock.state == .provisional, lock.attemptID == attemptID {
-                _ = try? await transport.releaseAccountMembershipLock(householdID: location.householdID,
-                                                                       attemptID: attemptID, now: clock())
+                if (try? await transport.releaseAccountMembershipLock(householdID: location.householdID,
+                                                                      attemptID: attemptID, now: clock())) == true {
+                    var cleared = session
+                    cleared.accountMembershipLockAttemptID = nil
+                    do {
+                        try repository.commit(facts: [], session: cleared)
+                        session = cleared
+                    } catch {}
+                }
             }
             throw error
         }
@@ -911,16 +929,29 @@ final class HouseholdStore {
         return candidates.count == 1 ? candidates[0] : nil
     }
 
-    private func ownerRecoveryCandidates() async throws
+    private func ownerRecoveryCandidates(restrictedTo householdID: UUID? = nil) async throws
         -> [(family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])] {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         var candidates: [(family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])] = []
-        for family in try await transport.discoverFamilies() where family.location.isOwner {
+        for family in try await transport.discoverFamilies()
+        where family.location.isOwner && (householdID == nil || family.location.householdID == householdID) {
             if let candidate = try await ownerRecoveryCandidate(for: family) {
                 candidates.append(candidate)
             }
         }
         return candidates
+    }
+
+    private func filteredOwnerRecoveryCandidates() async throws
+        -> [(family: CloudFamily, member: FamilyMember, facts: [HouseholdFact])] {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard let lock = try await transport.accountMembershipLock(), lock.state == .active else {
+            return try await ownerRecoveryCandidates()
+        }
+        guard lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID) else {
+            return []
+        }
+        return try await ownerRecoveryCandidates(restrictedTo: lock.householdID)
     }
 
     private func ownerRecoveryCandidate(for family: CloudFamily) async throws

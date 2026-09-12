@@ -70,6 +70,7 @@ final class TestTransport: HouseholdTransport {
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
     var accountLockReleaseFailures = 0
+    var accountLockActivationFailures = 0
     var claimError: Error?
     var leaveError: Error?
     var acceptErrorAfterHook: Error?
@@ -80,6 +81,9 @@ final class TestTransport: HouseholdTransport {
 
     init(server: TestCloudServer, account: String) { self.server = server; self.account = account }
     func participantID() async throws -> String { account }
+    func accountMembershipLock() async throws -> AccountMembershipLock? {
+        server.accountMembershipLocks[account]
+    }
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                       expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
         if let existing = server.accountMembershipLocks[account], existing.state == .active {
@@ -95,6 +99,10 @@ final class TestTransport: HouseholdTransport {
     }
     func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                        claimBinding: String, now: Date) async throws -> AccountMembershipLock {
+        if accountLockActivationFailures > 0 {
+            accountLockActivationFailures -= 1
+            throw CKError(.networkFailure)
+        }
         guard var existing = server.accountMembershipLocks[account], existing.householdID == householdID else {
             throw HouseholdError.accountMembershipConflict
         }

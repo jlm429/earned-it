@@ -368,6 +368,56 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(server.accountMembershipLocks["legacy-owner"])
     }
 
+    func testActiveOwnerLockDisambiguatesMultipleLegacyHouseholds() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "legacy-owner"))
+        try await first.store.connect()
+        let firstLock = try XCTUnwrap(server.accountMembershipLocks["legacy-owner"])
+        server.accountMembershipLocks.removeValue(forKey: "legacy-owner")
+        let second = try TestFamily(transport: TestTransport(server: server, account: "legacy-owner"))
+        try await second.store.connect()
+        server.accountMembershipLocks["legacy-owner"] = firstLock
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: TestTransport(server: server, account: "legacy-owner"),
+                                             clock: { first.clock.now }, automaticSync: false)
+
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+
+        XCTAssertEqual(recoveries.map(\.location.householdID), [first.store.household!.id])
+        XCTAssertEqual(server.accountMembershipLocks["legacy-owner"], firstLock)
+    }
+
+    func testOwnerRecoveryRetriesActivationWithPersistedAttempt() async throws {
+        let server = TestCloudServer()
+        let ownerTransport = TestTransport(server: server, account: "legacy-owner")
+        let family = try TestFamily(transport: ownerTransport)
+        try await family.store.connect()
+        server.accountMembershipLocks.removeValue(forKey: "legacy-owner")
+        let recoveryTransport = TestTransport(server: server, account: "legacy-owner")
+        recoveryTransport.accountLockActivationFailures = 1
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: recoveryTransport,
+                                             clock: { family.clock.now }, automaticSync: false)
+        let recoveries = try await replacement.discoverOwnerRecoveries()
+        let recovery = try XCTUnwrap(recoveries.first)
+
+        do {
+            try await replacement.recoverOwnerFamily(recovery.location)
+            XCTFail("The first activation must fail")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+        let attemptID = try XCTUnwrap(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertEqual(server.accountMembershipLocks["legacy-owner"]?.attemptID, attemptID)
+        XCTAssertEqual(server.accountMembershipLocks["legacy-owner"]?.state, .provisional)
+
+        try await replacement.recoverOwnerFamily(recovery.location)
+
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+        XCTAssertEqual(replacement.session.accountMembershipLockAttemptID, attemptID)
+        XCTAssertEqual(server.accountMembershipLocks["legacy-owner"]?.state, .active)
+    }
+
     func testOwnerRecoverySelectionRevalidatesMembershipLockRace() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

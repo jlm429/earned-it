@@ -20,6 +20,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         return try await container.userRecordID().recordName
     }
 
+    func accountMembershipLock() async throws -> AccountMembershipLock? {
+        let recordID = CKRecord.ID(recordName: accountMembershipRecordName)
+        do {
+            let record = try await container.privateCloudDatabase.record(for: recordID)
+            return try decodeAccountMembershipLock(record)
+        } catch let error as CKError where error.code == .unknownItem {
+            return nil
+        }
+    }
+
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                       expiresAt: Date, now: Date) async throws -> AccountMembershipLock {
         try await updateAccountMembershipLock { existing in
