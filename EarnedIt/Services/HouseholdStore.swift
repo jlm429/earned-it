@@ -480,6 +480,7 @@ final class HouseholdStore {
                                              invitationCode: invitationCode) { return }
         try await prepareInvitationAcceptance(url: url, location: location, participant: participant)
         do { try await redeemInvitation(invitationCode, in: location, participant: participant) }
+        catch let cloudError as CKError { throw cloudError }
         catch {
             let redemptionError = error
             try await abandonPendingInvitationAcceptance(preserving: redemptionError)
@@ -501,6 +502,7 @@ final class HouseholdStore {
             }
             catch {
                 guard session.pendingInvitationAcceptance?.phase == .awaitingRedemption else { throw error }
+                if error is CKError { throw error }
                 try await abandonPendingInvitationAcceptance(preserving: error)
             }
             return
@@ -514,6 +516,7 @@ final class HouseholdStore {
                                                  invitationCode: credential.code) { return }
             try await prepareInvitationAcceptance(url: shareURL, location: location, participant: participant)
             do { try await redeemInvitation(credential.code, in: location, participant: participant) }
+            catch let cloudError as CKError { throw cloudError }
             catch {
                 try await abandonPendingInvitationAcceptance(preserving: error)
             }
@@ -998,7 +1001,9 @@ final class HouseholdStore {
             }
         }
         try markPendingInvitationForCleanup(pending)
-        try await transport.leave(pending.location)
+        if pending.accessExistedBeforeAttempt == false {
+            try await transport.leave(pending.location)
+        }
         if let attemptID = pending.accountLockAttemptID {
             guard try await transport.releaseAccountMembershipLock(householdID: pending.location.householdID,
                                                                    attemptID: attemptID, now: clock()) else {

@@ -249,6 +249,53 @@ final class InvitationTests: XCTestCase {
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
     }
 
+    func testFailedRedemptionPreservesPreexistingAppleAccess() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let account = "existing-participant"
+        server.zones[invitation.shareURL.lastPathComponent]?.participants.insert(account)
+        let transport = TestTransport(server: server, account: account)
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+
+        await XCTAssertThrowsErrorAsync(
+            try await joining.join(url: invitation.shareURL, invitationCode: "2345-6789-AB"),
+            expected: .invitationNotFound
+        )
+
+        XCTAssertEqual(transport.leaveAttempts, 0)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains(account))
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks[account]?.state, .released)
+    }
+
+    func testClaimTransportFailureRetainsAccessAndRetries() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let account = "retrying-child"
+        let transport = TestTransport(server: server, account: account)
+        transport.claimError = CKError(.networkFailure)
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+
+        do {
+            try await joining.redeemInvitation(invitation.qrPayload)
+            XCTFail("The interrupted claim should remain retryable")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+        XCTAssertTrue(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains(account))
+        transport.claimError = nil
+        try await joining.redeemInvitation(invitation.code)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+    }
+
     func testAccountMembershipLockAtomicallyExcludesConcurrentCrossHouseholdJoin() async throws {
         let server = TestCloudServer()
         let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
@@ -467,6 +514,28 @@ final class InvitationTests: XCTestCase {
                 CKError(code), recordID: recordID
             ))
         }
+    }
+
+    func testCloudKitClaimConflictClassificationPreservesTransportErrors() {
+        let first = CKRecord.ID(recordName: "first")
+        let second = CKRecord.ID(recordName: "second")
+        let recordIDs: Set<CKRecord.ID> = [first, second]
+        let conflict = CKError(.partialFailure, userInfo: [
+            CKPartialErrorsByItemIDKey: [
+                first: CKError(.serverRecordChanged),
+                second: CKError(.batchRequestFailed)
+            ]
+        ])
+        XCTAssertTrue(CloudKitHouseholdTransport.isInvitationClaimConflict(conflict, recordIDs: recordIDs))
+        for code in [CKError.Code.networkFailure, .notAuthenticated, .quotaExceeded, .serviceUnavailable] {
+            let failure = CKError(.partialFailure, userInfo: [
+                CKPartialErrorsByItemIDKey: [first: CKError(code), second: CKError(.batchRequestFailed)]
+            ])
+            XCTAssertFalse(CloudKitHouseholdTransport.isInvitationClaimConflict(failure, recordIDs: recordIDs))
+        }
+        XCTAssertFalse(CloudKitHouseholdTransport.isInvitationClaimConflict(
+            CKError(.batchRequestFailed), recordIDs: recordIDs
+        ))
     }
 
     func testExistingAccountMembershipBlocksAnotherFamilyAndProfile() async throws {

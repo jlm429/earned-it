@@ -69,6 +69,7 @@ final class TestTransport: HouseholdTransport {
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
     var accountLockReleaseFailures = 0
+    var claimError: Error?
     var acceptErrorAfterHook: Error?
     private(set) var leaveAttempts = 0
     var beforeAccept: (() async -> Void)?
@@ -223,6 +224,7 @@ final class TestTransport: HouseholdTransport {
         server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
     }
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
+        if let claimError { throw claimError }
         guard server.writeAllowed, facts.count == 2,
               facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
             throw HouseholdError.readOnly

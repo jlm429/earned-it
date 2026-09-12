@@ -315,8 +315,9 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     }
                 }
                 return facts
-            } catch let cloudError as CKError where cloudError.code == .serverRecordChanged
-                || cloudError.code == .batchRequestFailed || cloudError.code == .partialFailure {
+            } catch let cloudError as CKError where Self.isInvitationClaimConflict(
+                cloudError, recordIDs: Set(missingRecords.map(\.recordID))
+            ) {
                 throw HouseholdError.invitationConsumed
             }
         }
@@ -404,6 +405,15 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         guard error.code == .partialFailure,
               let partial = error.partialErrorsByItemID?[recordID] as? CKError else { return false }
         return partial.code == CKError.Code.serverRecordChanged
+    }
+
+    nonisolated static func isInvitationClaimConflict(_ error: CKError,
+                                                       recordIDs: Set<CKRecord.ID>) -> Bool {
+        if error.code == .serverRecordChanged { return true }
+        guard error.code == .partialFailure else { return false }
+        let errors = recordIDs.compactMap { error.partialErrorsByItemID?[$0] as? CKError }
+        return errors.contains { $0.code == .serverRecordChanged }
+            && errors.allSatisfy { $0.code == .serverRecordChanged || $0.code == .batchRequestFailed }
     }
 
     private func decodeAccountMembershipLock(_ record: CKRecord) throws -> AccountMembershipLock {
