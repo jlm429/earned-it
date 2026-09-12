@@ -4,6 +4,15 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ## Unreleased
 
+### Role-aware onboarding and invitations
+
+- First run now clearly separates creating a new family as its first approved parent from joining an existing family with a parent-issued invitation.
+- Parents choose whether an invitation grants a new parent profile or one exact existing child profile. Joining devices cannot choose or escalate their role, family, or sibling profile.
+- Private Apple one-time invitations can be shared natively or shown as QR codes, with a ten-character code for manual entry. Codes expire after 24 hours, are stored only as digests, and are claimed once.
+- Invalid, expired, revoked, consumed, and cross-family invitations fail without creating a replacement household. Failed link redemption removes newly accepted Apple access.
+- Existing profile grants remain valid. Older owner-account installations retain only their previously selected profile, while fresh owner-account installations receive no blanket family authority.
+- On iOS 26 and later, invited parents become CloudKit sharing administrators so either approved parent can manage invitations. Apple requires the share owner to manage participants on older iOS versions.
+
 ### Alternating chores
 
 - Parents can assign a chore to all children, one child, or selected children who alternate turns. Turn order is shown while editing and advances on scheduled dates regardless of completion.
