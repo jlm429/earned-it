@@ -1,0 +1,72 @@
+enabled zone factory: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=factory role=3 permission=2 publicPermission=1
+after-add role=3 permission=2 participants=2
+enabled zone readwrite: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=readwrite role=3 permission=3 publicPermission=1
+after-add role=3 permission=3 participants=2
+enabled zone private: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=private role=3 permission=3 publicPermission=1
+after-add role=3 permission=3 participants=2
+enabled zone duplicate: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=duplicate role=3 permission=3 publicPermission=1
+after-add role=3 permission=3 participants=2
+enabled hierarchy factory: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=hierarchy mode=factory role=3 permission=2 publicPermission=1
+after-add role=3 permission=2 participants=2
+enabled hierarchy readwrite: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=hierarchy mode=readwrite role=3 permission=3 publicPermission=1
+after-add role=3 permission=3 participants=2
+enabled hierarchy private: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=hierarchy mode=private role=3 permission=3 publicPermission=1
+after-add role=3 permission=3 participants=2
+enabled hierarchy duplicate: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=hierarchy mode=duplicate role=3 permission=3 publicPermission=1
+after-add role=3 permission=3 participants=2
+enabled zone unknown-role: exit=1
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=unknown-role role=0 permission=3 publicPermission=1
+exception: NSInternalInconsistencyException: You can only add PrivateUsers as participants on a share
+enabled zone owner-role: exit=1
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=owner-role role=1 permission=3 publicPermission=1
+exception: NSInternalInconsistencyException: You can have only one owner on a share
+enabled zone public-role: exit=1
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=public-role role=4 permission=3 publicPermission=1
+exception: NSInternalInconsistencyException: You can only add PrivateUsers as participants on a share
+enabled zone unknown-permission: exit=1
+factory role=3 permission=2 status=1 publicPermission=1
+exception: NSInternalInconsistencyException: Invalid participant permission CKShareParticipantPermissionUnknown
+enabled zone none-permission: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=none-permission role=3 permission=1 publicPermission=1
+after-add role=3 permission=1 participants=2
+enabled zone public-share: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=public-share role=3 permission=3 publicPermission=3
+after-add role=3 permission=3 participants=2
+enabled zone administrator: exit=0
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=administrator role=2 permission=3 publicPermission=1
+after-add role=2 permission=3 participants=2
+absent zone private: exit=133
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=private role=3 permission=3 publicPermission=1
+Child process terminated with signal 5: Trace/BPT trap
+absent zone readwrite: exit=133
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=readwrite role=3 permission=3 publicPermission=1
+Child process terminated with signal 5: Trace/BPT trap
+wrong-value zone private: exit=133
+factory role=3 permission=2 status=1 publicPermission=1
+before-add kind=zone mode=private role=3 permission=3 publicPermission=1
+Child process terminated with signal 5: Trace/BPT trap
+18 native admission and negative-control cases passed

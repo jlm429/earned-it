@@ -66,6 +66,8 @@ Debug UI tests use a separate store and explicit reset flags. The weekly flow ad
 
 Physical-device sharing requires an Apple development team with the iCloud capability and the container declared in `Configuration/EarnedIt.entitlements`. Provision `iCloud.com.jlm429.EarnedIt` for the app’s bundle ID. The explicit CloudKit schema remains `HouseholdFact` with `payload` (Bytes) and `formatVersion` (Int64), plus the system CKShare record. Invitation issuance, revocation, and claims are typed facts in that same household zone, not a public lookup service or parallel synchronization system. Development saves can create the development schema. Production schema deployment is a separate, deliberate release action. The app never initializes or promotes production schema automatically.
 
+For one-time invitation signing and distribution-profile checks, see the [Production invitation evidence](docs/production-invitation-crash/report.md).
+
 Before distribution, validate parent and child one-time invitation delivery, cold and warm acceptance, code and QR redemption, two-device completions, relaunch, owner-only participant management across supported iOS versions, account changes, read-only access, and share revocation with two signed devices and two iCloud accounts. No live signing, provisioning, or production schema mutation is performed by local tests.
 
 See [architecture decisions and Apple sources](docs/shared-household-architecture.md) and [agent guidance](AGENTS.md).

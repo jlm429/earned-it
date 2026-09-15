@@ -38,6 +38,7 @@
 - Confirm launch, relaunch persistence, first-run setup, confirmed local-data reset, and role-specific experiences.
 - Production never seeds households. `HouseholdStore.swift` centralizes actions and profile permissions; `EarnedItApp.swift` configures the separate debug-only UI test store.
 - Distinguish transport-double tests from signed, two-account CloudKit validation. CKShare write access is broader than app profile permissions.
+- Native one-time links require the signing entitlement in `Configuration/EarnedIt.entitlements`. See `docs/production-invitation-crash/report.md` for the native probe and distribution checks.
 - Use automatic signing only when needed for a physical device. Simulator work must not require a paid developer account.
 - Commit focused milestones on a feature branch.
 - Run the configured no-mistakes pipeline after implementation, stop at a review-ready PR, and never merge without captain approval.

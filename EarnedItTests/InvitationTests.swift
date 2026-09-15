@@ -514,6 +514,10 @@ final class InvitationTests: XCTestCase {
         XCTAssertTrue(observedProvisionalState)
         XCTAssertNil(first.selectedMember)
         XCTAssertNil(second.selectedMember)
+        XCTAssertEqual(secondTransport.leaveAttempts, 0)
+        XCTAssertNotNil(second.session.pendingInvitationAcceptance)
+        try await second.retryInvitationCleanup()
+        XCTAssertNil(second.session.pendingInvitationAcceptance)
         XCTAssertEqual(secondTransport.leaveAttempts, 1)
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("shared-account"))
     }
