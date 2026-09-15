@@ -11,7 +11,26 @@ struct RootView: View {
     var body: some View {
         @Bindable var store = store
         Group {
-            if store.isCheckingAccountMembership {
+            if store.hasPendingInvitationPackage {
+                ContentUnavailableView {
+                    Label("Finish Joining Your Family", systemImage: "person.crop.circle.badge.checkmark")
+                } description: {
+                    Text("Follow any Apple confirmation to connect to your family. Earned It keeps this invitation so you can finish without entering the code again.")
+                } actions: {
+                    if store.isJoiningInvitation {
+                        ProgressView("Connecting to your family…")
+                    } else {
+                        Button("Continue Joining") {
+                            Task {
+                                do { try await store.continuePendingInvitation(allowAppleVerification: true) }
+                                catch { store.errorMessage = error.localizedDescription }
+                            }
+                        }
+                        .accessibilityIdentifier("continue-invitation")
+                    }
+                }
+                .accessibilityIdentifier("pending-invitation-screen")
+            } else if store.isCheckingAccountMembership && store.household == nil {
                 ProgressView("Reconnecting to your family…")
                     .accessibilityIdentifier("membership-recovery-progress")
             } else if store.requiresMembershipRecovery && store.household == nil {
@@ -44,6 +63,12 @@ struct RootView: View {
         .environment(\.timeZone, store.calendar.timeZone)
         .task(id: store.session.deviceID) {
             store.refreshDate()
+            if store.hasPendingInvitationPackage {
+                do { try await store.continuePendingInvitation() }
+                catch { store.errorMessage = error.localizedDescription }
+                await acceptInvitation()
+                return
+            }
             do {
                 try await store.reconcileAccountMembershipLock()
             }
@@ -78,9 +103,28 @@ struct RootView: View {
             store.refreshDate()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { store.refreshDate() }
+            if phase == .active {
+                store.refreshDate()
+                Task {
+                    await acceptInvitation()
+                    if store.hasPendingInvitationPackage {
+                        do { try await store.continuePendingInvitation() }
+                        catch { store.errorMessage = error.localizedDescription }
+                    }
+                }
+            }
+        }
+        .onOpenURL { url in
+            guard url.scheme == "earnedit-invitation" else { return }
+            Task {
+                do { try await store.redeemInvitation(url.absoluteString) }
+                catch { store.errorMessage = error.localizedDescription }
+            }
         }
         .onChange(of: invitations.pending) { _, _ in Task { await acceptInvitation() } }
+        .onChange(of: store.isJoiningInvitation) { _, joining in
+            if !joining { Task { await acceptInvitation() } }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
             store.cloudAccountDidChange()
             cloudAccountRevision &+= 1
@@ -98,7 +142,7 @@ struct RootView: View {
     }
 
     private func acceptInvitation() async {
-        guard let metadata = invitations.pending else { return }
+        guard !store.isJoiningInvitation, let metadata = invitations.pending else { return }
         invitations.pending = nil
         await store.accept(metadata: metadata)
     }

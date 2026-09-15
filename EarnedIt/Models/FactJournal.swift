@@ -67,6 +67,7 @@ struct DeviceSession: Codable, Equatable {
     /// New joins set an empty array and rely on an invitation claim or shared grant.
     var legacyProfileIDs: [UUID]?
     var pendingInvitationAcceptance: PendingInvitationAcceptance?
+    var pendingInvitationPackage: PendingInvitationPackage?
     var accountMembershipLockAttemptID: UUID?
     var accountMembershipClaimBinding: String?
 }

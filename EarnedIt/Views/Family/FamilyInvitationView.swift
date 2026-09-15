@@ -75,7 +75,7 @@ struct FamilyInvitationView: View {
                     .accessibilityIdentifier("create-invitation")
                 if busy { ProgressView("Securing invitation…") }
             } footer: {
-                Text("Earned It uses a private Apple share plus a one-time app code. The code expires after 24 hours.")
+                Text("Send one invitation or let them scan its QR code. Invitations expire after 24 hours.")
             }
         }
     }
@@ -106,7 +106,8 @@ struct FamilyInvitationView: View {
                         .accessibilityIdentifier("issued-invitation-code")
                 }
 
-                ShareLink(item: issued.shareText, subject: Text("Earned It family invitation")) {
+                ShareLink(item: issued.invitationURL, subject: Text("Earned It family invitation"),
+                          message: Text(issued.shareMessage)) {
                     Label("Share Invitation", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
@@ -114,7 +115,7 @@ struct FamilyInvitationView: View {
                 .controlSize(.large)
                 .accessibilityIdentifier("share-invitation")
 
-                Text("Send the QR code or use Share Invitation. Apple grants access to this family, and the code binds this installation to the profile shown above.")
+                Text("Scan this QR code in Earned It or open the shared invitation. Follow any Apple confirmation, then Earned It finishes connecting to the profile shown above.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

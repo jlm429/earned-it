@@ -23,7 +23,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .cloudUnavailable: "iCloud sharing is unavailable. Sign in to iCloud on a device with the app's iCloud capability enabled, then try again. Local changes are kept."
         case .wrongAccount: "The iCloud account has changed. Switch back to the connected account before syncing this family."
         case .invitation: "Use an Earned It iCloud family invitation. Ask a parent to send it from Family & Sharing."
-        case .invitationNotFound: "That invitation code does not match a family available to this iCloud account. Open the Apple invitation first, then try the code again."
+        case .invitationNotFound: "This invitation could not be matched to your approved family profile. Scan the QR code in Earned It or open the complete invitation a parent shared. If it still fails, ask them for a new invitation."
         case .invitationExpired: "That invitation has expired. Ask a parent for a new one."
         case .invitationRevoked: "That invitation was revoked. Ask a parent for a new one."
         case .invitationConsumed: "That invitation has already been used. Ask a parent for a new one."
@@ -34,7 +34,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .missingProfile: "A parent needs to approve profiles for this installation."
         case .lastParent: "Keep at least one active parent. Switch profiles before archiving yourself."
         case .pendingChanges: "Sync pending changes before disconnecting so your work is kept."
-        case .familyStillSyncing: "The family is still syncing its setup. Ask the owner to finish syncing, then try connecting again."
+        case .familyStillSyncing: "Your family’s information is still arriving from iCloud. Continue joining in a moment. If it keeps failing, ask a parent to check the invitation."
         case .malformedData: "The shared family contains data this version cannot read safely. Update the app or contact the family owner."
         }
     }

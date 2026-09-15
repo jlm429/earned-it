@@ -14,7 +14,7 @@ struct IssuedFamilyInvitation: Identifiable, Equatable {
 
     var id: UUID { invitation.id }
 
-    var qrPayload: String {
+    var invitationURL: URL {
         var components = URLComponents()
         components.scheme = "earnedit-invitation"
         components.host = "join"
@@ -22,12 +22,27 @@ struct IssuedFamilyInvitation: Identifiable, Equatable {
             URLQueryItem(name: "code", value: code),
             URLQueryItem(name: "share", value: shareURL.absoluteString)
         ]
-        return components.url?.absoluteString ?? code
+        // The fixed scheme/host and URLComponents-encoded query always form a URL.
+        return components.url!
+    }
+
+    var qrPayload: String { invitationURL.absoluteString }
+
+    var shareMessage: String {
+        "Join my Earned It family. Open this invitation or scan its QR code to connect to your approved profile."
     }
 
     var shareText: String {
-        "Join my Earned It family. Open the Apple invitation, then use code \(code).\n\(shareURL.absoluteString)"
+        "\(shareMessage)\n\(invitationURL.absoluteString)"
     }
+}
+
+/// Local continuation only. Shared facts never contain a clear invitation code or delivery URL.
+struct PendingInvitationPackage: Codable, Equatable {
+    let codeDigest: String
+    let shareURL: URL
+    let cloudParticipantID: String
+    var needsAppleVerification = false
 }
 
 /// One CloudKit participant has at most one active household claim, which fixes its exact member and role.

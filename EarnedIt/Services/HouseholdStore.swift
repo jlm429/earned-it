@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import CloudKit
+import UIKit
 
 @MainActor
 @Observable
@@ -20,6 +21,7 @@ final class HouseholdStore {
     private(set) var cloudAccessBlocked = false
     private(set) var cloudIsReadOnly = false
     private(set) var isCheckingAccountMembership = false
+    private(set) var isJoiningInvitation = false
     private(set) var requiresMembershipRecovery = false
     private(set) var rejectedChanges: [UUID: String] = [:]
     var errorMessage: String?
@@ -38,13 +40,14 @@ final class HouseholdStore {
         session = try repository.session()
         today = clock()
         isCheckingAccountMembership = transport != nil && session.householdID == nil
-            && session.pendingInvitationAcceptance == nil
+            && session.pendingInvitationAcceptance == nil && session.pendingInvitationPackage == nil
         cloudIsReadOnly = session.location != nil && session.cloudCanWrite != true
         try reload()
         try migrateLegacyProfileAccess()
     }
 
     var household: Household? { snapshot.household }
+    var hasPendingInvitationPackage: Bool { session.pendingInvitationPackage != nil }
     var calendar: Calendar { household?.calendar ?? AppCalendar.current }
     var day: CivilDay { CivilDay(today, calendar: calendar) }
     var nextHouseholdMidnight: Date { tomorrow.date(in: calendar) }
@@ -565,65 +568,126 @@ final class HouseholdStore {
     }
 
     func join(url: URL, invitationCode: String) async throws {
-        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        var components = URLComponents()
+        components.scheme = "earnedit-invitation"
+        components.host = "join"
+        components.queryItems = [URLQueryItem(name: "code", value: invitationCode),
+                                 URLQueryItem(name: "share", value: url.absoluteString)]
+        guard let package = components.url else { throw HouseholdError.invitationNotFound }
+        try await redeemInvitation(package.absoluteString)
+    }
+
+    func redeemInvitation(_ text: String,
+                          openShareURL: (URL) async -> Bool = { await UIApplication.shared.open($0) }) async throws {
+        guard let credential = InvitationCredential(text: text),
+              let digest = InvitationCode.digest(credential.code) else { throw HouseholdError.invitationNotFound }
+        guard !isJoiningInvitation else { return }
         guard let transport else { throw HouseholdError.cloudUnavailable }
-        try await retryInvitationCleanup()
         let participant = try await transport.participantID()
-        let location = try await transport.invitationLocation(for: url)
-        if try await resumeAccountMembership(participant: participant, requestedLocation: location,
-                                             invitationCode: invitationCode) { return }
-        try await prepareInvitationAcceptance(url: url, location: location, participant: participant)
-        do { try await redeemInvitation(invitationCode, in: location, participant: participant) }
-        catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
-        catch {
-            let redemptionError = error
-            try await abandonPendingInvitationAcceptance(preserving: redemptionError)
+        if let pending = session.pendingInvitationPackage {
+            guard pending.cloudParticipantID == participant else { throw HouseholdError.wrongAccount }
+            guard pending.codeDigest == digest,
+                  credential.shareURL == nil || credential.shareURL == pending.shareURL else {
+                throw HouseholdError.invitationNotFound
+            }
+        } else if let shareURL = credential.shareURL {
+            try persistInvitationPackage(PendingInvitationPackage(codeDigest: digest, shareURL: shareURL,
+                                                                   cloudParticipantID: participant))
+        }
+        if hasPendingInvitationPackage {
+            _ = try await continuePendingInvitation(allowAppleVerification: true, openShareURL: openShareURL)
+        } else {
+            try await redeemCredential(codeDigest: digest, shareURL: nil)
         }
     }
 
-    func redeemInvitation(_ text: String) async throws {
-        guard let credential = InvitationCredential(text: text) else { throw HouseholdError.invitationNotFound }
+    /// Retry the same package after cold launch, native callback, or interrupted acceptance.
+    /// Opening Apple's URL is conditional on its verification error and explicit user retry.
+    @discardableResult
+    func continuePendingInvitation(allowAppleVerification: Bool = false,
+                                   openShareURL: (URL) async -> Bool = { await UIApplication.shared.open($0) }) async throws -> Bool {
+        guard !isJoiningInvitation, var pending = session.pendingInvitationPackage else { return false }
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        isJoiningInvitation = true
+        defer { isJoiningInvitation = false }
+        guard try await transport.participantID() == pending.cloudParticipantID else { throw HouseholdError.wrongAccount }
+        do {
+            try await redeemCredential(codeDigest: pending.codeDigest, shareURL: pending.shareURL)
+            try persistInvitationPackage(nil)
+            return selectedMember != nil
+        } catch let error as CKError where error.code == .participantMayNeedVerification {
+            pending.needsAppleVerification = true
+            try persistInvitationPackage(pending)
+            if allowAppleVerification {
+                guard await openShareURL(pending.shareURL) else { throw HouseholdError.invitation }
+            }
+            return false
+        } catch {
+            try clearTerminalInvitationPackage(after: error)
+            throw error
+        }
+    }
+
+    private func persistInvitationPackage(_ package: PendingInvitationPackage?) throws {
+        var updated = session
+        updated.pendingInvitationPackage = package
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    private func clearTerminalInvitationPackage(after error: Error) throws {
+        // Interrupted delivery retains its original digest and account. A terminal refusal
+        // clears only the local delivery package so a parent can send a new invitation.
+        if !(error is CancellationError), !(error is CKError),
+           (error as? HouseholdError) != .familyStillSyncing {
+            try persistInvitationPackage(nil)
+        }
+    }
+
+    private func redeemCredential(codeDigest: String, shareURL: URL?) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        if session.householdID == nil,
+           !hasPendingInvitationPackage || session.pendingInvitationAcceptance?.phase == .cleanupRequired {
+            try await retryInvitationCleanup()
+        }
         if let location = session.location, let participant = session.cloudParticipantID {
             do {
-                if let shareURL = credential.shareURL,
+                if let shareURL,
                    session.pendingInvitationAcceptance?.phase == .awaitingRedemption {
                     guard try await transport.invitationLocation(for: shareURL) == location else {
                         throw HouseholdError.invitationNotFound
                     }
                 }
-                try await redeemInvitation(credential.code, in: location, participant: participant)
+                try await redeemPreparedInvitation(codeDigest: codeDigest, in: location, participant: participant)
             }
             catch {
                 guard session.pendingInvitationAcceptance?.phase == .awaitingRedemption else { throw error }
                 if let cloudError = error as? CKError, Self.isRetryableInvitationError(cloudError) { throw error }
+                if hasPendingInvitationPackage, (error as? HouseholdError) == .familyStillSyncing {
+                    throw error
+                }
                 try await abandonPendingInvitationAcceptance(preserving: error)
             }
             return
         }
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
-        try await retryInvitationCleanup()
         let participant = try await transport.participantID()
-        if let shareURL = credential.shareURL {
+        if let shareURL {
             let location = try await transport.invitationLocation(for: shareURL)
             if try await resumeAccountMembership(participant: participant, requestedLocation: location,
-                                                 invitationCode: credential.code) { return }
+                                                 invitationCodeDigest: codeDigest) { return }
             try await prepareInvitationAcceptance(url: shareURL, location: location, participant: participant)
-            do { try await redeemInvitation(credential.code, in: location, participant: participant) }
-            catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
-            catch {
-                try await abandonPendingInvitationAcceptance(preserving: error)
-            }
+            try await redeemPreparedInvitation(codeDigest: codeDigest, in: location, participant: participant)
             return
         }
         if try await resumeAccountMembership(participant: participant, requestedLocation: nil,
-                                             invitationCode: credential.code) { return }
+                                             invitationCodeDigest: codeDigest) { return }
         let families = try await transport.discoverFamilies()
         for family in families {
             let remote = try await transport.fetch(from: family.location)
             let imported = HouseholdSnapshot(facts: remote)
-            if imported.invitation(matchingCode: credential.code) != nil {
-                try await redeemInvitation(credential.code, in: family.location, participant: participant, remote: remote)
+            if imported.invitations.contains(where: { $0.codeDigest == codeDigest }) {
+                try await redeemInvitation(codeDigest: codeDigest, in: family.location, participant: participant, remote: remote)
                 return
             }
         }
@@ -641,12 +705,43 @@ final class HouseholdStore {
     }
 
     func acceptSystemInvitation(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
+        if let package = session.pendingInvitationPackage {
+            guard !isJoiningInvitation else { return }
+            isJoiningInvitation = true
+            defer { isJoiningInvitation = false }
+            guard let transport else { throw HouseholdError.cloudUnavailable }
+            guard try await transport.participantID() == package.cloudParticipantID else {
+                throw HouseholdError.wrongAccount
+            }
+            guard try await transport.invitationLocation(for: package.shareURL) == location else {
+                throw HouseholdError.invitationNotFound
+            }
+            do {
+                if session.location == location, selectedMember != nil {
+                    try await redeemCredential(codeDigest: package.codeDigest, shareURL: package.shareURL)
+                } else {
+                    try await prepareInvitationAcceptance(location: location, participant: package.cloudParticipantID,
+                                                           acceptance: acceptance)
+                    try await redeemPreparedInvitation(codeDigest: package.codeDigest, in: location,
+                                                       participant: package.cloudParticipantID)
+                }
+                try persistInvitationPackage(nil)
+            } catch {
+                try clearTerminalInvitationPackage(after: error)
+                throw error
+            }
+            return
+        }
+        try await acceptSystemInvitationAccess(location: location, acceptance)
+    }
+
+    private func acceptSystemInvitationAccess(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         try await retryInvitationCleanup()
         let participant = try await transport.participantID()
         if try await resumeAccountMembership(participant: participant, requestedLocation: location,
-                                             invitationCode: nil) { return }
+                                             invitationCodeDigest: nil) { return }
         let accessExisted = try await transport.hasAcceptedAccess(to: location)
         let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
         try beginPendingInvitationAcceptance(location: location, participant: participant,
@@ -672,7 +767,19 @@ final class HouseholdStore {
         try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
     }
 
-    private func redeemInvitation(_ code: String, in location: CloudLocation, participant: String,
+    private func redeemPreparedInvitation(codeDigest: String, in location: CloudLocation, participant: String) async throws {
+        do { try await redeemInvitation(codeDigest: codeDigest, in: location, participant: participant) }
+        catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError)
+            || (hasPendingInvitationPackage && cloudError.code == .operationCancelled) { throw cloudError }
+        catch {
+            if hasPendingInvitationPackage,
+               error is CancellationError || (error as? HouseholdError) == .familyStillSyncing { throw error }
+            try persistInvitationPackage(nil)
+            try await abandonPendingInvitationAcceptance(preserving: error)
+        }
+    }
+
+    private func redeemInvitation(codeDigest: String, in location: CloudLocation, participant: String,
                                   remote suppliedFacts: [HouseholdFact]? = nil) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         guard session.householdID == nil || session.householdID == location.householdID else {
@@ -680,12 +787,20 @@ final class HouseholdStore {
         }
         let remote: [HouseholdFact]
         if let suppliedFacts { remote = suppliedFacts }
-        else { remote = try await transport.fetch(from: location) }
+        else {
+            do { remote = try await transport.fetch(from: location) }
+            catch {
+                if hasPendingInvitationPackage, Self.isInvitationVisibilityError(error) {
+                    throw HouseholdError.familyStillSyncing
+                }
+                throw error
+            }
+        }
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try validateCompleteFamily(imported, householdID: location.householdID)
         if let membership = try imported.committedAccountMembership(participantID: participant) {
-            guard InvitationCode.digest(code) == membership.claim.codeDigest else {
+            guard codeDigest == membership.claim.codeDigest else {
                 throw HouseholdError.accountMembershipConflict
             }
             let canWrite = try await transport.canWrite(to: location)
@@ -698,7 +813,7 @@ final class HouseholdStore {
                        accountLockAttemptID: lock.attemptID)
             return
         }
-        guard let invitation = imported.invitation(matchingCode: code),
+        guard let invitation = imported.invitations.first(where: { $0.codeDigest == codeDigest }),
               let member = imported.member(invitation.memberID), member.role == invitation.role,
               invitation.householdID == location.householdID else { throw HouseholdError.invitationNotFound }
         if imported.isInvitationRevoked(invitation.id) { throw HouseholdError.invitationRevoked }
@@ -1030,17 +1145,42 @@ final class HouseholdStore {
 
     private func prepareInvitationAcceptance(url: URL, location: CloudLocation, participant: String) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
-        let accessExisted = try await transport.hasAcceptedAccess(to: location)
-        let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
-        try beginPendingInvitationAcceptance(location: location, participant: participant,
-                                             accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
-        do {
+        try await prepareInvitationAcceptance(location: location, participant: participant) {
             try await transport.accept(url: url, expected: location)
-            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+        }
+    }
+
+    private func prepareInvitationAcceptance(location: CloudLocation, participant: String,
+                                             acceptance: () async throws -> Void) async throws {
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        if let pending = session.pendingInvitationAcceptance, hasPendingInvitationPackage {
+            guard pending.location == location, pending.cloudParticipantID == participant,
+                  pending.phase != .cleanupRequired else { throw HouseholdError.invitationNotFound }
+        } else {
+            let accessExisted = try await transport.hasAcceptedAccess(to: location)
+            let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
+            try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                                 accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
+        }
+        do {
+            if session.pendingInvitationAcceptance?.phase == .acceptingAccess {
+                try await acceptance()
+                try Task.checkCancellation()
+                guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+                try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            }
             try await identifyPendingInvitation(in: location)
-        } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
+        } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError)
+            || (hasPendingInvitationPackage && (cloudError.code == .participantMayNeedVerification
+                                                 || cloudError.code == .operationCancelled)) {
             throw cloudError
+        } catch is CancellationError where hasPendingInvitationPackage {
+            throw CancellationError()
         } catch {
+            if hasPendingInvitationPackage, session.pendingInvitationAcceptance?.phase == .awaitingRedemption,
+               ((error as? HouseholdError) == .invitationNotFound || Self.isInvitationVisibilityError(error)) {
+                throw HouseholdError.familyStillSyncing
+            }
             try await abandonPendingInvitationAcceptance(preserving: error)
         }
     }
@@ -1174,6 +1314,13 @@ final class HouseholdStore {
         }
     }
 
+    private nonisolated static func isInvitationVisibilityError(_ error: Error) -> Bool {
+        if (error as? HouseholdError) == .familyStillSyncing { return true }
+        guard let cloudError = error as? CKError else { return false }
+        return cloudError.code == .zoneNotFound || cloudError.code == .unknownItem
+            || cloudError.code == .permissionFailure
+    }
+
     func pendingInvitationCleanupDelay() async throws -> TimeInterval? {
         guard let pending = session.pendingInvitationAcceptance else { return nil }
         if pending.phase == .cleanupRequired {
@@ -1195,6 +1342,10 @@ final class HouseholdStore {
     }
 
     func retryScheduledInvitationCleanup() async throws -> TimeInterval? {
+        // Package delivery owns continuation while awaiting Apple's UI or an in-flight join.
+        guard !isJoiningInvitation, !hasPendingInvitationPackage else {
+            return Self.pendingInvitationCleanupRetryDelay
+        }
         do {
             try await retryInvitationCleanup()
             return nil
@@ -1534,7 +1685,7 @@ final class HouseholdStore {
     }
 
     private func resumeAccountMembership(participant: String, requestedLocation: CloudLocation?,
-                                         invitationCode: String?) async throws -> Bool {
+                                         invitationCodeDigest: String?) async throws -> Bool {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         var located: [(CloudLocation, [HouseholdFact], AccountFamilyMembership)] = []
         for family in try await transport.discoverFamilies() {
@@ -1549,7 +1700,7 @@ final class HouseholdStore {
         }
         guard located.count <= 1 else { throw HouseholdError.accountMembershipConflict }
         guard let existing = located.first else { return false }
-        let codeMatches = invitationCode.map { InvitationCode.digest($0) == existing.2.claim.codeDigest } ?? true
+        let codeMatches = invitationCodeDigest.map { $0 == existing.2.claim.codeDigest } ?? true
         guard requestedLocation == nil || requestedLocation == existing.0, codeMatches else {
             throw HouseholdError.accountMembershipConflict
         }

@@ -279,7 +279,7 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 1)
 
         transport.account = "different-account"
-        await XCTAssertThrowsErrorAsync(try await joining.retryScheduledInvitationCleanup(), expected: .wrongAccount)
+        await XCTAssertThrowsErrorAsync(try await joining.retryScheduledInvitationCleanup() as Any, expected: .wrongAccount)
         XCTAssertEqual(transport.leaveAttempts, 1)
         XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
 

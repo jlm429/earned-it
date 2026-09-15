@@ -36,23 +36,23 @@ struct JoinFamilyView: View {
                 } header: {
                     Text("Invitation code")
                 } footer: {
-                    Text("Codes expire after 24 hours and work once. If you received an Apple invitation separately, open it before entering the code.")
+                    Text("Scan the QR code in Earned It or open the shared invitation to connect automatically. Codes expire after 24 hours and work once.")
                 }
 
-                Section("Apple invitation link") {
-                    TextField("Optional iCloud invitation link", text: $invitationLink)
+                Section("Invitation link") {
+                    TextField("Shared invitation or iCloud link", text: $invitationLink)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         .accessibilityIdentifier("invitation-link")
-                    Text("Paste the link when the code and Apple invitation arrived together. Leave this blank if you already opened the Apple invitation.")
+                    Text("Paste the complete shared invitation to connect automatically. For an older invitation, paste its iCloud link and enter the code above.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
                 Section {
                     Button("Join Family") { redeem() }
-                        .disabled(busy || InvitationCode.normalized(code) == nil)
+                        .disabled(busy || (InvitationCode.normalized(code) == nil && InvitationCredential(text: invitationLink)?.shareURL == nil))
                         .accessibilityIdentifier("accept-invitation")
                     if busy { ProgressView("Checking invitation…") }
                 }
@@ -83,7 +83,7 @@ struct JoinFamilyView: View {
                     guard let credential = InvitationCredential(text: payload) else { return }
                     code = credential.code
                     invitationLink = credential.shareURL?.absoluteString ?? ""
-                    run { try await store.redeemInvitation(payload); dismiss() }
+                    run { try await store.redeemInvitation(payload); if store.selectedMember != nil { dismiss() } }
                 }
             }
             .alert("Unable to Join", isPresented: Binding(
@@ -98,12 +98,17 @@ struct JoinFamilyView: View {
             if invitationLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try await store.redeemInvitation(code)
             } else {
+                if let credential = InvitationCredential(text: invitationLink), credential.shareURL != nil {
+                    try await store.redeemInvitation(invitationLink)
+                    if store.selectedMember != nil { dismiss() }
+                    return
+                }
                 guard let url = URL(string: invitationLink.trimmingCharacters(in: .whitespacesAndNewlines)) else {
                     throw HouseholdError.invitationNotFound
                 }
                 try await store.join(url: url, invitationCode: code)
             }
-            dismiss()
+            if store.selectedMember != nil { dismiss() }
         }
     }
 
