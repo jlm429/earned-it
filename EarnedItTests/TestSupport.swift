@@ -72,6 +72,10 @@ final class TestTransport: HouseholdTransport {
     }
     private var accountGeneration: UInt64 = 0
     var fetchError: Error?
+    var invitationLocationError: Error?
+    var invitationAccessVisible = true
+    private(set) var invitationLocationURLs: [URL] = []
+    private(set) var acceptedURLs: [URL] = []
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
     var accountLockReleaseFailures = 0
@@ -192,6 +196,8 @@ final class TestTransport: HouseholdTransport {
         return location
     }
     func invitationLocation(for url: URL) async throws -> CloudLocation {
+        invitationLocationURLs.append(url)
+        if let invitationLocationError { throw invitationLocationError }
         guard let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitation }
         return CloudLocation(householdID: zone.householdID, zoneName: url.lastPathComponent,
                              ownerName: zone.owner, isOwner: zone.owner == account)
@@ -202,6 +208,7 @@ final class TestTransport: HouseholdTransport {
         return zone.owner == account || zone.participants.contains(account)
     }
     func accept(url: URL, expected location: CloudLocation) async throws {
+        acceptedURLs.append(url)
         guard try await invitationLocation(for: url) == location,
               let zone = server.zones[url.lastPathComponent] else { throw HouseholdError.invitationNotFound }
         await beforeAccept?()
@@ -281,7 +288,7 @@ final class TestTransport: HouseholdTransport {
         }
     }
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
-        server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
+        invitationAccessVisible && server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         if invitationValidationTimeFailures > 0 {

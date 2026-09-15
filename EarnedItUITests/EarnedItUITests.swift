@@ -67,6 +67,51 @@ final class EarnedItUITests: XCTestCase {
         try checkJoinFailureKeepsFreshSetup()
     }
 
+    func testInvitationPackageColdAndWarmURLRoutingKeepsUnclaimedSetup() throws {
+        let url = try XCTUnwrap(URL(string: "earnedit-invitation://join?code=2345-6789-AB&share=https%3A%2F%2Fwww.icloud.com%2Fshare%2Fsynthetic-only"))
+        XCUIDevice.shared.system.open(url)
+        XCTAssertTrue(app.alerts["Unable to Update"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'iCloud sharing is unavailable'")).firstMatch.exists)
+        keepScreenshot("invitation-package-warm-route")
+        tap("OK")
+        XCTAssertTrue(app.navigationBars["Welcome"].exists)
+
+        app.terminate()
+        app.launchArguments = ["--ui-test-store"]
+        app.open(url)
+        XCTAssertTrue(app.alerts["Unable to Update"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'iCloud sharing is unavailable'")).firstMatch.exists)
+        keepScreenshot("invitation-package-cold-route")
+        tap("OK")
+        XCTAssertTrue(app.navigationBars["Welcome"].exists)
+        XCTAssertFalse(screen("parent-dashboard").exists)
+        XCTAssertFalse(screen("child-home").exists)
+
+        tap("join-family")
+        fill("invitation-link", with: url.absoluteString)
+        XCTAssertTrue(app.buttons["accept-invitation"].isEnabled)
+        tap("accept-invitation")
+        XCTAssertTrue(app.alerts["Unable to Join"].waitForExistence(timeout: 8))
+        tap("OK")
+        tap("Cancel")
+        relaunch()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-pending-invitation",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        XCTAssertTrue(screen("pending-invitation-screen").waitForExistence(timeout: 8))
+        reveal(app.buttons["continue-invitation"])
+        keepScreenshot("pending-invitation-largest-text")
+        tap("continue-invitation")
+        XCTAssertTrue(app.alerts["Unable to Update"].waitForExistence(timeout: 8))
+        tap("OK")
+        relaunch(largeType: true)
+        XCTAssertTrue(screen("pending-invitation-screen").waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["continue-invitation"].exists)
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
     func testChoreAssignmentDatesAfterMembershipChanges() throws {
         createFamily()
         addChild("Hanna")

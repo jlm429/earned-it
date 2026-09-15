@@ -24,6 +24,14 @@ struct EarnedItApp: App {
             if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-reset") {
                 try repository.clearLocalData()
             }
+            if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-pending-invitation") {
+                var session = try repository.session()
+                session.pendingInvitationPackage = PendingInvitationPackage(
+                    codeDigest: InvitationCode.digest("2345-6789-AB")!,
+                    shareURL: URL(string: "https://www.icloud.com/share/synthetic-only")!,
+                    cloudParticipantID: "synthetic-ui-test-account", needsAppleVerification: true)
+                try repository.commit(facts: [], session: session)
+            }
             #endif
             let transport: (any HouseholdTransport)?
             #if targetEnvironment(simulator)
