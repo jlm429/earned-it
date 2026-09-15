@@ -33,6 +33,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ### Fixed
 
+- Reinstalling or losing local app data now reconnects a surviving iCloud membership to its exact family member and role before offering family creation. Conflicting or temporarily unavailable recovery evidence blocks creation without deleting that membership.
 - iPhone builds and App Store archives now include the production app icon.
 - New children immediately join existing all-children chores that apply today. Particular-child assignments, future chore starts, earlier history, and other children’s completions are preserved across reload and sync.
 - Daily chore cards now show compact, wrapping child controls with individual status symbols and colors. Tap once to complete or undo your permitted entries; touch and hold for other states. Names stay readable with Dynamic Type, controls have at least 44-point touch targets, and supporting daily text has stronger contrast.

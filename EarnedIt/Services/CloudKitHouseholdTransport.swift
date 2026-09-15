@@ -116,13 +116,19 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
         let expectedZoneName = zonePrefix + householdID.uuidString
+        var matches: [CloudLocation] = []
         for isOwner in [true, false] {
             let database = isOwner ? container.privateCloudDatabase : container.sharedCloudDatabase
-            if let zone = try await database.allRecordZones().first(where: { $0.zoneID.zoneName == expectedZoneName }) {
-                return location(zoneID: zone.zoneID, isOwner: isOwner)
+            for zone in try await database.allRecordZones() where zone.zoneID.zoneName == expectedZoneName {
+                if let candidate = location(zoneID: zone.zoneID, isOwner: isOwner) { matches.append(candidate) }
             }
         }
-        return nil
+        return try Self.uniqueMembershipLocation(matches)
+    }
+
+    nonisolated static func uniqueMembershipLocation(_ matches: [CloudLocation]) throws -> CloudLocation? {
+        guard matches.count <= 1 else { throw HouseholdError.accountMembershipConflict }
+        return matches.first
     }
 
     func discoverFamilies() async throws -> [CloudFamily] {
@@ -322,7 +328,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         let database = database(for: location)
-        let record = CKRecord(recordType: "InvitationValidationTime", zoneID: zoneID(for: location))
+        let recordID = CKRecord.ID(zoneID: zoneID(for: location))
+        let record = CKRecord(recordType: "InvitationValidationTime", recordID: recordID)
         let results = try await database.modifyRecords(saving: [record], deleting: [],
                                                        savePolicy: .ifServerRecordUnchanged, atomically: true)
         guard let result = results.saveResults[record.recordID],

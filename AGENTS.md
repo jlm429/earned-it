@@ -36,7 +36,7 @@
 - Build and test with the selected full Xcode installation and an available iPhone Simulator runtime.
 - Run unit tests, no more than three focused UI flows, and manual checks for critical product rules.
 - Confirm launch, relaunch persistence, first-run setup, confirmed local-data reset, and role-specific experiences.
-- Production never seeds households. `HouseholdStore.swift` centralizes actions and profile permissions; `EarnedItApp.swift` configures the separate debug-only UI test store.
+- Production never seeds households. `HouseholdStore.swift` centralizes actions and profile permissions; `EarnedItApp.swift` configures the separate debug-only UI test store. Startup recovery and local-state-loss proof boundaries are documented in `docs/production-membership-recovery/report.md`.
 - Distinguish transport-double tests from signed, two-account CloudKit validation. CKShare write access is broader than app profile permissions.
 - Native one-time links require the signing entitlement in `Configuration/EarnedIt.entitlements`. See `docs/production-invitation-crash/report.md` for the native probe and distribution checks.
 - Use automatic signing only when needed for a physical device. Simulator work must not require a paid developer account.

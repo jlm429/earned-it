@@ -1608,3 +1608,412 @@ private extension XCTestCase {
         }
     }
 }
+
+@MainActor
+final class MembershipRecoveryTests: XCTestCase {
+    private func fresh(_ transport: TestTransport, clock: TestClock) throws -> HouseholdStore {
+        try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                           clock: { clock.now }, automaticSync: false)
+    }
+
+    func testCodeBeforeAppleAcceptanceThenSystemAcceptanceAndExactChildClaim() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "child")
+        let joining = try fresh(transport, clock: family.clock)
+        await XCTAssertThrowsErrorAsync(try await joining.redeemInvitation(invitation.code), expected: .invitationNotFound)
+        XCTAssertNil(server.accountMembershipLocks["child"])
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .provisional)
+        XCTAssertNil(joining.selectedMember)
+        XCTAssertTrue(joining.profiles.isEmpty)
+        XCTAssertThrowsError(try joining.selectProfile(family.parent.id))
+        try await joining.redeemInvitation(invitation.code)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertThrowsError(try joining.selectProfile(family.alek.id))
+        XCTAssertThrowsError(try joining.saveMember(name: "Unauthorized", role: .parent, avatar: .sun))
+    }
+
+    func testCleanupDuringNativeAcceptanceDoesNotReproduceMembershipConflict() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "child")
+        let joining = try fresh(transport, clock: family.clock)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        var cleanupError: Error?
+        var observedAcceptingAccess = false
+        transport.beforeAccept = {
+            observedAcceptingAccess = joining.session.pendingInvitationAcceptance?.phase == .acceptingAccess
+                && server.accountMembershipLocks["child"]?.state == .provisional
+            do { _ = try await joining.retryScheduledInvitationCleanup() }
+            catch { cleanupError = error }
+        }
+        await XCTAssertThrowsErrorAsync(try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }, expected: .invitationNotFound)
+        XCTAssertTrue(observedAcceptingAccess)
+        XCTAssertNil(cleanupError)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .released)
+        XCTAssertTrue(server.zones[location.zoneName]!.participants.contains("child"))
+        XCTAssertNil(joining.selectedMember)
+        transport.beforeAccept = nil
+        try await joining.redeemInvitation(invitation.code)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+    }
+
+    func testAcceptedImportWithoutPendingEnvelopeContinuesItsPersistedAttempt() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "child")
+        let joining = try fresh(transport, clock: family.clock)
+        try await joining.join(url: invitation.shareURL)
+        let attempt = try XCTUnwrap(joining.session.accountMembershipLockAttemptID)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertTrue(joining.profiles.isEmpty)
+        try await joining.redeemInvitation(invitation.code)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.attemptID, attempt)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+    }
+
+    func testFreshOwnerLaunchRecoversSurvivingActiveMembershipAndJournal() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let chore = try family.chore()
+        try await family.store.connect()
+        let lock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: family.clock)
+        XCTAssertNil(replacement.household)
+        XCTAssertNotEqual(replacement.session.deviceID, family.store.session.deviceID)
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertEqual(replacement.household?.id, family.store.household?.id)
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+        XCTAssertEqual(replacement.selectedMember?.role, .parent)
+        XCTAssertEqual(replacement.profiles.map(\.id), [family.parent.id])
+        XCTAssertEqual(replacement.dailyList().map(\.id), [chore])
+        XCTAssertEqual(replacement.pendingCount, 0)
+        XCTAssertEqual(server.createCalls, 1)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertThrowsError(try replacement.createFamily(name: "Duplicate", parentName: "Duplicate"))
+        _ = try replacement.saveMember(name: "Recovered Child", role: .child, avatar: .flower)
+    }
+
+    func testFreshJoinedParentAndChildRecoverOnlyTheirExactCommittedProfile() async throws {
+        for role in [UserRole.parent, .child] {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            let invitation = role == .parent
+                ? try await family.store.createParentInvitation(name: "Joined Parent", avatar: .fox)
+                : try await family.store.createChildInvitation(memberID: family.hanna.id)
+            let original = try fresh(TestTransport(server: server, account: "joined"), clock: family.clock)
+            try await original.redeemInvitation(invitation.qrPayload)
+            let lock = try XCTUnwrap(server.accountMembershipLocks["joined"])
+            let replacement = try fresh(TestTransport(server: server, account: "joined"), clock: family.clock)
+            try await replacement.reconcileAccountMembershipLock()
+            XCTAssertEqual(replacement.household?.id, family.store.household?.id)
+            XCTAssertEqual(replacement.selectedMember?.id, invitation.invitation.memberID)
+            XCTAssertEqual(replacement.selectedMember?.role, role)
+            XCTAssertEqual(replacement.profiles.map(\.id), [invitation.invitation.memberID])
+            XCTAssertEqual(server.accountMembershipLocks["joined"], lock)
+            XCTAssertThrowsError(try replacement.selectProfile(family.alek.id))
+        }
+    }
+
+    func testFreshProvisionalAcceptanceRecoversWithoutAuthorityThenClaimsExactChild() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "child")
+        let original = try fresh(transport, clock: family.clock)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        try await original.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+        let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        let replacement = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertEqual(replacement.household?.id, family.store.household?.id)
+        XCTAssertEqual(replacement.session.pendingInvitationAcceptance?.accountLockAttemptID, lock.attemptID)
+        XCTAssertTrue(replacement.profiles.isEmpty)
+        XCTAssertNil(replacement.selectedMember)
+        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
+        try await replacement.redeemInvitation(invitation.qrPayload)
+        XCTAssertEqual(replacement.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+    }
+
+    func testProvisionalAccountRejectsDifferentHouseholdThenContinuesMatchingChild() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
+        let invitation = try await first.store.createChildInvitation(memberID: first.hanna.id)
+        let second = try TestFamily(transport: TestTransport(server: server, account: "second-owner"))
+        let otherInvitation = try await second.store.createChildInvitation(memberID: second.hanna.id)
+        let original = try fresh(TestTransport(server: server, account: "child"), clock: first.clock)
+        try await original.join(url: invitation.shareURL)
+        let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        let concurrent = try fresh(TestTransport(server: server, account: "child"), clock: first.clock)
+        await XCTAssertThrowsErrorAsync(try await concurrent.redeemInvitation(otherInvitation.qrPayload),
+                                        expected: .accountMembershipConflict)
+        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
+        XCTAssertFalse(server.zones[otherInvitation.shareURL.lastPathComponent]!.participants.contains("child"))
+        XCTAssertNil(concurrent.selectedMember)
+        try await original.redeemInvitation(invitation.code)
+        XCTAssertEqual(original.profiles.map(\.id), [first.hanna.id])
+    }
+
+    func testRevokedMembershipIsNotRecoveredOrReleasedBecauseLocalStateIsMissing() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let original = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await original.redeemInvitation(invitation.qrPayload)
+        let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        try await family.store.revokeInvitation(invitation.invitation)
+        let transport = TestTransport(server: server, account: "child")
+        let replacement = try fresh(transport, clock: family.clock)
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .invitationUnavailable)
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertTrue(replacement.profiles.isEmpty)
+        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+        // Disconfirm a dependence on zone disappearance: retained transport access must still
+        // refuse the revoked journal generation, even if a zone remains visible temporarily.
+        server.zones[invitation.shareURL.lastPathComponent]?.participants.insert("child")
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(),
+                                        expected: .accountMembershipConflict)
+        XCTAssertNil(replacement.selectedMember)
+        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
+    }
+
+    func testReleasedLockCannotRecoverVisibleOwnerZone() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        var lock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        lock.state = .released
+        lock.claimBinding = nil
+        server.accountMembershipLocks["owner"] = lock
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: family.clock)
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.profiles.isEmpty)
+        XCTAssertFalse(replacement.isCheckingAccountMembership)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+    }
+
+    func testAmbiguousLegacyHouseholdsAndParentsRefuseWithoutChoosingAuthority() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await first.store.connect()
+        server.accountMembershipLocks.removeValue(forKey: "owner")
+        let second = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await second.store.connect()
+        server.accountMembershipLocks.removeValue(forKey: "owner")
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: first.clock)
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .accountMembershipConflict)
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+        XCTAssertThrowsError(try replacement.createFamily(name: "Duplicate", parentName: "Duplicate"))
+        server.zones.removeValue(forKey: "EarnedIt-\(second.store.household!.id)")
+        _ = try first.store.saveMember(name: "Legacy Parent", role: .parent, avatar: .fox)
+        try await first.store.synchronize()
+        let lock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .accountMembershipConflict)
+        XCTAssertNil(replacement.selectedMember)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+    }
+
+    func testLegacySingleProfileRecoversAndMultipleProfilesRefuse() async throws {
+        for ambiguous in [false, true] {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            try await family.store.connect()
+            let location = try XCTUnwrap(family.store.session.location)
+            server.zones[location.zoneName]?.participants.insert("legacy")
+            let original = try fresh(TestTransport(server: server, account: "legacy"), clock: family.clock)
+            let discovered = try await TestTransport(server: server, account: "legacy").membershipLocation(householdID: location.householdID)
+            let shared = try XCTUnwrap(discovered)
+            try await original.joinExisting(shared)
+            let ids = ambiguous ? [family.hanna.id, family.alek.id] : [family.hanna.id]
+            try original.requestProfiles(ids, deviceName: "Legacy Test Device")
+            try await original.synchronize()
+            try await family.store.synchronize()
+            let request = try XCTUnwrap(family.store.pendingRequests.first)
+            try family.store.approve(request, memberIDs: ids)
+            try await family.store.synchronize()
+            try await original.synchronize()
+            let lock = try XCTUnwrap(server.accountMembershipLocks["legacy"])
+            let replacement = try fresh(TestTransport(server: server, account: "legacy"), clock: family.clock)
+            if ambiguous {
+                await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .accountMembershipConflict)
+                XCTAssertNil(replacement.selectedMember)
+                XCTAssertTrue(replacement.profiles.isEmpty)
+            } else {
+                try await replacement.reconcileAccountMembershipLock()
+                XCTAssertEqual(replacement.selectedMember?.id, family.hanna.id)
+                XCTAssertEqual(replacement.profiles.map(\.id), [family.hanna.id])
+            }
+            XCTAssertEqual(server.accountMembershipLocks["legacy"], lock)
+        }
+    }
+
+    func testRecoveryFailureKeepsMembershipBlocksCreationAndCanRetry() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let lock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        let transport = TestTransport(server: server, account: "owner")
+        transport.fetchError = CKError(.networkFailure)
+        let replacement = try fresh(transport, clock: family.clock)
+        XCTAssertTrue(replacement.isCheckingAccountMembership)
+        do { try await replacement.reconcileAccountMembershipLock(); XCTFail("Expected offline recovery failure") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .networkFailure) }
+        XCTAssertFalse(replacement.isCheckingAccountMembership)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertNil(replacement.household)
+        XCTAssertThrowsError(try replacement.createFamily(name: "Duplicate", parentName: "Duplicate"))
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        transport.fetchError = nil
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+    }
+
+    func testEmptyAccountCompletesMembershipCheckBeforeNormalFirstRun() async throws {
+        let server = TestCloudServer()
+        let replacement = try fresh(TestTransport(server: server, account: "new-account"), clock: TestClock())
+        XCTAssertTrue(replacement.isCheckingAccountMembership)
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertFalse(replacement.isCheckingAccountMembership)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertNil(replacement.household)
+        try replacement.createFamily(name: "New Family", parentName: "New Parent")
+        XCTAssertNotNil(replacement.household)
+        XCTAssertNil(server.accountMembershipLocks["new-account"])
+    }
+
+    func testOwnerLocalResetKeepsCloudMembershipAndRecoveredJournalPersists() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "membership-recovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport, url: directory.appending(path: "task-test.store"))
+        try await family.store.connect()
+        let lock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        try family.store.resetLocalData()
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertTrue(family.store.isCheckingAccountMembership)
+        XCTAssertNil(family.store.household)
+        try await family.store.reconcileAccountMembershipLock()
+        let reopened = try HouseholdStore(repository: HouseholdRepository(url: directory.appending(path: "task-test.store")),
+                                           transport: transport, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.household?.id, family.store.household?.id)
+        XCTAssertEqual(reopened.selectedMember?.id, family.parent.id)
+        XCTAssertEqual(reopened.profiles.map(\.id), [family.parent.id])
+        XCTAssertEqual(reopened.pendingCount, 0)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+    }
+
+    func testRecoveryRejectsConflictingBindingAndAmbiguousNativeLocations() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        var lock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        lock.claimBinding = "conflicting-test-binding"
+        server.accountMembershipLocks["owner"] = lock
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: family.clock)
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .accountMembershipConflict)
+        XCTAssertNil(replacement.selectedMember)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        let ownerLocation = try XCTUnwrap(family.store.session.location)
+        let otherLocation = CloudLocation(householdID: ownerLocation.householdID, zoneName: ownerLocation.zoneName,
+                                           ownerName: "another-owner", isOwner: false)
+        XCTAssertThrowsError(try CloudKitHouseholdTransport.uniqueMembershipLocation([ownerLocation, otherLocation]))
+        XCTAssertEqual(try CloudKitHouseholdTransport.uniqueMembershipLocation([ownerLocation]), ownerLocation)
+        XCTAssertNil(try CloudKitHouseholdTransport.uniqueMembershipLocation([]))
+    }
+
+    func testAccountChangeDuringRecoveryCannotRestoreAuthorityOrMutateOtherAccount() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let location = try XCTUnwrap(family.store.session.location)
+        server.zones[location.zoneName]?.participants.insert("other-account")
+        let locks = server.accountMembershipLocks
+        let transport = TestTransport(server: server, account: "owner")
+        transport.beforeFetch = { transport.account = "other-account" }
+        let replacement = try fresh(transport, clock: family.clock)
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .wrongAccount)
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.profiles.isEmpty)
+        XCTAssertEqual(server.accountMembershipLocks, locks)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+    }
+
+
+    func testAcceptedCodeAfterCompleteLocalLossContinuesOriginalProvisionalLease() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let original = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await original.join(url: invitation.shareURL)
+        let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        let replacement = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await replacement.redeemInvitation(invitation.code)
+        XCTAssertEqual(replacement.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(replacement.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.attemptID, lock.attemptID)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+    }
+
+    func testFreshProvisionalCommittedClaimCompletesActiveRecovery() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let original = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await original.redeemInvitation(invitation.qrPayload)
+        var lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        lock.state = .provisional
+        lock.claimBinding = nil
+        server.accountMembershipLocks["child"] = lock
+        let replacement = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertEqual(replacement.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.attemptID, lock.attemptID)
+    }
+
+    func testExpiredUnclaimedProvisionalMembershipRefusesRecoveryWithoutAuthority() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let original = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        try await original.join(url: invitation.shareURL)
+        let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        server.authoritativeTime = invitation.invitation.expiresAt.addingTimeInterval(1)
+        let replacement = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
+        await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .invitationUnavailable)
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.profiles.isEmpty)
+        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
+    }
+
+}
