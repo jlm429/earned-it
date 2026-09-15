@@ -165,11 +165,14 @@ final class TestTransport: HouseholdTransport {
         return true
     }
     func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
-        guard let (name, zone) = server.zones.first(where: { $0.value.householdID == householdID
-            && ($0.value.owner == account || $0.value.participants.contains(account)) }) else { return nil }
-        return CloudLocation(householdID: householdID, zoneName: name, ownerName: zone.owner,
-                             isOwner: zone.owner == account)
+        let matches = server.zones.filter { $0.value.householdID == householdID
+            && ($0.value.owner == account || $0.value.participants.contains(account)) }.map { name, zone in
+                CloudLocation(householdID: householdID, zoneName: name, ownerName: zone.owner,
+                              isOwner: zone.owner == account)
+            }
+        return try CloudKitHouseholdTransport.uniqueMembershipLocation(matches)
     }
+
     func createZone(for household: Household) async throws -> CloudLocation {
         await beforeCreateZone?()
         server.createCalls += 1

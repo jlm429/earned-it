@@ -11,7 +11,25 @@ struct RootView: View {
     var body: some View {
         @Bindable var store = store
         Group {
-            if store.household == nil || store.household?.isSetupComplete == false {
+            if store.isCheckingAccountMembership {
+                ProgressView("Reconnecting to your family…")
+                    .accessibilityIdentifier("membership-recovery-progress")
+            } else if store.requiresMembershipRecovery && store.household == nil {
+                ContentUnavailableView {
+                    Label("Reconnect to Your Family", systemImage: "icloud.and.arrow.down")
+                } description: {
+                    Text("Your iCloud membership has been kept. Reconnect to your existing family to continue with your approved profile.")
+                } actions: {
+                    Button("Try Reconnecting") {
+                        Task {
+                            do { try await store.reconcileAccountMembershipLock() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .accessibilityIdentifier("retry-membership-recovery")
+                }
+                .accessibilityIdentifier("membership-recovery-required")
+            } else if store.household == nil || store.household?.isSetupComplete == false {
                 SetupView()
             } else if let member = store.selectedMember {
                 MainRoleView(user: member, today: store.today)
@@ -24,7 +42,7 @@ struct RootView: View {
         #endif
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
-        .task {
+        .task(id: store.session.deviceID) {
             store.refreshDate()
             do {
                 try await store.reconcileAccountMembershipLock()

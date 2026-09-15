@@ -1,0 +1,75 @@
+{
+  "base_commit": "660332e5087d55d55ed2808525008cc0215d093e",
+  "branch": "fm/earned-it-production-membership-recovery",
+  "platform": {
+    "xcode": "26.6 (17F113)",
+    "runtime": "iOS 26.5",
+    "unit_ui_simulator": "6DB73059-0E13-4792-A558-3C7CC251AD09",
+    "release_simulator": "686435E5-84A0-471C-92C5-8F45A62F1C08"
+  },
+  "baseline": {
+    "passed_tests": 1,
+    "failed_tests": 4,
+    "total_tests": 5,
+    "bundle": ".artifacts/membership-recovery/baseline-behavior.xcresult",
+    "uninterrupted_system_acceptance_control": "passed"
+  },
+  "unit": {
+    "passed_tests": 157,
+    "failed_tests": 0,
+    "new_regressions": 18,
+    "suites": {
+      "AllowanceTests": 9,
+      "BusinessRulesTests": 33,
+      "InvitationTests": 63,
+      "MembershipRecoveryTests": 18,
+      "NativeInvitationContractTests": 4,
+      "OnboardingTests": 5,
+      "SharingTests": 25
+    },
+    "bundle": ".artifacts/membership-recovery/final-unit.xcresult"
+  },
+  "release": {
+    "ios_archive": "passed, unsigned",
+    "simulator_build": "passed, unsigned",
+    "simulator_launch_and_relaunch": "passed, Welcome without seeded family",
+    "archive": ".artifacts/membership-release/EarnedIt-membership-candidate.xcarchive",
+    "bundle_id": "com.jlm429.EarnedIt",
+    "version": "1.0",
+    "build": "1",
+    "production_build_number_assigned": false,
+    "signed_export": "not prepared: no local development team/signing setup; remote release workflow includes unauthorized upload",
+    "last_upload_workflow_number": 5,
+    "last_captain_reported_build": "5.1",
+    "last_upload_run": "https://github.com/jlm429/earned-it/actions/runs/34999689543"
+  },
+  "proof_boundaries": {
+    "bug_1_production_device_verified": false,
+    "bug_2_production_device_verified": false,
+    "cloudkit_server_exercised": false,
+    "production_state_mutated": false,
+    "entitlement_crash_reopened": false,
+    "exact_bug_1_device_attribution": "unproven; uninterrupted local control passed; continuation-envelope-loss failures reproduced"
+  },
+  "source_sha256": {
+    "EarnedIt/Services/HouseholdStore.swift": "aee4095f0b3e8c8a260c52bb24549cf2a616999de9f6756899ecb7427c1b3588",
+    "EarnedIt/Services/CloudKitHouseholdTransport.swift": "7d56a89a3421b708d257026c73196b3c07aa4be4136948e0b1e9351c47174aaa",
+    "EarnedIt/Views/RootView.swift": "bfc13055ca695de7c0d86283c9fccdf62e068a85ad7685ee9099bb13ceba8251"
+  },
+  "ui": {
+    "passed_tests": 2,
+    "failed_tests": 0,
+    "bundle": ".artifacts/membership-recovery/final-ui.xcresult",
+    "flows": {
+      "testAlternatingChoreShowsOnlyTheCurrentChildTurn": {
+        "passed": true,
+        "duration_seconds": 85.799
+      },
+      "testPartialSetupDuplicatePreventionAndConfirmedResetAtLargeType": {
+        "passed": true,
+        "duration_seconds": 320.576
+      }
+    },
+    "signed_cloud_recovery_exercised": false
+  }
+}

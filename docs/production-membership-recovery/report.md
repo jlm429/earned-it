@@ -1,0 +1,150 @@
+# Production membership continuation and recovery evidence
+
+Date: 2026-09-15. Base: `660332e5087d55d55ed2808525008cc0215d093e`, current `origin/main`, including merged PR 12. Branch: `fm/earned-it-production-membership-recovery`. Disposable worktree: `/Users/jlm429/.treehouse/earned-it-0033f9/2/earned-it`. Physical and Git top-level paths were verified before branching. Fetch and fast-forward confirmed the branch starts at current main. `no-mistakes doctor` passed and AXI confirmed initialized repository custody. No pipeline run, push, PR, merge, upload, provisioning update, or Production CloudKit operation was performed.
+
+## Findings and proof boundaries
+
+Two independent application defects are fixed: provisional continuation loses or fails to reuse its account lock attempt, and fresh launch skips membership recovery when local connection data is missing. They share the store boundary and the distinction between local absence and CloudKit membership, but are separate control-flow defects. There is no evidence for a shared CloudKit, schema, entitlement, or native one-time-link cause. The captain has verified the earlier one-time-link entitlement fix on real devices; that defect is preserved and was not reopened.
+
+**Bug 1's exact Build 5.1 device cause remains unproven.** The closest uninterrupted application control reproduced the captain's steps through code rejection, the system-acceptance entry point, and exact-child redemption, and passed before changes. The measured failure requires absent continuation state: an accepted import without its pending envelope, or accepted access and a surviving provisional lock without any local session. Both fail with the reported account-membership conflict before changes and succeed with the focused continuation/recovery fixes. Attribution of the exact device failure to this state loss is an inference that requires the next Production retest or a non-secret state-transition receipt. This report does not substitute a failing variant for a faithful signed-device reproduction.
+
+**Bug 2 has a reproduced application cause:** fresh launch returns from reconciliation without reading the surviving CloudKit lock because it requires a local location and participant first. The fresh journal consequently stays empty and normal first-run family creation appears. Invoking existing manual owner recovery was already a proven path. Startup now invokes locked-membership recovery directly and gates onboarding while that check runs or fails.
+
+Signed two-account Production reproduction was unavailable in this worktree. Application tests run the actual store APIs with separate account-facing adapters and independent journals over a transport double. The system-acceptance test executes `acceptSystemInvitation`, the same application method reached by metadata acceptance, but its closure accepts a synthetic share through the double. It does not execute `CKContainer.accept`, scene delivery on a signed iPhone, server zone propagation, participant identity conversion, or Production record operations. The double's invitation URLs are synthetic and never opened on a network. No real family information, credentials, provisioning files, or actual stores were read or modified.
+
+## Bug 1 causal audit
+
+| Item | Evidence |
+| --- | --- |
+| Captain trigger and symptom | A creates an exact-child invitation. B enters code before Apple acceptance and gets the expected code-not-found explanation. After native Apple acceptance, role-bound redemption reports that the account already belongs to a family member. |
+| Measured trigger | Accepted import survives without its pending envelope, or accepted share access/provisional membership survives complete local session loss. Code redemption attempts a fresh lock candidate. |
+| Masking condition | The uninterrupted system-acceptance path keeps `pendingInvitationAcceptance.accountLockAttemptID`; redemption bypasses acquisition and uses that attempt. Previous passing double tests mostly kept this envelope or recovered already committed claims. |
+| Earliest measured divergence | In `acquireAccountMembershipLock`, a new candidate UUID differs from the retained provisional lock's attempt. Same household is insufficient under the old check, so acquisition falls through to `accountMembershipConflict`. Once that is corrected, the old `beginPendingInvitationAcceptance` also rejects an already imported but unauthorized same-household session. |
+| Smallest counterfactual | Reuse the persisted attempt. If local state is completely absent, verify accepted access, one exact available invitation, and an unexpired same-household lease before reusing the server attempt. Permit a pending envelope to attach to an unauthorized import of that same location/account. Keep all existing role and claim checks. |
+| Relevant history | `b0b1a75` introduced private account locking and attempt equality. `64ab9a8` added generation-safe claims, provisional recovery, and owner recovery. Later changes retained the envelope-dependent fast path. This is independent of the PR 12 entitlement change. |
+| Deliberate disconfirmation | The uninterrupted code-before-acceptance/system-acceptance/code control passed before edits. A provisional lease from another household remains rejected. Concurrent same-account acceptance before Apple access remains rejected by the existing cleanup regression. Matching unexpired accepted access succeeds; expired unclaimed state refuses. No entitlement or participant role mutation changed. |
+| Device attribution limit | No measured device transition establishes which envelope, attempt, active binding, or zone state Build 5.1 had at rejection. A preserved matching pending attempt with an otherwise identical server state would disconfirm the envelope-loss explanation for that device. Do not delete or replace its lock to obtain a passing retest. |
+
+System acceptance acquires **provisional** membership, saves the pending acceptance, accepts transport access, identifies the exact invitation participant, and imports household facts with no selected member and no profile authority. It does not activate app membership. If an account already has a validated committed claim, the existing resume path can restore that active membership before accepting again; that restores earlier authority rather than granting authority from Apple acceptance.
+
+Redemption validates code digest, household, exact member/role, Apple participant attachment, revocation, current member activity, expiry, consumption, and write access. It atomically claims the invitation and account-generation facts, then activates the account lock with the exact invitation binding and attaches the exact profile. An active matching binding can continue; another binding or household still fails. The new provisional continuation check verifies already accepted access and a unique exact available invitation before adopting a missing local attempt. It grants no parent/child profile by itself.
+
+Existing failed-redemption cleanup is unchanged. It preserves pre-existing Apple access, defers retryable errors, uses the expected account and generation before destructive submissions, conditionally releases only the matching attempt, and attaches a valid same-account committed claim instead of removing it. New recovery performs no leave or lock release. Existing cleanup tests all pass, including concurrent claim protection and account-change races.
+
+## Bug 2 causal audit
+
+| Item | Evidence |
+| --- | --- |
+| Captain trigger and symptom | Active owner uses a valid Production family, uninstalls, reinstalls Build 5.1 with no local data, sees first-run onboarding, and cannot create another family because the private current-membership lock correctly survives. |
+| Measured trigger | Create/connect a valid household, then construct a store with a completely empty journal and new device session while retaining the server lock and household facts. |
+| Masking condition | Ordinary relaunch retains `session.location`, `cloudParticipantID`, and journal facts. Existing manual owner recovery explicitly reads the active lock and can recover an unambiguous owner. Neither exercises automatic fresh launch. |
+| Earliest measured divergence | `RootView` calls reconciliation, but its guard requires local location/participant and returns before account detection or lock lookup. `household == nil` routes to setup. |
+| Smallest counterfactual | Branch on an empty local session before that guard. Detect the iCloud account, read current membership, locate only its household zone, validate current source membership and binding, and commit fetched facts plus the reconstructed session. Display onboarding only after the lookup establishes no existing membership. |
+| Relevant history | Generation-safe owner and joined-member recovery arrived in `64ab9a8` and subsequent owner-recovery refinements. The Root launch guard continued to depend on local connection information. The private lock correctly enforces one household; it is recovery evidence, not the defect. |
+| Deliberate disconfirmation | Owner, joined parent, and joined child all failed fresh automatic recovery before changes. Existing manual owner recovery already passed. Active locks stay unchanged after recovery and after local reset. Revoked facts refuse even with deliberately retained transport visibility. Released locks do not restore visible old owner zones. Conflicting bindings, multiple legacy households/parents/profiles, ambiguous zone locations, and account switches refuse without authority. |
+| Device proof limit | The application bootstrap failure is reproduced. Signed Production lookup, zone availability, and reconstructed role on the actual reinstall remain unverified until the corresponding device retest succeeds. |
+
+Startup obtains the stable container-specific account identity through the existing `accountStatus`/`userRecordID` path. It reads private `current-membership`, then locates its household in the owner's private database or the invitee's shared database. Zone discovery now refuses multiple matching locations instead of choosing the first owner/name combination. Missing zones, malformed facts, unavailable accounts, or conflicts retain the lock and present reconnect/retry instead of normal creation.
+
+An active owner binding restores only the existing unambiguous owner parent identified by the established owner recovery rule. Invited parent profiles are excluded. Multiple older uninvited parents remain ambiguous and refuse; no arbitrary profile or role is selected. Joined parent/child bindings must match the current committed invitation generation, member, role, and account exactly. Current member activity is checked with the existing server validation clock. The journal is restored as uploaded source facts, with the new installation's own device identity and exact authorized member selected. No duplicate family/member facts are created.
+
+A provisional lock with committed facts can finish activation of those exact facts. A provisional accepted share without committed membership restores only the pending exact invitation and original lease, leaving profiles empty until code/QR redemption. Released and revoked state cannot restore earlier authority. Legacy journals without locks are considered only after inspecting all accessible authority candidates; recovery requires a single household and exact profile. Multiple profiles are refused rather than presenting role choice. A lock race or account switch revalidates before activation or local attachment. Local absence itself never releases or deletes membership.
+
+## State transitions changed
+
+| State | Previous behavior | Candidate behavior |
+| --- | --- | --- |
+| Provisional, matching persisted attempt, accepted import without envelope | Generate another attempt, conflict; envelope creation also rejects imported session | Reuse same attempt, attach envelope only to same unauthorized account/location, exact claim commits active membership |
+| Provisional, accepted exact share, local attempt missing | Treat surviving same-household lease as conflict | Verify unique exact available invitation and unexpired lease, continue original attempt; no authority until claim |
+| Active owner, all local state absent | Skip lookup and show normal creation | Lookup locked private zone, validate binding and unambiguous owner, restore exact parent and uploaded journal; active lock retained |
+| Active joined parent/child, all local state absent | Skip lookup; manual owner path cannot restore joined member | Lookup locked shared zone, verify exact current invitation generation/member/role/account, attach only that membership |
+| Provisional accepted share, all local state absent | Skip lookup and fail later acquisition | Restore pending exact invitation/original lease, import without authority, finish through ordinary exact claim |
+| Recovery unavailable, revoked, malformed, ambiguous, or conflicting | Local absence could still display creation | Keep membership untouched, refuse authority and creation until a valid lookup/reconnect succeeds |
+| No membership, successful lookup | Normal first-run creation | Normal first-run creation after checking; unsigned Simulator without transport retains normal setup |
+
+The two fixes do not redesign onboarding or identity. They use the existing account lock, fact journal, native sharing transport, owner recovery rule, and invitation claim binding. No backend, dependency, schema migration, parent/child access expansion, role chooser, or unlink-on-uninstall behavior was added.
+
+## Native contracts checked
+
+Primary Apple documentation and installed Xcode 26.6 (17F113), iPhoneOS/iPhoneSimulator 26.5 SDK headers were inspected:
+
+- [CKShare.Metadata](https://developer.apple.com/documentation/cloudkit/ckshare/metadata) describes cold/warm scene or application metadata delivery and accepting pending participation. Its role/status are CloudKit transport properties, not Earned It profile authority. Installed `CloudKit.framework/Headers/CKShareMetadata.h` describes the same callbacks and status contract.
+- [CKAcceptSharesOperation](https://developer.apple.com/documentation/cloudkit/ckacceptsharesoperation) confirms participation and reports per-share errors; completion can precede residual server tasks. Installed `Headers/CKAcceptSharesOperation.h` documents this boundary. Acceptance completion is not proof that every household read/discovery has settled immediately. The candidate does not claim to reproduce that server timing.
+- [CKShare.Participant](https://developer.apple.com/documentation/cloudkit/ckshare/participant) describes accepted records in the participant's shared database, accessible while acceptance remains valid.
+- [allRecordZones()](https://developer.apple.com/documentation/cloudkit/ckdatabase/allrecordzones()) fetches zones in the specified database. [CKRecordZone.ID](https://developer.apple.com/documentation/cloudkit/ckrecordzone/id) identifies a zone by both name and owner. Recovery retains the exact private/shared location and refuses multiple name matches.
+
+Apple Markdown endpoints were retrieved directly when the web reader rejected `text/markdown`. No live container/database request was made. The existing native contract suite executes factory/permission objects and parses the actual entitlement plist; those four passing tests do not prove acceptance, Production participant mapping, private lock persistence, or server membership enforcement.
+
+## Validation
+
+Before implementation, five executable regressions ran against the current remote-tip production code: **one passed, four failed**, with 18 assertion/error failures. The passing test was the uninterrupted system acceptance control. The accepted-import variant threw `accountMembershipConflict`; fresh owner and joined-member reconciliation left the journal/session empty; fresh provisional recovery remained empty and later redemption conflicted. Initial regression compilation issues were corrected before this meaningful behavioral baseline. Firstmate's handled instruction 001 authorized the routine correction and continued autonomous compilation fixes; instruction 002 reiterated continuation.
+
+Final unit run: **157 passed, zero failed**, including all 139 existing tests and **18 new MembershipRecoveryTests**. Existing suites: 63 invitation, 25 sharing, 5 onboarding, 4 native contract, 33 business/migration rules, and 9 allowance tests. The new regressions cover:
+
+1. Code-before-Apple rejection, provisional system acceptance with no authority, exact child claim, sibling/parent denial.
+2. Accepted import without pending envelope continuing its persisted lease.
+3. Active owner plus empty journal recovering exact parent, source chores, and no duplicate zone.
+4. Joined parent and child plus empty journals recovering only their bound profiles.
+5. Provisional system acceptance plus empty journal restoring no authority before QR claim.
+6. Different-household rejection while the same-household provisional claim can continue.
+7. Revocation refusing with missing and deliberately retained zone access, without deleting the surviving lock.
+8. Released lock refusing to restore a still-visible owner zone.
+9. Multiple legacy households and older parent profiles refusing without a guess.
+10. Single legacy profile recovery and multiple-profile refusal.
+11. Retryable recovery failure retaining membership, blocking creation, and reconnecting after retry.
+12. Empty account completing lookup before normal first-run creation.
+13. Confirmed task-local reset retaining CloudKit membership, restoring the journal, and surviving a new repository/session launch.
+14. Conflicting bindings and multiple native zone locations refusing safely.
+15. Account change during recovery granting no authority and mutating no other account.
+16. Accepted code redemption after complete local loss continuing the original provisional lease directly.
+17. Interrupted provisional state with committed exact facts completing active recovery.
+18. Expired unclaimed provisional state refusing restoration/authority without changing the lock.
+
+The existing failed-redemption, conditional release, same-account cleanup, revocation/generation replacement, cross-household concurrency, legacy grants, migration, and clock-skew suites all passed without changing their assertions. The double's membership-location lookup now uses the native adapter's ambiguity classifier; it does not model server zone propagation and remains explicitly non-native evidence.
+
+Exact local bundles and logs are under `.artifacts/membership-recovery/`: `baseline-behavior.xcresult`, `final-unit.xcresult`, and `final-ui.xcresult`. `validation-summary.json` beside this report preserves counts, platform, candidate identity, and proof boundaries. The task-isolated iPhone 17 Simulator is `6DB73059-0E13-4792-A558-3C7CC251AD09`.
+
+```sh
+xcodebuild test -project EarnedIt.xcodeproj -scheme EarnedIt \
+  -destination 'platform=iOS Simulator,id=6DB73059-0E13-4792-A558-3C7CC251AD09' \
+  -derivedDataPath .artifacts/membership-recovery/DerivedData \
+  -resultBundlePath .artifacts/membership-recovery/final-unit.xcresult \
+  -only-testing:EarnedItTests -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
+```
+
+Final UI run: **two passed, zero failed**, 406.375 seconds total. `testAlternatingChoreShowsOnlyTheCurrentChildTurn` passed in 85.799 seconds; `testPartialSetupDuplicatePreventionAndConfirmedResetAtLargeType` passed in 320.576 seconds, including the sufficient-element-description accessibility audit. Two focused existing flows were selected, within the three-flow limit: largest Dynamic Type first-run/partial setup/relaunch/duplicate prevention/confirmed local reset; and parent/child alternating chore visibility. UI fixtures use only the separate debug UI-test store. Unsigned Simulator disables CloudKit, so these flows do not prove the new signed-cloud reconnect UI or exact recovered membership on a physical device.
+
+## Release candidate and Production requirements
+
+The configured lane is `.github/workflows/testflight.yml`. Its build number is `${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}`. Read-only `gh-axi run list/view` confirmed the latest successful upload is workflow run number **5**, source `660332e`, run [34999689543](https://github.com/jlm429/earned-it/actions/runs/34999689543), consistent with the captain's **Build 5.1**. No workflow log, signing material, secret value, or App Store credential was read. A future distribution number is assigned by an authorized lane invocation, not invented by this worker.
+
+Preparation completed the lane's Release compilation/archive stage with signing disabled: generic iOS archive passed, Release Simulator build passed, and an independently created Release Simulator (`686435E5-84A0-471C-92C5-8F45A62F1C08`) launched and relaunched successfully to Welcome without a seeded family. Screenshots were inspected at `.artifacts/membership-release-simulator/first-run.png` and `relaunch.png`.
+
+Concrete candidate artifact: `.artifacts/membership-release/EarnedIt-membership-candidate.xcarchive`. Identity: `com.jlm429.EarnedIt`, version **1.0**, source build **1**, minimum iOS **18.0**, `CKSharingSupported == true`. This is an **unsigned preparation archive**, not an exportable TestFlight IPA or a newly numbered distribution candidate. The validation summary records source hashes so it can be tied to the implementation source independently of the unchanged source build number.
+
+```sh
+xcodebuild archive -project EarnedIt.xcodeproj -scheme EarnedIt \
+  -configuration Release -destination 'generic/platform=iOS' \
+  -derivedDataPath .artifacts/membership-release/DerivedData \
+  -archivePath .artifacts/membership-release/EarnedIt-membership-candidate.xcarchive \
+  CODE_SIGNING_ALLOWED=NO
+```
+
+**Signing/export preparation blocker:** Xcode's Release settings have no development team configured in this worktree, and `codesign -dvv` confirms the archive app is unsigned. The established remote lane obtains automatic signing authority from repository secret variables and its team input, then archives, exports, and uploads in one invocation. Upload is not authorized here, so it was not dispatched. No signed archive/export or final signed entitlement verification is claimed. Existing variable names are `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY`, and the lane's `team_id` input. Only non-secret capability/build values were inspected. Retain the already verified `InProcessOneTimeLinks` entitlement and verify Production iCloud environment in the final signed app through the authorized release process.
+
+No Production schema or entitlement changes are required. The same existing CloudKit container, Release Production environment, zone prefix, household fact format, account lock format, and record IDs are used. Existing deployed types must remain available: `HouseholdFact` and `AccountMembershipLock` with `payload` Bytes and `formatVersion` Int64, existing `InvitationValidationTime` and `AccountMembershipValidationTime` server-time records, and system `CKShare`. This lists existing dependencies, not new schema work. Deployed schema was captain-supplied context, not inspected or provisioned here. No actual store, CloudKit lock, zone, share, invitation, or Production history was deleted or replaced during this investigation.
+
+## Shortest next-build two-device Production retest
+
+1. Use the existing Production owner account A whose Build 5.1 reinstall already has no local state. Install the authorized signed candidate without creating another family or deleting its lock. Confirm it automatically reconnects to the same household, exact original parent, children/history, and parent management. Relaunch. This reuses the actual Bug 2 failure state and avoids another uninstall just to reproduce it.
+2. Preserve B's existing accepted share and unresolved membership state. If the current bound child invitation remains available and unexpired, install the same candidate and redeem that exact code/QR. Confirm exact child selection, no sibling or parent selection/management, and the same membership after relaunch. Do not select a role or replace/delete a lock. If the invitation expired, use only captain-authorized existing cleanup and a fresh invitation for the same child in the same household.
+3. To retest Bug 1's **exact original trigger**, use a captain-approved eligible account state and fresh exact-child invitation: code before Apple acceptance gives the expected explanation; native Send Invite acceptance grants no app profile; the same bound code then succeeds. If the current B state cannot safely represent an eligible pre-acceptance account, do not remove membership to force eligibility. Record that only continuation was tested and use a separately authorized test state for the exact original sequence.
+4. Mark one invited child's chore, confirm owner refresh sees it, and relaunch both devices. This checks retained history, sync, exact role, and persistence. A joined parent or child with already missing local data should also reconnect to only its exact current member without requiring the old code. Do not uninstall/reset a healthy Production installation merely for extra coverage without captain authorization.
+
+For any continued Bug 1 conflict, obtain only a non-secret transition receipt: whether the local pending envelope/location is present, provisional/active/released lock state, same-versus-different household, saved-versus-returned attempt match, matching-versus-conflicting claim binding, and accepted-zone visibility. No family names, actual identifiers, invitation codes/URLs, payloads, credentials, or complete records are needed. A matching preserved envelope still failing would disconfirm the measured continuation explanation and require further focused diagnosis.
+
+Neither bug is device-verified until its corresponding real-device Production retest succeeds. No native/server proof is inferred from passing doubles or unsigned artifacts. Implementation delivery stops at the feature-branch commit for Firstmate's separate no-mistakes invocation, with merge authority off.
+
+## Verification limits retained
+
+No lint/test failure remains in the completed unit run. Existing compiler warnings remain tool warnings, not failed checks: CloudKit's earlier `CKRecord(recordType:zoneID:)` initializer is deprecated, an older test coerces an optional time interval to `Any`, and AppIntents metadata extraction reports no framework dependency. They are unrelated to these state transitions and were not changed. `git diff --check` and the changed-file no-em-dash check passed. The configured no-mistakes review/test/lint/CI pipeline remains Firstmate's next delivery phase, not a completed claim in this implementation receipt.
