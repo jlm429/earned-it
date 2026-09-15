@@ -62,7 +62,7 @@
   },
   "source_sha256": {
     "EarnedIt/Services/HouseholdStore.swift": "aee4095f0b3e8c8a260c52bb24549cf2a616999de9f6756899ecb7427c1b3588",
-    "EarnedIt/Services/CloudKitHouseholdTransport.swift": "7d56a89a3421b708d257026c73196b3c07aa4be4136948e0b1e9351c47174aaa",
+    "EarnedIt/Services/CloudKitHouseholdTransport.swift": "09db586b16c13ceac4acd776ebc2800530f49f0eeff3419c67ae29d1fcd594a8",
     "EarnedIt/Views/RootView.swift": "bfc13055ca695de7c0d86283c9fccdf62e068a85ad7685ee9099bb13ceba8251"
   },
   "ui": {
@@ -100,7 +100,7 @@
       "actual_native_or_swiftui_scheduler_executed": false
     },
     "diagnostic_runtime_changes": false,
-    "production_source_changed_after_release_checks": false,
+    "production_source_changed_after_release_checks": true,
     "alternate_interpretations": [
       "different-household active membership",
       "same-household different committed claim/code/member/role/generation",

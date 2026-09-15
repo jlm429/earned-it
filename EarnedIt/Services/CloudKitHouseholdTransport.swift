@@ -328,7 +328,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         let database = database(for: location)
-        let record = CKRecord(recordType: "InvitationValidationTime", zoneID: zoneID(for: location))
+        let recordID = CKRecord.ID(zoneID: zoneID(for: location))
+        let record = CKRecord(recordType: "InvitationValidationTime", recordID: recordID)
         let results = try await database.modifyRecords(saving: [record], deleting: [],
                                                        savePolicy: .ifServerRecordUnchanged, atomically: true)
         guard let result = results.saveResults[record.recordID],

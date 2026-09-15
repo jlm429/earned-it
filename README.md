@@ -10,7 +10,7 @@ A chore can belong to all children, one child, or selected children who alternat
 
 ## Create or join a family
 
-First run offers two role-aware paths. Choose **Create a New Family** when you are the first parent, enter the family and parent names, then add children. The creator is the approved parent for that installation. Children can exist before they have a device. Configure the seven weekday lists during setup or later. Saved setup survives closing the app.
+After the app confirms that the current iCloud account has no existing Earned It membership to recover, first run offers two role-aware paths. Choose **Create a New Family** when you are the first parent, enter the family and parent names, then add children. The creator is the approved parent for that installation. Children can exist before they have a device. Configure the seven weekday lists during setup or later. Saved setup survives closing the app.
 
 Choose **Join an Existing Family** when an approved parent has created an invitation. Enter its ten-character code and Apple invitation link, scan its QR code, or open the private Apple invitation first and then enter the code. The app imports the existing household instead of creating another local family.
 
