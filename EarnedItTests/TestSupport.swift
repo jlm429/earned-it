@@ -80,6 +80,7 @@ final class TestTransport: HouseholdTransport {
     var leaveError: Error?
     var acceptErrorAfterHook: Error?
     var invitationValidationTimeFailures = 0
+    var extendedShareAccess: Set<String> = ["InProcessOneTimeLinks"]
     private(set) var leaveAttempts = 0
     private(set) var leaveMutationEnqueues = 0
     private(set) var accountLockMutationEnqueues = 0
@@ -204,6 +205,9 @@ final class TestTransport: HouseholdTransport {
         if let acceptErrorAfterHook { throw acceptErrorAfterHook }
         if let participantID = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
             .first(where: { $0.name == "invitation" })?.value {
+            // An accepted one-time URL acts like the regular private share URL.
+            if zone.claimedInvitationAccounts[participantID] != nil,
+               zone.owner == account || zone.participants.contains(account) { return }
             guard zone.pendingInvitationParticipants.contains(participantID) else { throw HouseholdError.invitationConsumed }
             server.zones[url.lastPathComponent]?.pendingInvitationParticipants.remove(participantID)
             server.zones[url.lastPathComponent]?.claimedInvitationAccounts[participantID] = account
@@ -259,6 +263,9 @@ final class TestTransport: HouseholdTransport {
                                 role: UserRole) async throws -> CloudInvitationAccess {
         guard let zone = server.zones[location.zoneName],
               zone.owner == account else { throw HouseholdError.invitationOwnerRequired }
+        // Native CloudKit traps at addParticipant when this entitlement value is absent.
+        // The double reports the rejected operation without terminating the test host.
+        guard extendedShareAccess.contains("InProcessOneTimeLinks") else { throw HouseholdError.invitation }
         let participantID = UUID().uuidString
         server.zones[location.zoneName]?.pendingInvitationParticipants.insert(participantID)
         let url = URL(string: "https://test.invalid/\(location.zoneName)?invitation=\(participantID)")!
