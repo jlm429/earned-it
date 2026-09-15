@@ -1640,6 +1640,37 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertThrowsError(try joining.saveMember(name: "Unauthorized", role: .parent, avatar: .sun))
     }
 
+    func testCleanupDuringNativeAcceptanceDoesNotReproduceMembershipConflict() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "child")
+        let joining = try fresh(transport, clock: family.clock)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        var cleanupError: Error?
+        var observedAcceptingAccess = false
+        transport.beforeAccept = {
+            observedAcceptingAccess = joining.session.pendingInvitationAcceptance?.phase == .acceptingAccess
+                && server.accountMembershipLocks["child"]?.state == .provisional
+            do { _ = try await joining.retryScheduledInvitationCleanup() }
+            catch { cleanupError = error }
+        }
+        await XCTAssertThrowsErrorAsync(try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }, expected: .invitationNotFound)
+        XCTAssertTrue(observedAcceptingAccess)
+        XCTAssertNil(cleanupError)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .released)
+        XCTAssertTrue(server.zones[location.zoneName]!.participants.contains("child"))
+        XCTAssertNil(joining.selectedMember)
+        transport.beforeAccept = nil
+        try await joining.redeemInvitation(invitation.code)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
+    }
+
     func testAcceptedImportWithoutPendingEnvelopeContinuesItsPersistedAttempt() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

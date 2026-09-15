@@ -15,19 +15,24 @@
     "uninterrupted_system_acceptance_control": "passed"
   },
   "unit": {
-    "passed_tests": 157,
+    "passed_tests": 158,
     "failed_tests": 0,
-    "new_regressions": 18,
+    "new_regressions": 19,
     "suites": {
       "AllowanceTests": 9,
       "BusinessRulesTests": 33,
       "InvitationTests": 63,
-      "MembershipRecoveryTests": 18,
+      "MembershipRecoveryTests": 19,
       "NativeInvitationContractTests": 4,
       "OnboardingTests": 5,
       "SharingTests": 25
     },
-    "bundle": ".artifacts/membership-recovery/final-unit.xcresult"
+    "bundle": ".artifacts/membership-recovery/causal-followup-unit.xcresult",
+    "previous_implementation_run": {
+      "passed_tests": 157,
+      "failed_tests": 0,
+      "bundle": ".artifacts/membership-recovery/final-unit.xcresult"
+    }
   },
   "release": {
     "ios_archive": "passed, unsigned",
@@ -49,7 +54,11 @@
     "cloudkit_server_exercised": false,
     "production_state_mutated": false,
     "entitlement_crash_reopened": false,
-    "exact_bug_1_device_attribution": "unproven; uninterrupted local control passed; continuation-envelope-loss failures reproduced"
+    "exact_bug_1_device_attribution": "no concrete bridge established; uninterrupted pre-fix control passes; legacy no-envelope API has no current production UI caller; B local-state loss unreported",
+    "bug_1_status": "unconfirmed candidate fix; exact Production cause unknown",
+    "bug_2_status": "application bootstrap cause reproduced and fixed; Production retest pending",
+    "both_production_defects_resolved": false,
+    "reported_bugs_shared_cause": "unknown because exact Bug 1 cause is unconfirmed; demonstrated application defects are independent"
   },
   "source_sha256": {
     "EarnedIt/Services/HouseholdStore.swift": "aee4095f0b3e8c8a260c52bb24549cf2a616999de9f6756899ecb7427c1b3588",
@@ -71,5 +80,34 @@
       }
     },
     "signed_cloud_recovery_exercised": false
+  },
+  "implementation_commit": "50f176cf5a836b03a3b1af41780bfbb4639aa1f4",
+  "causal_followup": {
+    "instructions": [
+      "003",
+      "004"
+    ],
+    "native_callback_and_bootstrap_audited": true,
+    "concrete_captain_sequence_to_variant_bridge_established": false,
+    "cleanup_while_acceptance_awaits": {
+      "test": "testCleanupDuringNativeAcceptanceDoesNotReproduceMembershipConflict",
+      "measured_after_implementation": true,
+      "pending_cleared": true,
+      "lock_state": "released",
+      "acceptance_error": "invitationNotFound",
+      "subsequent_exact_child_redemption": "passed",
+      "reported_membership_conflict_reproduced": false,
+      "actual_native_or_swiftui_scheduler_executed": false
+    },
+    "diagnostic_runtime_changes": false,
+    "production_source_changed_after_release_checks": false,
+    "alternate_interpretations": [
+      "different-household active membership",
+      "same-household different committed claim/code/member/role/generation",
+      "owner or legacy binding versus new invitation binding",
+      "revoked or inconsistent source/lock binding",
+      "conditional cleanup release failure"
+    ],
+    "minimal_receipt": "phase, role/status, existence and equality booleans, lock/binding enums, native error code; no identifiers, codes/digests, URLs or payloads"
   }
 }
