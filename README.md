@@ -1,73 +1,56 @@
+<p align="center">
+  <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
+</p>
+
 # Earned It
 
-<img src="EarnedIt/Assets.xcassets/AppIcon.appiconset/AppIcon.png" width="128" alt="Earned It app icon">
-
-**A simple shared chore app for families.**
-
-Earned It gives parents and children one clear place to see what needs doing, mark work complete, and follow weekly progress together.
+A simple shared chore app for families.
 
 **Free. No ads. No tracking.**
 
+Earned It keeps everyday responsibilities clear. Families can organize chores, let children mark their own work, and celebrate progress together in one simple app.
+
 ## What it does
 
-- Shares family chore lists across invited iPhones.
-- Gives parents and children role-appropriate views and controls.
-- Supports repeating weekday chores and chores that are available only when needed.
-- Assigns chores to every child, one child, or a group of children who alternate turns.
-- Lets children mark their own work while parents can review and correct family history.
-- Shows weekly progress, streaks, and completed or missed work.
-- Optionally tracks whether a weekly allowance was earned. Earned It does not move money or record payments.
-- Keeps working offline and synchronizes automatically through iCloud when a connection is available.
+- Shares family chore lists between parents and children.
+- Provides parent and child roles with appropriate controls.
+- Supports recurring weekday chores and as-needed chores.
+- Assigns chores to every child, a particular child, or alternating children.
+- Lets children mark their own work while parents manage the family.
+- Shows weekly progress and streaks.
+- Optionally tracks weekly allowance eligibility without moving money.
+- Shares through iCloud, synchronizes automatically, and works offline.
 
-## How it works
+## How families use it
 
-One parent creates a family, adds children, and sets up chores. The family owner can invite another parent or a particular child with a private, one-time iCloud invitation. Each invited person sees the profile and permissions chosen for them.
+A parent creates the family, adds children, and sets up chores. They can invite another parent or a child through iCloud, and each person sees the profile and controls intended for them.
 
-Changes are saved on the device first. When family sharing is enabled, Earned It synchronizes the family journal through the owner's private CloudKit zone and the invited family's shared CloudKit access.
-
-## Preview
-
-Current App Store screenshots are still being prepared. The repository includes the shipping app icon above. See the [release asset specification](docs/app-store/visual-assets.md) for the screenshot plan and known branding work.
+Children check their list and mark chores complete. Parents manage assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
 
 ## Privacy
 
-Earned It has no advertising, behavioral analytics, third-party tracking, or third-party telemetry SDKs. Family names, member names, chore details, progress, invitations, and optional allowance settings are stored locally and, when sharing is enabled, in private/shared iCloud storage for the invited family.
+**Free. No ads. No tracking.**
 
-The developer does not operate a separate server for family data. Apple may process iCloud data and may provide platform diagnostics under Apple's own settings and policies. Earned It does not use that information to track people across apps or websites.
+Family data is stored locally on each device. When sharing is enabled, it is synchronized through Apple's iCloud and CloudKit infrastructure. Earned It has no advertising, behavioral analytics, third-party tracking, or third-party telemetry SDKs. The developer does not operate a separate server for family data.
 
-Read the full [privacy policy](docs/app-store/privacy-policy.md) and [privacy implementation audit](docs/app-store/privacy-audit.md).
+Read the full [privacy policy](docs/app-store/privacy-policy.md) and [privacy audit](docs/app-store/privacy-audit.md).
 
 ## Requirements
 
 - iPhone running iOS 18 or later
-- An iCloud account and network access to share a family across devices
-- Camera access only when scanning an invitation QR code. Invitation codes and links can also be entered without camera access.
+- An iCloud account and network connection for sharing between devices
+- Optional camera access for scanning invitation QR codes
 
-Earned It can keep an unshared family locally on one iPhone. iCloud is required for invitations, recovery, and synchronization between family devices.
+A family can also use Earned It locally on one iPhone without enabling sharing.
 
 ## Development
 
-Open `EarnedIt.xcodeproj` in Xcode 26.6 or later. To run the deterministic unit and service suite without signing:
-
-```sh
-xcodebuild test \
-  -project EarnedIt.xcodeproj \
-  -scheme EarnedItCI \
-  -destination 'platform=iOS Simulator,id=<simulator-uuid>' \
-  -derivedDataPath .artifacts/DerivedData \
-  -parallel-testing-enabled NO \
-  CODE_SIGNING_ALLOWED=NO
-```
-
-Simulator builds do not establish live iCloud sharing behavior. Signed two-device testing with separate iCloud accounts remains part of release validation.
+Open `EarnedIt.xcodeproj` in Xcode 26.6 or later. Use the `EarnedItCI` scheme for Simulator tests. Live iCloud sharing requires signed devices and separate iCloud accounts.
 
 ## Technical documentation
 
-- [Shared household architecture and product invariants](docs/shared-household-architecture.md)
-- [Technical behavior overview](docs/technical-overview.md)
+- [Technical overview](docs/technical-overview.md)
+- [Shared household architecture and product rules](docs/shared-household-architecture.md)
 - [App Store release readiness](docs/app-store/release-readiness.md)
-- [App Store metadata draft](docs/app-store/metadata.md)
-- [Quotes and attribution review](docs/app-store/quotes-and-attribution.md)
-- [Agent guidance](AGENTS.md)
 
 The source is currently published without an open-source license. Public visibility does not grant permission to reuse, modify, or redistribute it.
