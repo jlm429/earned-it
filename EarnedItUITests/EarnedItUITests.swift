@@ -124,6 +124,24 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(screen("parent-dashboard").exists)
     }
 
+    func testPrivacyAndSupportLinksRemainAvailableFromFirstRunThroughParentUse() {
+        let setupPrivacy = screen("privacy-policy-link")
+        let setupSupport = screen("support-link")
+        reveal(setupPrivacy)
+        XCTAssertTrue(setupPrivacy.isHittable)
+        XCTAssertTrue(setupSupport.exists)
+        keepScreenshot("release-links-first-run")
+
+        createFamily()
+        addChild("Hanna")
+        tap("finish-setup")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        tap("about-menu")
+        XCTAssertTrue(app.buttons["Privacy Policy"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Support"].exists)
+        keepScreenshot("release-links-parent-menu")
+    }
+
     func testChoreAssignmentDatesAfterMembershipChanges() throws {
         createFamily()
         addChild("Hanna")

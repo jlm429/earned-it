@@ -67,7 +67,7 @@ No demo account is required because the app does not operate its own account ser
 
 - Enter the rights holder's current legal name and year in App Store Connect. No legal entity is inferred in this repository.
 - Confirm commercial rights for the app icon and every screenshot overlay or font not supplied by Apple.
-- The daily thought text in the app is original, unattributed product microcopy. No testimonial or third-party quotation is used after the release-readiness cleanup.
+- The daily thought uses unattributed product microcopy. See [quotes-and-attribution.md](quotes-and-attribution.md) for the content review.
 - App screenshots must use fictional family information.
 
 ## Required manual fields
