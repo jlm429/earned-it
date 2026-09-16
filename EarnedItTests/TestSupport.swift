@@ -74,6 +74,7 @@ final class TestTransport: HouseholdTransport {
     var fetchError: Error?
     var invitationLocationError: Error?
     var invitationAccessVisible = true
+    var acceptedParticipantIDTransforms = false
     private(set) var invitationLocationURLs: [URL] = []
     private(set) var acceptedURLs: [URL] = []
     var uploadedIDs: [UUID] = []
@@ -288,7 +289,8 @@ final class TestTransport: HouseholdTransport {
         }
     }
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
-        invitationAccessVisible && server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
+        invitationAccessVisible && !acceptedParticipantIDTransforms
+            && server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         if invitationValidationTimeFailures > 0 {

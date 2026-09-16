@@ -183,6 +183,7 @@ struct FamilyInvitation: Codable, Equatable, Identifiable {
     let expiresAt: Date
     let createdByMemberID: UUID
     let cloudShareParticipantID: String
+    let cloudShareURLDigest: String?
 }
 
 struct InvitationClaim: Codable, Equatable {

@@ -123,6 +123,10 @@ enum InvitationCode {
         return SHA256.hash(data: Data(normalized.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    static func shareURLDigest(_ url: URL) -> String {
+        SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     static func accountClaimID(householdID: UUID, participantID: String, generationID: UUID) -> UUID {
         let digest = SHA256.hash(
             data: Data("\(householdID.uuidString)/\(participantID)/\(generationID.uuidString)".utf8)

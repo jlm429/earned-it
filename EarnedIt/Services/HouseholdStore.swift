@@ -392,7 +392,8 @@ final class HouseholdStore {
                                           codeDigest: InvitationCode.digest(code)!, createdAt: now,
                                           expiresAt: now.addingTimeInterval(InvitationCode.lifetime),
                                           createdByMemberID: parent.id,
-                                          cloudShareParticipantID: access.participantID)
+                                          cloudShareParticipantID: access.participantID,
+                                          cloudShareURLDigest: InvitationCode.shareURLDigest(access.url))
         do {
             var bodies: [HouseholdFactBody] = []
             if let issuedMember { bodies.append(.member(issuedMember)) }
@@ -864,9 +865,18 @@ final class HouseholdStore {
             recordJoinRefusal(.revoked, stage: .exactInvitation, error: .invitationRevoked)
             throw HouseholdError.invitationRevoked
         }
-        guard try await transport.hasInvitationAccess(
-            participantID: invitation.cloudShareParticipantID, in: location
-        ) else {
+        let hasExactAccess: Bool
+        if let package = session.pendingInvitationPackage,
+           package.codeDigest == invitation.codeDigest,
+           invitation.cloudShareURLDigest == InvitationCode.shareURLDigest(package.shareURL),
+           session.pendingInvitationAcceptance?.invitationID == invitation.id {
+            hasExactAccess = try await transport.hasAcceptedAccess(to: location)
+        } else {
+            hasExactAccess = try await transport.hasInvitationAccess(
+                participantID: invitation.cloudShareParticipantID, in: location
+            )
+        }
+        guard hasExactAccess else {
             recordJoinRefusal(.participantSlotMismatch, stage: .exactInvitation, error: .invitationNotFound)
             throw HouseholdError.invitationNotFound
         }
@@ -1374,6 +1384,19 @@ final class HouseholdStore {
     private func matchedPendingInvitation(in imported: HouseholdSnapshot,
                                           location: CloudLocation) async throws -> FamilyInvitation {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        if let package = session.pendingInvitationPackage {
+            let urlDigest = InvitationCode.shareURLDigest(package.shareURL)
+            let matches = imported.invitations.filter {
+                $0.codeDigest == package.codeDigest && $0.cloudShareURLDigest == urlDigest
+            }
+            guard matches.count == 1, let invitation = matches.first else {
+                let reason: JoinRefusalReason = matches.count > 1
+                    ? .participantSlotAmbiguous : .participantSlotMismatch
+                recordJoinRefusal(reason, stage: .exactInvitation, error: .invitationNotFound)
+                throw HouseholdError.invitationNotFound
+            }
+            return invitation
+        }
         var matches: [FamilyInvitation] = []
         for invitation in imported.invitations {
             if try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
@@ -2177,6 +2200,7 @@ final class HouseholdStore {
                 guard value.householdID == householdID, value.createdAt < value.expiresAt,
                       value.expiresAt.timeIntervalSince(value.createdAt) <= InvitationCode.lifetime,
                       value.codeDigest.count == 64, !value.cloudShareParticipantID.isEmpty,
+                      value.cloudShareURLDigest == nil || value.cloudShareURLDigest?.count == 64,
                       fact.authorMemberID == value.createdByMemberID else {
                     throw HouseholdError.malformedData
                 }

@@ -53,17 +53,22 @@ final class NativeInvitationContractTests: XCTestCase {
             .contains(invitation.invitation.cloudShareParticipantID))
     }
 
-    func testDoubleAcceptedOneTimeURLPreservesParticipantBindingOnRepeatAcceptance() async throws {
+    func testAcceptedOneTimeURLClaimsExactInvitationWhenParticipantIdentityTransforms() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         let child = TestTransport(server: server, account: "child")
-        let location = try await child.accept(url: invitation.shareURL)
-        _ = try await child.accept(url: invitation.shareURL)
+        child.acceptedParticipantIDTransforms = true
+        let recipient = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: child,
+                                           clock: { family.clock.now }, automaticSync: false)
+        try await recipient.redeemInvitation(invitation.qrPayload)
+        let location = try XCTUnwrap(recipient.session.location)
         let hasAccess = try await child.hasInvitationAccess(
             participantID: invitation.invitation.cloudShareParticipantID, in: location
         )
-        XCTAssertTrue(hasAccess)
+        XCTAssertFalse(hasAccess)
+        XCTAssertEqual(recipient.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(recipient.snapshot.invitationClaim(invitation.id)?.cloudParticipantID, "child")
         let other = TestTransport(server: server, account: "other")
         do {
             _ = try await other.accept(url: invitation.shareURL)
