@@ -112,6 +112,20 @@ final class EarnedItUITests: XCTestCase {
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
     }
 
+    func testLastJoinReceiptIsVisibleAfterReturningToOnboarding() {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-last-join-receipt"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        let receipt = screen("last-join-receipt")
+        reveal(receipt)
+        XCTAssertTrue(receipt.exists)
+        XCTAssertTrue(app.staticTexts["cloudKitPermission"].exists)
+        XCTAssertTrue(app.staticTexts["claim"].exists)
+        XCTAssertFalse(screen("child-home").exists)
+        XCTAssertFalse(screen("parent-dashboard").exists)
+    }
+
     func testChoreAssignmentDatesAfterMembershipChanges() throws {
         createFamily()
         addChild("Hanna")

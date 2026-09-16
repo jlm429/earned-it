@@ -32,6 +32,21 @@ struct EarnedItApp: App {
                     cloudParticipantID: "synthetic-ui-test-account", needsAppleVerification: true)
                 try repository.commit(facts: [], session: session)
             }
+            if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-last-join-receipt") {
+                var session = try repository.session()
+                session.lastJoinReceipt = LastJoinReceipt(
+                    nativeAcceptance: .yes,
+                    sharedZoneVisible: .yes,
+                    claim: .absent,
+                    lock: .released,
+                    exactMembership: .no,
+                    localAttach: .no,
+                    rootRoute: .onboarding,
+                    failureStage: .claim,
+                    failureCategory: .cloudKitPermission
+                )
+                try repository.commit(facts: [], session: session)
+            }
             #endif
             let transport: (any HouseholdTransport)?
             #if targetEnvironment(simulator)

@@ -55,6 +55,72 @@ struct PendingInvitationAcceptance: Codable, Equatable {
     var phase: PendingInvitationPhase
 }
 
+enum JoinDiagnosticState: String, Codable, Equatable {
+    case unknown
+    case no
+    case yes
+}
+
+enum JoinClaimDiagnosticState: String, Codable, Equatable {
+    case unknown
+    case absent
+    case committed
+}
+
+enum JoinLockDiagnosticState: String, Codable, Equatable {
+    case unknown
+    case absent
+    case provisional
+    case active
+    case released
+}
+
+enum JoinRootRoute: String, Codable, Equatable {
+    case unknown
+    case pendingInvitation
+    case membershipRecovery
+    case onboarding
+    case member
+    case profileSelection
+}
+
+enum JoinFailureStage: String, Codable, Equatable {
+    case package
+    case metadata
+    case nativeAcceptance
+    case sharedVisibility
+    case exactInvitation
+    case claim
+    case lock
+    case localAttach
+}
+
+enum JoinFailureCategory: String, Codable, Equatable {
+    case none
+    case cancelled
+    case cloudKitRetryable
+    case cloudKitVisibility
+    case cloudKitPermission
+    case cloudKitOther
+    case invitationRefused
+    case accountConflict
+    case wrongAccount
+    case readOnly
+    case other
+}
+
+struct LastJoinReceipt: Codable, Equatable {
+    var nativeAcceptance: JoinDiagnosticState = .unknown
+    var sharedZoneVisible: JoinDiagnosticState = .unknown
+    var claim: JoinClaimDiagnosticState = .unknown
+    var lock: JoinLockDiagnosticState = .unknown
+    var exactMembership: JoinDiagnosticState = .unknown
+    var localAttach: JoinDiagnosticState = .no
+    var rootRoute: JoinRootRoute = .unknown
+    var failureStage: JoinFailureStage?
+    var failureCategory: JoinFailureCategory = .none
+}
+
 struct DeviceSession: Codable, Equatable {
     var deviceID = UUID()
     var householdID: UUID?
@@ -70,4 +136,5 @@ struct DeviceSession: Codable, Equatable {
     var pendingInvitationPackage: PendingInvitationPackage?
     var accountMembershipLockAttemptID: UUID?
     var accountMembershipClaimBinding: String?
+    var lastJoinReceipt: LastJoinReceipt?
 }

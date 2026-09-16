@@ -68,6 +68,20 @@ struct SetupView: View {
                               systemImage: "lock.shield")
                             .foregroundStyle(.secondary)
                     }
+                    if let receipt = store.lastJoinReceipt {
+                        Section("Last join diagnostic") {
+                            diagnosticRow("Native acceptance", receipt.nativeAcceptance.rawValue)
+                            diagnosticRow("Shared zone visible", receipt.sharedZoneVisible.rawValue)
+                            diagnosticRow("Claim", receipt.claim.rawValue)
+                            diagnosticRow("Membership lock", receipt.lock.rawValue)
+                            diagnosticRow("Exact membership", receipt.exactMembership.rawValue)
+                            diagnosticRow("Local attach", receipt.localAttach.rawValue)
+                            diagnosticRow("Root route", receipt.rootRoute.rawValue)
+                            diagnosticRow("Failure stage", receipt.failureStage?.rawValue ?? "none")
+                            diagnosticRow("Failure category", receipt.failureCategory.rawValue)
+                        }
+                        .accessibilityIdentifier("last-join-receipt")
+                    }
                 } else {
                     Section("Your family") {
                         Text(store.household?.name ?? "Family").font(.title2.bold())
@@ -106,5 +120,9 @@ struct SetupView: View {
             )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
             .accessibilityIdentifier("setup-screen")
         }
+    }
+
+    private func diagnosticRow(_ label: String, _ value: String) -> some View {
+        LabeledContent(label, value: value)
     }
 }
