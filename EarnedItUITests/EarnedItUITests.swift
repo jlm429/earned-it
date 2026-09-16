@@ -333,10 +333,12 @@ final class EarnedItUITests: XCTestCase {
         tap("weekday-lists-link")
         tap("as-needed-chores")
         XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
+        keepScreenshot("as-needed-completed-today")
         relaunch()
         tap("weekday-lists-link")
         tap("as-needed-chores")
         XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
+        keepScreenshot("as-needed-completed-after-relaunch")
     }
 
     func testParentChoosesAlternatingNotNeededRotationBehavior() {
@@ -364,9 +366,23 @@ final class EarnedItUITests: XCTestCase {
         app.buttons["keep-turn"].firstMatch.tap()
         XCTAssertEqual(app.staticTexts["full-status-set-the-table"].label, "Not needed today")
         XCTAssertFalse(app.buttons["state-set-the-table-alek"].exists)
+        keepScreenshot("alternating-not-needed-today")
         tap("switch-user")
         tap("user-card-alek")
         XCTAssertFalse(app.staticTexts["Set the table"].waitForExistence(timeout: 2))
+    }
+
+    func testManageFamilyUsesPullToRefreshWithoutDedicatedRefreshButton() {
+        createFamily()
+        addChild("Hanna")
+        tap("finish-setup")
+        tap("family-management")
+
+        XCTAssertTrue(app.navigationBars["Manage Family"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Refresh Family"].exists)
+        app.swipeDown()
+        XCTAssertTrue(app.navigationBars["Manage Family"].exists)
+        keepScreenshot("manage-family-pull-to-refresh")
     }
 
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
