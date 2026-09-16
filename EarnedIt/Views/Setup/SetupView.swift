@@ -79,6 +79,7 @@ struct SetupView: View {
                             diagnosticRow("Root route", receipt.rootRoute.rawValue)
                             diagnosticRow("Failure stage", receipt.failureStage?.rawValue ?? "none")
                             diagnosticRow("Failure category", receipt.failureCategory.rawValue)
+                            diagnosticRow("Refusal reason", receipt.refusalReason?.rawValue ?? "none")
                         }
                         .accessibilityIdentifier("last-join-receipt")
                     }
