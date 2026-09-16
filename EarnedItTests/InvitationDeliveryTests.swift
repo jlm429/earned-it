@@ -46,7 +46,7 @@ final class InvitationDeliveryTests: XCTestCase {
         let invitation = FamilyInvitation(id: UUID(), householdID: UUID(), claimFactID: UUID(), memberID: UUID(),
                                           role: .child, codeDigest: try XCTUnwrap(InvitationCode.digest("2345-6789-AB")),
                                           createdAt: .now, expiresAt: .distantFuture, createdByMemberID: UUID(),
-                                          cloudShareParticipantID: "synthetic-slot")
+                                          cloudShareParticipantID: "synthetic-slot", cloudShareURLDigest: nil)
         let issued = IssuedFamilyInvitation(invitation: invitation, code: "2345-6789-AB", shareURL: nativeURL)
         let decoded = try XCTUnwrap(InvitationCredential(text: issued.invitationURL.absoluteString))
         XCTAssertEqual(decoded.code, "2345-6789-AB")
