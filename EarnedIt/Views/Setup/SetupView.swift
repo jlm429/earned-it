@@ -68,6 +68,9 @@ struct SetupView: View {
                               systemImage: "lock.shield")
                             .foregroundStyle(.secondary)
                     }
+                    Section("About") {
+                        LegalLinksView()
+                    }
                 } else {
                     Section("Your family") {
                         Text(store.household?.name ?? "Family").font(.title2.bold())
@@ -93,6 +96,9 @@ struct SetupView: View {
                             .accessibilityIdentifier("finish-setup")
                     } footer: {
                         Text("You can invite family members and make changes later from Manage Family.")
+                    }
+                    Section("About") {
+                        LegalLinksView()
                     }
                 }
             }

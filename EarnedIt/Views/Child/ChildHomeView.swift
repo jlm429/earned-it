@@ -76,7 +76,6 @@ struct ChildHomeView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("A thought for today", systemImage: "quote.opening").font(.headline)
                         Text(quote.text)
-                        Text(quote.attribution).font(.caption).foregroundStyle(.primary.opacity(0.7))
                     }
                 }
             }.padding()

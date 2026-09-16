@@ -127,7 +127,11 @@ enum ChoreRules {
                               occurrenceDisposition: notNeeded || activated ? disposition : nil,
                               isActiveOccurrence: occurrenceExists,
                               today: today)
-        }.sorted { $0.configuration.title.localizedStandardCompare($1.configuration.title) == .orderedAscending }
+        }.sorted {
+            let titleOrder = $0.configuration.title.localizedStandardCompare($1.configuration.title)
+            if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+            return $0.id.uuidString < $1.id.uuidString
+        }
     }
 
     static func activeOccurrence(for revision: ChoreRevision, in chores: [DailyChore]) -> DailyChore? {

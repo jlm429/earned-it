@@ -1325,7 +1325,9 @@ final class HouseholdStore {
             throw CancellationError()
         } catch {
             if hasPendingInvitationPackage, session.pendingInvitationAcceptance?.phase == .awaitingRedemption,
-               ((error as? HouseholdError) == .invitationNotFound || Self.isInvitationVisibilityError(error)) {
+               (Self.isInvitationVisibilityError(error)
+                || ((error as? HouseholdError) == .invitationNotFound
+                    && session.lastJoinReceipt?.refusalReason == .invitationRecordMissing)) {
                 throw HouseholdError.familyStillSyncing
             }
             try await abandonPendingInvitationAcceptance(preserving: error)
@@ -1435,8 +1437,16 @@ final class HouseholdStore {
                 $0.codeDigest == package.codeDigest && $0.cloudShareURLDigest == urlDigest
             }
             guard matches.count == 1, let invitation = matches.first else {
-                let reason: JoinRefusalReason = matches.count > 1
-                    ? .participantSlotAmbiguous : .participantSlotMismatch
+                let reason: JoinRefusalReason
+                if matches.count > 1 {
+                    reason = .participantSlotAmbiguous
+                } else if imported.invitations.contains(where: {
+                    $0.codeDigest == package.codeDigest || $0.cloudShareURLDigest == urlDigest
+                }) {
+                    reason = .participantSlotMismatch
+                } else {
+                    reason = .invitationRecordMissing
+                }
                 recordJoinRefusal(reason, stage: .exactInvitation, error: .invitationNotFound)
                 throw HouseholdError.invitationNotFound
             }

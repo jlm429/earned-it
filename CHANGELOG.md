@@ -1,8 +1,15 @@
 # Changelog
 
-User-visible changes to Earned It. The shared household app is a preproduction preview.
+User-visible changes to Earned It.
 
 ## Unreleased
+
+### Public release preparation
+
+- Added accessible privacy-policy and support links during setup, in Settings, and from parent and child screens.
+- Added a privacy manifest describing the family data retained in CloudKit for app functionality and confirming that the app does not track people.
+- Replaced the named quotation and loose attribution presentation with short, unattributed daily microcopy.
+- Reworked the public README and added App Store release, privacy, metadata, visual asset, and attribution documentation.
 
 ### As-needed chores and skipped occurrences
 
@@ -47,6 +54,8 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ### Fixed
 
+- Invitations with an exact code-and-link match can finish joining even when CloudKit's participant lookup is temporarily stale. A missing invitation record remains retryable, while a conflicting code or link is refused.
+- Chores with the same title now keep a deterministic order across devices.
 - Reinstalling or losing local app data now reconnects a surviving iCloud membership to its exact family member and role before offering family creation. Conflicting or temporarily unavailable recovery evidence blocks creation without deleting that membership.
 - iPhone builds and App Store archives now include the production app icon.
 - New children immediately join existing all-children chores that apply today. Particular-child assignments, future chore starts, earlier history, and other children’s completions are preserved across reload and sync.
