@@ -19,7 +19,7 @@ Do not silently replace the shipping icon. A designer should deliver an approved
 
 ### Repository banner
 
-`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG used at the top of the public README. Its embedded “Allowance Tracker for Families” label conflicts with the approved shared-chore positioning below, and its App Store download badge implies availability before release. It should not be reused for App Store marketing until corrected source artwork is available. Confirm its provenance and commercial-use rights before distribution.
+`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG used at the top of the public README. It uses the approved shared-chore positioning, iOS 18 requirement, and iCloud privacy language without making an App Store availability claim. Confirm its provenance and commercial-use rights before distribution.
 
 ### Public preview
 
