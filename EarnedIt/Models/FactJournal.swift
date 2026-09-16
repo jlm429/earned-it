@@ -109,6 +109,21 @@ enum JoinFailureCategory: String, Codable, Equatable {
     case other
 }
 
+enum JoinRefusalReason: String, Codable, Equatable {
+    case invitationRecordMissing
+    case memberRecordMissing
+    case roleMismatch
+    case householdMismatch
+    case revoked
+    case participantSlotMismatch
+    case participantSlotAmbiguous
+    case memberInactive
+    case alreadyClaimed
+    case expired
+    case writeUnavailable
+    case atomicClaimConflict
+}
+
 struct LastJoinReceipt: Codable, Equatable {
     var nativeAcceptance: JoinDiagnosticState = .unknown
     var sharedZoneVisible: JoinDiagnosticState = .unknown
@@ -119,6 +134,7 @@ struct LastJoinReceipt: Codable, Equatable {
     var rootRoute: JoinRootRoute = .unknown
     var failureStage: JoinFailureStage?
     var failureCategory: JoinFailureCategory = .none
+    var refusalReason: JoinRefusalReason?
 }
 
 struct DeviceSession: Codable, Equatable {

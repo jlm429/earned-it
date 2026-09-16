@@ -632,7 +632,7 @@ final class HouseholdStore {
             }
             return false
         } catch {
-            recordJoinFailure(stage: joinFailureStage, error: error)
+            recordJoinFailure(stage: joinFailureStage, error: error, preserveExisting: true)
             try clearTerminalInvitationPackage(after: error)
             throw error
         }
@@ -738,7 +738,7 @@ final class HouseholdStore {
                 }
                 try persistInvitationPackage(nil)
             } catch {
-                recordJoinFailure(stage: joinFailureStage, error: error)
+                recordJoinFailure(stage: joinFailureStage, error: error, preserveExisting: true)
                 try clearTerminalInvitationPackage(after: error)
                 throw error
             }
@@ -768,7 +768,7 @@ final class HouseholdStore {
         }
         catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
         catch {
-            recordJoinFailure(stage: joinFailureStage, error: error)
+            recordJoinFailure(stage: joinFailureStage, error: error, preserveExisting: true)
             try await abandonPendingInvitationAcceptance(preserving: error)
         }
     }
@@ -840,29 +840,60 @@ final class HouseholdStore {
                        accountLockAttemptID: lock.attemptID)
             return
         }
-        guard let invitation = imported.invitations.first(where: { $0.codeDigest == codeDigest }),
-              let member = imported.member(invitation.memberID), member.role == invitation.role,
-              invitation.householdID == location.householdID else { throw HouseholdError.invitationNotFound }
+        guard let invitation = imported.invitations.first(where: { $0.codeDigest == codeDigest }) else {
+            recordJoinRefusal(.invitationRecordMissing, stage: .exactInvitation, error: .invitationNotFound)
+            throw HouseholdError.invitationNotFound
+        }
+        guard let member = imported.member(invitation.memberID) else {
+            recordJoinRefusal(.memberRecordMissing, stage: .exactInvitation, error: .invitationNotFound)
+            throw HouseholdError.invitationNotFound
+        }
+        guard member.role == invitation.role else {
+            recordJoinRefusal(.roleMismatch, stage: .exactInvitation, error: .invitationNotFound)
+            throw HouseholdError.invitationNotFound
+        }
+        guard invitation.householdID == location.householdID else {
+            recordJoinRefusal(.householdMismatch, stage: .exactInvitation, error: .invitationNotFound)
+            throw HouseholdError.invitationNotFound
+        }
         recordJoinReceipt {
             $0.claim = .absent
             $0.exactMembership = .no
         }
-        if imported.isInvitationRevoked(invitation.id) { throw HouseholdError.invitationRevoked }
-        guard try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
-                                                      in: location) else {
+        if imported.isInvitationRevoked(invitation.id) {
+            recordJoinRefusal(.revoked, stage: .exactInvitation, error: .invitationRevoked)
+            throw HouseholdError.invitationRevoked
+        }
+        guard try await transport.hasInvitationAccess(
+            participantID: invitation.cloudShareParticipantID, in: location
+        ) else {
+            recordJoinRefusal(.participantSlotMismatch, stage: .exactInvitation, error: .invitationNotFound)
             throw HouseholdError.invitationNotFound
+        }
+        recordJoinReceipt {
+            $0.failureStage = nil
+            $0.failureCategory = .none
+            $0.refusalReason = .none
         }
         let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
         guard let importedHousehold = imported.household,
               imported.isActive(member, on: CivilDay(validationTime, calendar: importedHousehold.calendar)) else {
+            recordJoinRefusal(.memberInactive, stage: .exactInvitation, error: .invitationUnavailable)
             throw HouseholdError.invitationUnavailable
         }
         if let existing = imported.invitationClaim(invitation.id) {
             _ = existing
+            recordJoinRefusal(.alreadyClaimed, stage: .claim, error: .invitationConsumed)
             throw HouseholdError.invitationConsumed
         }
-        guard validationTime < invitation.expiresAt else { throw HouseholdError.invitationExpired }
-        guard try await transport.canWrite(to: location) else { throw HouseholdError.readOnly }
+        guard validationTime < invitation.expiresAt else {
+            recordJoinRefusal(.expired, stage: .exactInvitation, error: .invitationExpired)
+            throw HouseholdError.invitationExpired
+        }
+        guard try await transport.canWrite(to: location) else {
+            recordJoinRefusal(.writeUnavailable, stage: .claim, error: .readOnly)
+            throw HouseholdError.readOnly
+        }
         let attemptID: UUID
         if let pending = session.pendingInvitationAcceptance, pending.location == location,
            let pendingAttemptID = pending.accountLockAttemptID {
@@ -916,7 +947,7 @@ final class HouseholdStore {
                            accountLockAttemptID: lock.attemptID)
                 return
             }
-            recordJoinFailure(stage: .claim, error: HouseholdError.invitationConsumed)
+            recordJoinRefusal(.atomicClaimConflict, stage: .claim, error: .invitationConsumed)
             throw HouseholdError.invitationConsumed
         } catch {
             recordJoinFailure(stage: .claim, error: error)
@@ -989,6 +1020,7 @@ final class HouseholdStore {
             $0.localAttach = .yes
             $0.failureStage = nil
             $0.failureCategory = .none
+            $0.refusalReason = .none
         }
     }
 
@@ -1322,11 +1354,20 @@ final class HouseholdStore {
             recordJoinReceipt {
                 $0.claim = .absent
                 $0.exactMembership = .no
+                $0.failureStage = nil
+                $0.failureCategory = .none
+                $0.refusalReason = .none
             }
             return
-        case .expired: throw HouseholdError.invitationExpired
-        case .revoked: throw HouseholdError.invitationRevoked
-        case .consumed: throw HouseholdError.invitationConsumed
+        case .expired:
+            recordJoinRefusal(.expired, stage: .exactInvitation, error: .invitationExpired)
+            throw HouseholdError.invitationExpired
+        case .revoked:
+            recordJoinRefusal(.revoked, stage: .exactInvitation, error: .invitationRevoked)
+            throw HouseholdError.invitationRevoked
+        case .consumed:
+            recordJoinRefusal(.alreadyClaimed, stage: .claim, error: .invitationConsumed)
+            throw HouseholdError.invitationConsumed
         }
     }
 
@@ -1341,6 +1382,15 @@ final class HouseholdStore {
             }
         }
         guard matches.count == 1, let invitation = matches.first else {
+            let reason: JoinRefusalReason
+            if matches.count > 1 {
+                reason = .participantSlotAmbiguous
+            } else if imported.invitations.isEmpty {
+                reason = .invitationRecordMissing
+            } else {
+                reason = .participantSlotMismatch
+            }
+            recordJoinRefusal(reason, stage: .exactInvitation, error: .invitationNotFound)
             throw HouseholdError.invitationNotFound
         }
         return invitation
@@ -1415,11 +1465,21 @@ final class HouseholdStore {
         session = updated
     }
 
-    private func recordJoinFailure(stage: JoinFailureStage, error: Error) {
+    private func recordJoinFailure(stage: JoinFailureStage, error: Error, preserveExisting: Bool = false) {
         recordJoinReceipt {
+            if preserveExisting, $0.failureStage != nil { return }
             $0.failureStage = stage
             $0.failureCategory = Self.joinFailureCategory(for: error)
             if stage == .nativeAcceptance { $0.nativeAcceptance = .no }
+        }
+    }
+
+    private func recordJoinRefusal(_ reason: JoinRefusalReason, stage: JoinFailureStage,
+                                   error: HouseholdError) {
+        recordJoinReceipt {
+            $0.refusalReason = reason
+            $0.failureStage = stage
+            $0.failureCategory = Self.joinFailureCategory(for: error)
         }
     }
 
