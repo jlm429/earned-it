@@ -48,6 +48,7 @@ final class HouseholdStore {
 
     var household: Household? { snapshot.household }
     var hasPendingInvitationPackage: Bool { session.pendingInvitationPackage != nil }
+    var lastJoinReceipt: LastJoinReceipt? { session.lastJoinReceipt }
     var calendar: Calendar { household?.calendar ?? AppCalendar.current }
     var day: CivilDay { CivilDay(today, calendar: calendar) }
     var nextHouseholdMidnight: Date { tomorrow.date(in: calendar) }
@@ -582,8 +583,14 @@ final class HouseholdStore {
         guard let credential = InvitationCredential(text: text),
               let digest = InvitationCode.digest(credential.code) else { throw HouseholdError.invitationNotFound }
         guard !isJoiningInvitation else { return }
+        recordJoinReceipt { $0 = LastJoinReceipt() }
         guard let transport else { throw HouseholdError.cloudUnavailable }
-        let participant = try await transport.participantID()
+        let participant: String
+        do { participant = try await transport.participantID() }
+        catch {
+            recordJoinFailure(stage: .package, error: error)
+            throw error
+        }
         if let pending = session.pendingInvitationPackage {
             guard pending.cloudParticipantID == participant else { throw HouseholdError.wrongAccount }
             guard pending.codeDigest == digest,
@@ -607,6 +614,7 @@ final class HouseholdStore {
     func continuePendingInvitation(allowAppleVerification: Bool = false,
                                    openShareURL: (URL) async -> Bool = { await UIApplication.shared.open($0) }) async throws -> Bool {
         guard !isJoiningInvitation, var pending = session.pendingInvitationPackage else { return false }
+        if session.lastJoinReceipt == nil { recordJoinReceipt { $0 = LastJoinReceipt() } }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         isJoiningInvitation = true
         defer { isJoiningInvitation = false }
@@ -616,6 +624,7 @@ final class HouseholdStore {
             try persistInvitationPackage(nil)
             return selectedMember != nil
         } catch let error as CKError where error.code == .participantMayNeedVerification {
+            recordJoinFailure(stage: .metadata, error: error)
             pending.needsAppleVerification = true
             try persistInvitationPackage(pending)
             if allowAppleVerification {
@@ -623,6 +632,7 @@ final class HouseholdStore {
             }
             return false
         } catch {
+            recordJoinFailure(stage: joinFailureStage, error: error)
             try clearTerminalInvitationPackage(after: error)
             throw error
         }
@@ -705,6 +715,7 @@ final class HouseholdStore {
     }
 
     func acceptSystemInvitation(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
+        if session.lastJoinReceipt == nil { recordJoinReceipt { $0 = LastJoinReceipt() } }
         if let package = session.pendingInvitationPackage {
             guard !isJoiningInvitation else { return }
             isJoiningInvitation = true
@@ -727,6 +738,7 @@ final class HouseholdStore {
                 }
                 try persistInvitationPackage(nil)
             } catch {
+                recordJoinFailure(stage: joinFailureStage, error: error)
                 try clearTerminalInvitationPackage(after: error)
                 throw error
             }
@@ -744,16 +756,21 @@ final class HouseholdStore {
                                              invitationCodeDigest: nil) { return }
         let accessExisted = try await transport.hasAcceptedAccess(to: location)
         let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
+        recordJoinReceipt { $0.lock = .provisional }
         try beginPendingInvitationAcceptance(location: location, participant: participant,
                                              accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
         do {
             try await acceptance()
+            recordJoinReceipt { $0.nativeAcceptance = .yes }
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
             try await identifyPendingInvitation(in: location)
             try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
         }
         catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
-        catch { try await abandonPendingInvitationAcceptance(preserving: error) }
+        catch {
+            recordJoinFailure(stage: joinFailureStage, error: error)
+            try await abandonPendingInvitationAcceptance(preserving: error)
+        }
     }
 
     func joinExisting(_ location: CloudLocation) async throws {
@@ -790,16 +807,25 @@ final class HouseholdStore {
         else {
             do { remote = try await transport.fetch(from: location) }
             catch {
+                if Self.isInvitationVisibilityError(error) {
+                    recordJoinReceipt { $0.sharedZoneVisible = .no }
+                }
+                recordJoinFailure(stage: .sharedVisibility, error: error)
                 if hasPendingInvitationPackage, Self.isInvitationVisibilityError(error) {
                     throw HouseholdError.familyStillSyncing
                 }
                 throw error
             }
         }
+        recordJoinReceipt { $0.sharedZoneVisible = .yes }
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try validateCompleteFamily(imported, householdID: location.householdID)
         if let membership = try imported.committedAccountMembership(participantID: participant) {
+            recordJoinReceipt {
+                $0.claim = .committed
+                $0.exactMembership = .yes
+            }
             guard codeDigest == membership.claim.codeDigest else {
                 throw HouseholdError.accountMembershipConflict
             }
@@ -808,6 +834,7 @@ final class HouseholdStore {
             let lock = try await activateAccountMembershipLock(
                 location: location, claimBinding: AccountMembershipBinding.invitation(membership)
             )
+            recordJoinReceipt { $0.lock = .active }
             try attach(remote: remote, location: location, participant: participant,
                        membership: membership, cloudCanWrite: canWrite,
                        accountLockAttemptID: lock.attemptID)
@@ -816,6 +843,10 @@ final class HouseholdStore {
         guard let invitation = imported.invitations.first(where: { $0.codeDigest == codeDigest }),
               let member = imported.member(invitation.memberID), member.role == invitation.role,
               invitation.householdID == location.householdID else { throw HouseholdError.invitationNotFound }
+        recordJoinReceipt {
+            $0.claim = .absent
+            $0.exactMembership = .no
+        }
         if imported.isInvitationRevoked(invitation.id) { throw HouseholdError.invitationRevoked }
         guard try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
                                                       in: location) else {
@@ -838,6 +869,7 @@ final class HouseholdStore {
             attemptID = pendingAttemptID
         } else {
             attemptID = try await acquireAccountMembershipLock(householdID: location.householdID).attemptID
+            recordJoinReceipt { $0.lock = .provisional }
             try beginPendingInvitationAcceptance(location: location, participant: participant,
                                                  accessExistedBeforeAttempt: true, attemptID: attemptID)
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
@@ -874,18 +906,32 @@ final class HouseholdStore {
                     location: location, claimBinding: AccountMembershipBinding.invitation(membership),
                     attemptID: attemptID
                 )
+                recordJoinReceipt {
+                    $0.claim = .committed
+                    $0.lock = .active
+                    $0.exactMembership = .yes
+                }
                 try attach(remote: refreshed, location: location, participant: participant,
                            membership: membership, cloudCanWrite: canWrite,
                            accountLockAttemptID: lock.attemptID)
                 return
             }
+            recordJoinFailure(stage: .claim, error: HouseholdError.invitationConsumed)
             throw HouseholdError.invitationConsumed
+        } catch {
+            recordJoinFailure(stage: .claim, error: error)
+            throw error
+        }
+        recordJoinReceipt {
+            $0.claim = .committed
+            $0.exactMembership = .yes
         }
         let membership = AccountFamilyMembership(invitation: invitation, claim: claim, member: member)
         let lock = try await activateAccountMembershipLock(
             location: location, claimBinding: AccountMembershipBinding.invitation(membership),
             attemptID: attemptID
         )
+        recordJoinReceipt { $0.lock = .active }
         try attach(remote: remote + confirmedClaims, location: location, participant: participant,
                    membership: membership, cloudCanWrite: true,
                    accountLockAttemptID: lock.attemptID)
@@ -939,6 +985,11 @@ final class HouseholdStore {
         session = updated
         cloudIsReadOnly = !cloudCanWrite
         try reload()
+        recordJoinReceipt {
+            $0.localAttach = .yes
+            $0.failureStage = nil
+            $0.failureCategory = .none
+        }
     }
 
     private func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID? = nil,
@@ -1159,12 +1210,21 @@ final class HouseholdStore {
         } else {
             let accessExisted = try await transport.hasAcceptedAccess(to: location)
             let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
+            recordJoinReceipt { $0.lock = .provisional }
             try beginPendingInvitationAcceptance(location: location, participant: participant,
                                                  accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
         }
         do {
             if session.pendingInvitationAcceptance?.phase == .acceptingAccess {
-                try await acceptance()
+                do {
+                    try await acceptance()
+                    recordJoinReceipt { $0.nativeAcceptance = .yes }
+                } catch {
+                    let stage: JoinFailureStage = (error as? CKError)?.code == .participantMayNeedVerification
+                        ? .metadata : .nativeAcceptance
+                    recordJoinFailure(stage: stage, error: error)
+                    throw error
+                }
                 try Task.checkCancellation()
                 guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
                 try confirmPendingInvitationAcceptance(location: location, participant: participant)
@@ -1233,17 +1293,37 @@ final class HouseholdStore {
               pending.location == location,
               pending.phase == .awaitingRedemption,
               let transport else { throw HouseholdError.invitationNotFound }
-        let remote = try await transport.fetch(from: location)
+        let remote: [HouseholdFact]
+        do {
+            remote = try await transport.fetch(from: location)
+            recordJoinReceipt { $0.sharedZoneVisible = .yes }
+        } catch {
+            if Self.isInvitationVisibilityError(error) {
+                recordJoinReceipt { $0.sharedZoneVisible = .no }
+            }
+            recordJoinFailure(stage: .sharedVisibility, error: error)
+            throw error
+        }
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try validateCompleteFamily(imported, householdID: location.householdID)
-        let invitation = try await matchedPendingInvitation(in: imported, location: location)
+        let invitation: FamilyInvitation
+        do { invitation = try await matchedPendingInvitation(in: imported, location: location) }
+        catch {
+            recordJoinFailure(stage: .exactInvitation, error: error)
+            throw error
+        }
         pending.invitationID = invitation.id
         pending.expiresAt = invitation.expiresAt
         try persistPendingInvitation(pending)
         let validationTime = try await transport.invitationValidationTime(in: location, clientTime: clock())
         switch imported.invitationStatus(invitation, now: validationTime) {
-        case .available: return
+        case .available:
+            recordJoinReceipt {
+                $0.claim = .absent
+                $0.exactMembership = .no
+            }
+            return
         case .expired: throw HouseholdError.invitationExpired
         case .revoked: throw HouseholdError.invitationRevoked
         case .consumed: throw HouseholdError.invitationConsumed
@@ -1319,6 +1399,57 @@ final class HouseholdStore {
         guard let cloudError = error as? CKError else { return false }
         return cloudError.code == .zoneNotFound || cloudError.code == .unknownItem
             || cloudError.code == .permissionFailure
+    }
+
+    func recordJoinRootRoute(_ route: JoinRootRoute) {
+        guard session.lastJoinReceipt != nil, session.lastJoinReceipt?.rootRoute != route else { return }
+        recordJoinReceipt { $0.rootRoute = route }
+    }
+
+    private func recordJoinReceipt(_ change: (inout LastJoinReceipt) -> Void) {
+        var updated = session
+        var receipt = updated.lastJoinReceipt ?? LastJoinReceipt()
+        change(&receipt)
+        updated.lastJoinReceipt = receipt
+        guard (try? repository.commit(facts: [], session: updated)) != nil else { return }
+        session = updated
+    }
+
+    private func recordJoinFailure(stage: JoinFailureStage, error: Error) {
+        recordJoinReceipt {
+            $0.failureStage = stage
+            $0.failureCategory = Self.joinFailureCategory(for: error)
+            if stage == .nativeAcceptance { $0.nativeAcceptance = .no }
+        }
+    }
+
+    private var joinFailureStage: JoinFailureStage {
+        if session.lastJoinReceipt?.nativeAcceptance != .yes { return .nativeAcceptance }
+        if session.lastJoinReceipt?.sharedZoneVisible != .yes { return .sharedVisibility }
+        if session.lastJoinReceipt?.claim != .committed { return .claim }
+        if session.lastJoinReceipt?.lock != .active { return .lock }
+        return .localAttach
+    }
+
+    private nonisolated static func joinFailureCategory(for error: Error) -> JoinFailureCategory {
+        if error is CancellationError { return .cancelled }
+        if let cloudError = error as? CKError {
+            if isRetryableInvitationError(cloudError) { return .cloudKitRetryable }
+            switch cloudError.code {
+            case .zoneNotFound, .unknownItem: return .cloudKitVisibility
+            case .permissionFailure: return .cloudKitPermission
+            default: return .cloudKitOther
+            }
+        }
+        switch error as? HouseholdError {
+        case .accountMembershipConflict: return .accountConflict
+        case .wrongAccount: return .wrongAccount
+        case .readOnly: return .readOnly
+        case .invitation, .invitationNotFound, .invitationExpired, .invitationRevoked,
+             .invitationConsumed, .invitationUnavailable, .familyStillSyncing:
+            return .invitationRefused
+        default: return .other
+        }
     }
 
     func pendingInvitationCleanupDelay() async throws -> TimeInterval? {
@@ -1439,6 +1570,7 @@ final class HouseholdStore {
                                                                    now: clock()) else {
                 throw HouseholdError.accountMembershipConflict
             }
+            recordJoinReceipt { $0.lock = .released }
         }
         try Task.checkCancellation()
         var updated = session

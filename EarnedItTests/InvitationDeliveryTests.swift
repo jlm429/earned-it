@@ -332,7 +332,7 @@ final class InvitationDeliveryTests: XCTestCase {
     }
 
     func testDefinitiveNativeContinuationClaimRefusalClearsDeliveryAndNeverGrantsProfile() async throws {
-        let (_, issued, transport, recipient, _) = try await pendingRecipient()
+        let (_, issued, transport, recipient, repository) = try await pendingRecipient()
         transport.invitationLocationError = CKError(.participantMayNeedVerification)
         try await recipient.redeemInvitation(issued.qrPayload) { _ in true }
         transport.invitationLocationError = nil
@@ -348,6 +348,20 @@ final class InvitationDeliveryTests: XCTestCase {
         XCTAssertNil(recipient.session.pendingInvitationPackage)
         XCTAssertNil(recipient.session.pendingInvitationAcceptance)
         XCTAssertEqual(transport.leaveAttempts, 1)
+        XCTAssertEqual(recipient.lastJoinReceipt, LastJoinReceipt(
+            nativeAcceptance: .yes,
+            sharedZoneVisible: .yes,
+            claim: .absent,
+            lock: .released,
+            exactMembership: .no,
+            localAttach: .no,
+            rootRoute: .unknown,
+            failureStage: .claim,
+            failureCategory: .cloudKitPermission
+        ))
+        let restarted = try HouseholdStore(repository: repository, transport: transport,
+                                           automaticSync: false)
+        XCTAssertEqual(restarted.lastJoinReceipt, recipient.lastJoinReceipt)
     }
 
     private func pendingRecipient() async throws

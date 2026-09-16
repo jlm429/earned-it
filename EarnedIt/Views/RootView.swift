@@ -30,9 +30,11 @@ struct RootView: View {
                     }
                 }
                 .accessibilityIdentifier("pending-invitation-screen")
+                .onAppear { store.recordJoinRootRoute(.pendingInvitation) }
             } else if store.isCheckingAccountMembership && store.household == nil {
                 ProgressView("Reconnecting to your family…")
                     .accessibilityIdentifier("membership-recovery-progress")
+                    .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.requiresMembershipRecovery && store.household == nil {
                 ContentUnavailableView {
                     Label("Reconnect to Your Family", systemImage: "icloud.and.arrow.down")
@@ -48,12 +50,16 @@ struct RootView: View {
                     .accessibilityIdentifier("retry-membership-recovery")
                 }
                 .accessibilityIdentifier("membership-recovery-required")
+                .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.household == nil || store.household?.isSetupComplete == false {
                 SetupView()
+                    .onAppear { store.recordJoinRootRoute(.onboarding) }
             } else if let member = store.selectedMember {
                 MainRoleView(user: member, today: store.today)
+                    .onAppear { store.recordJoinRootRoute(.member) }
             } else {
                 UserSelectionView()
+                    .onAppear { store.recordJoinRootRoute(.profileSelection) }
             }
         }
         #if DEBUG
