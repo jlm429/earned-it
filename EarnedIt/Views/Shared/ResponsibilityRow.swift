@@ -167,7 +167,7 @@ struct ResponsibilityRow: View {
     }
 
     private var canMarkNotNeeded: Bool {
-        actor.role == .parent && chore.configuration.schedulingMode == .scheduled
+        actor.role == .parent && chore.isScheduledOccurrence
             && chore.day == chore.today && !chore.isNotNeeded
             && !store.cloudIsReadOnly && !store.cloudAccessBlocked
     }

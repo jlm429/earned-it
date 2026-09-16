@@ -29,9 +29,12 @@ struct DailyChore: Identifiable, Equatable {
     let contributions: [DatedCompletion]
     let historicalContributions: [HistoricalContribution]
     let occurrenceDisposition: ChoreOccurrenceDisposition?
+    let isActiveOccurrence: Bool
     let today: CivilDay
 
     var id: UUID { configuration.choreID }
+    var isScheduledOccurrence: Bool { isActiveOccurrence && configuration.schedulingMode == .scheduled }
+    var isAsNeededOccurrence: Bool { isActiveOccurrence && configuration.schedulingMode == .asNeeded }
     var requiredMembers: [FamilyMember] { eligibleMembers.filter { requiredMemberIDs.contains($0.id) } }
     var turnOwner: FamilyMember? { turnOwnerID.flatMap { id in eligibleMembers.first { $0.id == id } } }
     var isNotNeeded: Bool { occurrenceDisposition?.state == .notNeeded }
@@ -122,8 +125,13 @@ enum ChoreRules {
                               contributions: occurrence.activeContributions,
                               historicalContributions: occurrence.displacedHistoricalContributions,
                               occurrenceDisposition: notNeeded || activated ? disposition : nil,
+                              isActiveOccurrence: occurrenceExists,
                               today: today)
         }.sorted { $0.configuration.title.localizedStandardCompare($1.configuration.title) == .orderedAscending }
+    }
+
+    static func activeOccurrence(for revision: ChoreRevision, in chores: [DailyChore]) -> DailyChore? {
+        chores.first { $0.configuration.id == revision.id && $0.isActiveOccurrence }
     }
 
     private static func resolveOccurrence(revision: ChoreRevision, scheduledMembers: [FamilyMember],

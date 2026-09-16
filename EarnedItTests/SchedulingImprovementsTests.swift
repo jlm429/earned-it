@@ -110,6 +110,25 @@ final class SchedulingImprovementsTests: XCTestCase {
         XCTAssertTrue(family.store.dailyList().contains { $0.id == chore })
     }
 
+    func testAsNeededStatusIgnoresTodaysScheduledRevisionWhenChangeStartsTomorrow() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Dishes", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        try family.store.saveChore(
+            choreID: chore, weekday: .monday, title: "Dishes", mode: .particular,
+            memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+        let displayedRevision = try XCTUnwrap(
+            family.store.snapshot.configuration(choreID: chore, on: family.store.tomorrow)
+        )
+        let todayRows = family.store.dailyList()
+
+        XCTAssertTrue(try XCTUnwrap(todayRows.first { $0.id == chore }).isScheduledOccurrence)
+        XCTAssertNil(ChoreRules.activeOccurrence(for: displayedRevision, in: todayRows))
+    }
+
     func testAsNeededCannotActivateAgainUntilOpenOccurrenceIsComplete() throws {
         let family = try TestFamily()
         let chore = try family.store.saveChore(
@@ -227,6 +246,8 @@ final class SchedulingImprovementsTests: XCTestCase {
         try reopened.selectProfile(family.parent.id)
         let row = try XCTUnwrap(reopened.dailyList().first { $0.id == chore })
         XCTAssertEqual(row.configuration.id, winningRevision.id)
+        XCTAssertFalse(row.isActiveOccurrence)
+        XCTAssertFalse(row.isScheduledOccurrence)
         XCTAssertTrue(row.contributions.isEmpty)
         XCTAssertEqual(row.historicalContributions, [
             HistoricalContribution(revisionID: original.id, member: family.hanna, state: .done)
@@ -380,7 +401,7 @@ final class SchedulingImprovementsTests: XCTestCase {
                        family.store.dailyList(on: nextMonday).first { $0.id == alternating }?.turnOwnerID)
     }
 
-    func testDisplacedRevisionActivationRemainsAuditOnlyAfterSynchronization() async throws {
+    func testDisplacedCompletedActivationDoesNotBlockWinningRevision() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let chore = try family.store.saveChore(
@@ -409,6 +430,8 @@ final class SchedulingImprovementsTests: XCTestCase {
 
         family.move(to: "2026-09-08T16:00:00Z")
         try family.store.activateAsNeededChore(choreID: chore)
+        try family.store.setCompletion(choreID: chore, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .done)
         try peer.saveChore(
             choreID: chore, weekday: .monday, title: "Unload and put away dishwasher",
             mode: .particular, memberIDs: [family.hanna.id], schedulingMode: .asNeeded
@@ -425,6 +448,18 @@ final class SchedulingImprovementsTests: XCTestCase {
                        winningRevision.id)
         XCTAssertEqual(family.store.snapshot.occurrence(choreID: chore, on: family.store.day)?.revisionID,
                        displacedRevision.id)
-        XCTAssertFalse(family.store.dailyList().contains { $0.id == chore })
+        let historicalRow = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        XCTAssertFalse(historicalRow.isActiveOccurrence)
+        XCTAssertEqual(historicalRow.historicalContributions, [
+            HistoricalContribution(revisionID: displacedRevision.id, member: family.hanna, state: .done)
+        ])
+
+        family.move(to: "2026-09-09T16:00:00Z")
+        try family.store.activateAsNeededChore(choreID: chore)
+        XCTAssertEqual(family.store.snapshot.occurrence(choreID: chore, on: family.store.day)?.revisionID,
+                       winningRevision.id)
+        XCTAssertTrue(family.store.snapshot.occurrenceDispositions.contains {
+            $0.day == CivilDay(rawValue: "2026-09-08") && $0.revisionID == displacedRevision.id
+        })
     }
 }
