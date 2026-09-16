@@ -17,6 +17,10 @@ The artwork is friendly and family-oriented, but two release questions remain:
 
 Do not silently replace the shipping icon. A designer should deliver an approved 1024 by 1024 opaque PNG or an Icon Composer source, plus a note recording ownership and permitted commercial use. Optional dark and tinted appearances can follow later.
 
+### Repository banner
+
+`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG used at the top of the public README. Its embedded “Allowance Tracker for Families” label conflicts with the approved shared-chore positioning below, and its App Store download badge implies availability before release. It should not be reused for App Store marketing until corrected source artwork is available. Confirm its provenance and commercial-use rights before distribution.
+
 ### Public preview
 
 `assets/earned-it-preview.png` is not suitable for current public or App Store use. It shows an older UI and icon, says iOS 17+, calls the product an allowance tracker, and says family data stays on device. The current app targets iOS 18 and can synchronize family data through iCloud.
