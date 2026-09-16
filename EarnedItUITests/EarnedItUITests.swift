@@ -568,9 +568,13 @@ final class EarnedItUITests: XCTestCase {
         _ = element.waitForExistence(timeout: 2)
         // SwiftUI can report a link as hittable while it is covered by an inset or bar.
         // Scroll its center into the content area before synthesizing the tap.
+        func contentTop() -> CGFloat {
+            let navigationBar = app.navigationBars.firstMatch
+            return navigationBar.exists ? navigationBar.frame.maxY + 8 : app.frame.minY + 8
+        }
         func safelyVisible() -> Bool {
             guard element.exists, element.isHittable else { return false }
-            let top = app.navigationBars.firstMatch.frame.maxY + 8
+            let top = contentTop()
             let bottom = app.frame.maxY - 36
             return element.frame.midY > top && element.frame.midY < bottom
         }
@@ -588,7 +592,7 @@ final class EarnedItUITests: XCTestCase {
         // before reversing direction; once mounted, the element's frame directs each drag.
         for index in 0..<80 {
             if safelyVisible() { break }
-            let top = app.navigationBars.firstMatch.frame.maxY + 8
+            let top = contentTop()
             let bottom = app.frame.maxY - 36
             let center = (top + bottom) / 2
             let targetY = element.exists && !element.frame.isEmpty

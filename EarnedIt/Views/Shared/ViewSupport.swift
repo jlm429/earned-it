@@ -1,5 +1,19 @@
 import SwiftUI
 
+enum AppLinks {
+    static let privacyPolicy = URL(string: "https://github.com/jlm429/earned-it/blob/main/docs/app-store/privacy-policy.md")!
+    static let support = URL(string: "https://github.com/jlm429/earned-it/issues")!
+}
+
+struct LegalLinksView: View {
+    var body: some View {
+        Link("Privacy Policy", destination: AppLinks.privacyPolicy)
+            .accessibilityIdentifier("privacy-policy-link")
+        Link("Support", destination: AppLinks.support)
+            .accessibilityIdentifier("support-link")
+    }
+}
+
 extension ProgressStatus {
     var tint: Color {
         switch self {

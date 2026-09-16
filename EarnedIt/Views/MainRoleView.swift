@@ -23,6 +23,15 @@ struct MainRoleView: View {
                     } label: { Label("Switch Profile", systemImage: "person.2") }
                     .accessibilityIdentifier("switch-user")
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Link("Privacy Policy", destination: AppLinks.privacyPolicy)
+                        Link("Support", destination: AppLinks.support)
+                    } label: {
+                        Label("About Earned It", systemImage: "info.circle")
+                    }
+                    .accessibilityIdentifier("about-menu")
+                }
             }
         }
     }

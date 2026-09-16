@@ -21,6 +21,9 @@ struct HouseholdSettingsView: View {
                 }
                 .accessibilityIdentifier("clear-all-data")
             }
+            Section("About") {
+                LegalLinksView()
+            }
         }
         .refreshable { await refreshFamily() }
         .navigationTitle("Settings")

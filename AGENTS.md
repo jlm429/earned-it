@@ -1,51 +1,53 @@
 # Earned It Agent Guide
 
-## Engineering
+## Working standard
 
 - Keep changes small, direct, reviewable, and native to Apple platforms.
+- Do not add features, dependencies, analytics, advertising, AI, or a custom backend without explicit approval.
 - Do not use em dashes in prose, comments, documentation, commits, or PR text.
-- Fix every lint or test failure encountered, including unrelated failures and flakes.
-- Reproduce bugs end to end before changing code.
-- Do not add agent co-authors to commits.
+- Reproduce bugs end to end before changing code. Fix every lint, test, or flake failure encountered.
+- Never add an agent name as a commit co-author.
 
-## Architecture and Scope
+## Product invariants
 
-- Build with SwiftUI, SwiftData, CloudKit, XCTest, and XCUITest. Keep sharing native.
-- Keep business rules in focused services and UI in small views.
-- Persist source data, then derive scores, streaks, and daily presentation state.
-- Use stable identifiers and calendar-aware date normalization.
-- Use the explicit CloudKit sharing boundary; do not add a backend, passwords, analytics, AI, external dependencies, or non-native frameworks.
-- Follow `docs/shared-household-architecture.md` for recurrence, civil dates, history, identity, and allowance rules.
+- `docs/shared-household-architecture.md` is authoritative for civil dates, recurrence, alternating turns, history, identity, permissions, synchronization, scoring, streaks, and allowance.
+- Preserve stable family, member, device, participant, chore, occurrence, and fact identities.
+- Persist source facts, then derive daily state, history, scores, streaks, and allowance outcomes.
+- Children can act only as their invited profile. Parent permissions remain centralized in `HouseholdStore.swift` and `PermissionService.swift`.
+- A CloudKit read/write participant has broader transport access than app-level role permissions. Never describe client checks as server-enforced authorization.
+- Preserve exact invitation claims, one-time link binding, account membership recovery, and owner-only CloudKit participant management.
+- Never rewrite historical outcomes through a configuration edit, recurrence change, rotation change, or migration.
 
-## Security and Data
+## Data and release safety
 
-- Never read, print, summarize, copy, commit, or expose `.env`, `.env.*`, keys, tokens, credentials, or service account files.
-- Document required secrets only by variable name in `.env.example`.
-- Keep family data in the local journal and the invited household’s private/shared CloudKit zone. Never hard-code real family information.
-- Never delete existing actual stores or provision a live CloudKit schema during agent work. The preproduction journal uses its own named store.
+- Never read, print, summarize, copy, commit, or expose `.env`, `.env.*`, keys, tokens, credentials, provisioning profiles, or service-account files.
+- Keep family data in the local journal and the invited household's private/shared CloudKit zone. Never hard-code real family information.
+- Never delete an actual store, create or revoke a live invitation for testing, mutate production CloudKit data, or deploy a CloudKit schema during agent work.
+- Production must not seed sample families or expose debug clocks, reset flags, fixtures, or diagnostic-only controls.
+- Do not change bundle IDs, signing identities, teams, certificates, profiles, entitlements, CloudKit containers, production schema, App Store Connect settings, or release pricing without explicit human approval.
+- Treat App Store metadata, privacy answers, screenshots, asset rights, signing, schema promotion, TestFlight distribution, and submission as human-confirmed release inputs.
 
-## Accessibility and UI
+## Implementation and UI
 
-- Support Dynamic Type, VoiceOver, dark mode, sufficient contrast, and reduced motion.
-- Pair color with text or symbols, use semantic system colors, and label controls clearly.
-- Add stable accessibility identifiers to critical controls and test targets.
-- Verify layout and interactions on an iPhone Simulator.
+- Use SwiftUI, SwiftData, CloudKit, XCTest, and XCUITest. Keep business rules in focused services and UI in small views.
+- Use stable identifiers and calendar-aware normalization. Keep the explicit CloudKit transport boundary.
+- Support Dynamic Type, VoiceOver, dark mode, sufficient contrast, reduced motion, and 44-point touch targets.
+- Pair color with text or symbols and add stable accessibility identifiers to critical controls and test targets.
 
-## Verification and Delivery
+## Verification and delivery
 
 - Build and test with the selected full Xcode installation and an available iPhone Simulator runtime.
-- Run unit tests, no more than three focused UI flows, and manual checks for critical product rules.
-- Confirm launch, relaunch persistence, first-run setup, confirmed local-data reset, and role-specific experiences.
-- Production never seeds households. `HouseholdStore.swift` centralizes actions and profile permissions; `EarnedItApp.swift` configures the separate debug-only UI test store. Startup recovery and local-state-loss proof boundaries are documented in `docs/production-membership-recovery/report.md`.
-- Distinguish transport-double tests from signed, two-account CloudKit validation. CKShare write access is broader than app profile permissions.
-- Native one-time links require the signing entitlement in `Configuration/EarnedIt.entitlements`. Signing evidence is in `docs/production-invitation-crash/report.md`; package delivery, continuation, and native proof limits are in `docs/production-invitation-package/report.md`.
-- Use automatic signing only when needed for a physical device. Simulator work must not require a paid developer account.
-- Commit focused milestones on a feature branch.
-- Run the configured no-mistakes pipeline after implementation, stop at a review-ready PR, and never merge without captain approval.
+- Run unit tests and no more than three focused UI flows. Check launch, relaunch persistence, confirmed local reset, and parent/child experiences when relevant.
+- Simulator and transport-double tests do not prove signed, two-account CloudKit behavior. Follow the production evidence and limits in `docs/production-invitation-crash/`, `docs/production-invitation-package/`, and `docs/production-membership-recovery/`.
+- Commit focused milestones on a feature branch. Run the configured no-mistakes pipeline, stop at a review-ready PR, and never merge without human approval.
 
-## Maintaining this file
+## Task-specific guides
 
-Keep this file for knowledge useful to almost every future agent session in this project.
-Do not repeat what the codebase already shows; point to the authoritative file or command instead.
-Prefer rewriting or pruning existing entries over appending new ones.
-When updating this file, preserve this bar for all agents and keep entries concise.
+Read only the guides relevant to the change:
+
+- `skills/product-rules.md` for product behavior
+- `skills/swiftdata.md` for journal and persistence work
+- `skills/swiftui-ui.md` for interface work
+- `skills/testing.md` for verification
+
+Keep this file compact and useful across future tasks. Point to authoritative code or documentation instead of recording temporary branch history.

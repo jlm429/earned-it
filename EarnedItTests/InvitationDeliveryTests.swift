@@ -216,20 +216,14 @@ final class InvitationDeliveryTests: XCTestCase {
         }
     }
 
-    func testExactParticipantSlotVisibilityLagNeverGrantsAuthorityAndCanRetrySameCode() async throws {
+    func testExactBoundPackageSurvivesStaleParticipantSlotVisibility() async throws {
         let (family, issued, transport, recipient, _) = try await pendingRecipient()
         transport.invitationAccessVisible = false
-        do {
-            try await recipient.redeemInvitation(issued.qrPayload)
-            XCTFail("Missing native slot visibility must not grant a profile")
-        } catch { XCTAssertEqual(error as? HouseholdError, .familyStillSyncing) }
-        XCTAssertTrue(recipient.hasPendingInvitationPackage)
-        XCTAssertNil(recipient.selectedMember)
-        XCTAssertTrue(recipient.profiles.isEmpty)
-        XCTAssertEqual(transport.leaveAttempts, 0)
-        transport.invitationAccessVisible = true
-        try await recipient.continuePendingInvitation()
+        try await recipient.redeemInvitation(issued.qrPayload)
         XCTAssertEqual(recipient.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(recipient.profiles.map(\.id), [family.hanna.id])
+        XCTAssertFalse(recipient.hasPendingInvitationPackage)
+        XCTAssertEqual(transport.leaveAttempts, 0)
         XCTAssertEqual(transport.acceptedURLs, [issued.shareURL])
     }
 
