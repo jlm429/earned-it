@@ -4,6 +4,8 @@ struct ResponsibilityRow: View {
     @Environment(HouseholdStore.self) private var store
     let chore: DailyChore
     let actor: FamilyMember
+    @State private var choosingRotationBehavior = false
+    @State private var confirmingNotNeeded = false
 
     var body: some View {
         SectionCard {
@@ -15,8 +17,10 @@ struct ResponsibilityRow: View {
                             .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
                     }
                     .frame(minHeight: 44, alignment: .leading)
-                    ForEach(chore.eligibleMembers) { member in
-                        memberControl(member)
+                    if !chore.isNotNeeded {
+                        ForEach(chore.eligibleMembers) { member in
+                            memberControl(member)
+                        }
                     }
                 }
                 if !chore.configuration.notes.isEmpty {
@@ -34,7 +38,35 @@ struct ResponsibilityRow: View {
                         }
                     }
                 }
+                if canMarkNotNeeded {
+                    Button("Not Needed Today", systemImage: "minus.circle") {
+                        if chore.configuration.mode == .alternating {
+                            choosingRotationBehavior = true
+                        } else {
+                            confirmingNotNeeded = true
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("not-needed-\(chore.configuration.title.accessibilitySlug)")
+                }
             }
+        }
+        .confirmationDialog("What should happen to the next turn?", isPresented: $choosingRotationBehavior,
+                            titleVisibility: .visible) {
+            Button("Keep Turn") { markNotNeeded(rotation: .keepTurn) }
+                .accessibilityIdentifier("keep-turn")
+            Button("Advance Rotation") { markNotNeeded(rotation: .advanceRotation) }
+                .accessibilityIdentifier("advance-rotation")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Keep Turn leaves \(chore.turnOwner?.displayName ?? "this child") next. Advance Rotation uses this turn, so the following child is next.")
+        }
+        .confirmationDialog("Mark this chore Not Needed Today?", isPresented: $confirmingNotNeeded,
+                            titleVisibility: .visible) {
+            Button("Not Needed Today") { markNotNeeded() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It will not count as completed or missed. Future scheduled dates stay the same.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chore-\(chore.configuration.title.accessibilitySlug)")
@@ -50,6 +82,7 @@ struct ResponsibilityRow: View {
     }
 
     private var statusLabel: String {
+        if chore.isNotNeeded { return "Not needed today" }
         guard let turn = chore.turnLabel(for: actor) else { return completionLabel }
         return chore.turnOwner == nil ? turn : "\(turn) · \(completionLabel)"
     }
@@ -119,7 +152,8 @@ struct ResponsibilityRow: View {
     @ViewBuilder
     private func stateActions(for member: FamilyMember) -> some View {
         ForEach(DailyStateKind.allCases.filter {
-            PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: $0)
+            $0 != .notNeeded
+                && PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: $0)
         }) { state in
             Button(state.rawValue, systemImage: state.symbolName) { update(member, state: state) }
         }
@@ -129,6 +163,20 @@ struct ResponsibilityRow: View {
         store.perform {
             try store.setCompletion(choreID: chore.id, memberID: member.id,
                                     date: chore.day.date(in: store.calendar), state: state)
+        }
+    }
+
+    private var canMarkNotNeeded: Bool {
+        actor.role == .parent && chore.isScheduledOccurrence
+            && chore.day == chore.today && !chore.isNotNeeded
+            && !store.cloudIsReadOnly && !store.cloudAccessBlocked
+    }
+
+    private func markNotNeeded(rotation: AlternatingSkipBehavior? = nil) {
+        store.perform {
+            try store.markOccurrenceNotNeeded(choreID: chore.id,
+                                              date: chore.day.date(in: store.calendar),
+                                              alternatingSkipBehavior: rotation)
         }
     }
 }

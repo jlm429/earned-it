@@ -226,7 +226,8 @@ final class HouseholdStore {
 
     @discardableResult
     func saveChore(choreID: UUID = UUID(), weekday: Weekday, title: String, notes: String = "",
-                   category: ResponsibilityCategory = .home, mode: RequirementMode, memberIDs: [UUID]) throws -> UUID {
+                   category: ResponsibilityCategory = .home, mode: RequirementMode, memberIDs: [UUID],
+                   schedulingMode: ChoreSchedulingMode = .scheduled) throws -> UUID {
         try requireParent()
         guard let household else { throw HouseholdError.noHousehold }
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -255,7 +256,8 @@ final class HouseholdStore {
             : orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
         let revision = ChoreRevision(id: UUID(), householdID: household.id, choreID: choreID, weekday: weekday,
                                      effectiveDay: effective, title: title, notes: notes, category: category, mode: mode,
-                                     memberIDs: mode == .all ? [] : orderedIDs, isArchived: false)
+                                     memberIDs: mode == .all ? [] : orderedIDs, isArchived: false,
+                                     schedulingMode: schedulingMode)
         try append(.chore(revision))
         return choreID
     }
@@ -265,7 +267,50 @@ final class HouseholdStore {
         guard let old = snapshot.configuration(choreID: choreID, on: tomorrow) else { throw HouseholdError.invalidAssignment }
         try append(.chore(ChoreRevision(id: UUID(), householdID: old.householdID, choreID: choreID,
                                        weekday: old.weekday, effectiveDay: tomorrow, title: old.title, notes: old.notes,
-                                       category: old.category, mode: old.mode, memberIDs: old.memberIDs, isArchived: true)))
+                                       category: old.category, mode: old.mode, memberIDs: old.memberIDs, isArchived: true,
+                                       schedulingMode: old.schedulingMode)))
+    }
+
+    func activateAsNeededChore(choreID: UUID, date: Date? = nil) throws {
+        try requireParent()
+        let occurrenceDay = CivilDay(date ?? today, calendar: calendar)
+        guard occurrenceDay == day,
+              let revision = snapshot.configuration(choreID: choreID, on: occurrenceDay),
+              !revision.isArchived, revision.schedulingMode == .asNeeded,
+              snapshot.occurrence(choreID: choreID, on: occurrenceDay) == nil,
+              !snapshot.occurrenceDispositions.contains(where: { activation in
+                  guard activation.choreID == choreID, activation.state == .available else { return false }
+                  guard snapshot.configuration(choreID: choreID, on: activation.day)?.id
+                      == activation.revisionID else { return false }
+                  return ChoreRules.dailyList(snapshot: snapshot, day: activation.day, today: day)
+                      .first(where: { $0.id == choreID })?.isFullyComplete == false
+              }),
+              !ChoreRules.eligibleMembers(for: revision, on: occurrenceDay, snapshot: snapshot).isEmpty,
+              let parent = selectedMember else { throw HouseholdError.unavailableDay }
+        try append(.occurrence(ChoreOccurrenceDisposition(
+            choreID: choreID, revisionID: revision.id, day: occurrenceDay, state: .available,
+            alternatingSkipBehavior: nil, recordedByMemberID: parent.id
+        )))
+    }
+
+    func markOccurrenceNotNeeded(choreID: UUID, date: Date,
+                                 alternatingSkipBehavior: AlternatingSkipBehavior? = nil) throws {
+        try requireParent()
+        let occurrenceDay = CivilDay(date, calendar: calendar)
+        guard occurrenceDay <= day,
+              let chore = dailyList(on: date).first(where: { $0.id == choreID }),
+              chore.isScheduledOccurrence,
+              !chore.isNotNeeded,
+              let parent = selectedMember else { throw HouseholdError.unavailableDay }
+        if chore.configuration.mode == .alternating {
+            guard alternatingSkipBehavior != nil else { throw HouseholdError.invalidAssignment }
+        } else if alternatingSkipBehavior != nil {
+            throw HouseholdError.invalidAssignment
+        }
+        try append(.occurrence(ChoreOccurrenceDisposition(
+            choreID: choreID, revisionID: chore.configuration.id, day: chore.day, state: .notNeeded,
+            alternatingSkipBehavior: alternatingSkipBehavior, recordedByMemberID: parent.id
+        )))
     }
 
     func setCompletion(choreID: UUID, memberID: UUID, date: Date, state: DailyStateKind) throws {
@@ -2159,6 +2204,9 @@ final class HouseholdStore {
         case .completion(let value):
             return hasMembers(value.eligibleMemberIDs + [value.memberID, value.recordedByMemberID])
                 && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+        case .occurrence(let value):
+            return hasMembers([value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
         case .allowance(let value): return available.member(value.memberID)?.role == .child
         case .excuse(let value): return hasMembers([value.memberID])
         case .request(let value): return hasMembers(value.memberIDs)
@@ -2196,6 +2244,11 @@ final class HouseholdStore {
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
             case .chore(let value):
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
+            case .occurrence(let value):
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      value.state == .notNeeded || value.alternatingSkipBehavior == nil else {
+                    throw HouseholdError.malformedData
+                }
             case .invitation(let value):
                 guard value.householdID == householdID, value.createdAt < value.expiresAt,
                       value.expiresAt.timeIntervalSince(value.createdAt) <= InvitationCode.lifetime,
@@ -2215,6 +2268,27 @@ final class HouseholdStore {
             }
         }
         let resolved = HouseholdSnapshot(facts: facts)
+        for occurrence in resolved.occurrenceDispositions {
+            guard let resolvedCalendar = resolved.household?.calendar else { throw HouseholdError.malformedData }
+            guard let revision = resolved.revisions.first(where: {
+                $0.id == occurrence.revisionID && $0.choreID == occurrence.choreID
+            }), revision.effectiveDay <= occurrence.day, !revision.isArchived,
+                  resolved.member(occurrence.recordedByMemberID)?.role == .parent else {
+                throw HouseholdError.malformedData
+            }
+            switch occurrence.state {
+            case .available:
+                guard revision.schedulingMode == .asNeeded,
+                      occurrence.alternatingSkipBehavior == nil else { throw HouseholdError.malformedData }
+            case .notNeeded:
+                guard revision.schedulingMode == .scheduled,
+                      resolvedCalendar.component(.weekday, from: occurrence.day.date(in: resolvedCalendar))
+                        == revision.weekday.rawValue,
+                      (revision.mode == .alternating) == (occurrence.alternatingSkipBehavior != nil) else {
+                    throw HouseholdError.malformedData
+                }
+            }
+        }
         guard Set(resolved.invitations.map(\.claimFactID)).count == resolved.invitations.count else {
             throw HouseholdError.malformedData
         }

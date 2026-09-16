@@ -4,6 +4,20 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ## Unreleased
 
+### As-needed chores and skipped occurrences
+
+- Parents can choose **As Needed** instead of a weekday schedule. The chore remains in the household list and becomes due only after a parent chooses **Make Available**. Completing it closes that occurrence without archiving the chore.
+- Earned It records at most one occurrence for a chore on a family civil day. An as-needed chore can be activated again on a later day.
+- Parents can mark a scheduled occurrence **Not Needed Today**. It remains in history but is neither completed nor missed, is excluded from allowance percentages, and neither extends nor breaks a streak.
+- For alternating chores, Not Needed Today requires an explicit **Keep Turn** or **Advance Rotation** choice. Rotation remains deterministic for any number of selected children and synchronizes through the existing fact journal.
+- Existing scheduled chores decode as scheduled without a data rewrite. Historical per-child Not Needed completion facts retain their prior credit and streak meaning so upgrades do not rewrite finished outcomes.
+
+### Family management
+
+- First-run family creation remains setup, while the completed experience now presents ongoing member, invitation, and household actions as family management.
+- The dedicated **Refresh Family** control is replaced by standard pull-to-refresh on household lists. Foreground and local-change synchronization remain automatic, and settings keeps explicit recovery actions.
+- Normal family screens use parent-facing terms and do not expose CloudKit participant, metadata, reconciliation, or digest details.
+
 ### Role-aware onboarding and invitations
 
 - First run now clearly separates creating a new family as its first approved parent from joining an existing family with a parent-issued invitation.
@@ -54,7 +68,7 @@ User-visible changes to Earned It. The shared household app is a preproduction p
 
 ### Sharing and validation limits
 
-Invite only trusted family participants. A CloudKit read/write participant can modify or delete any shared record; the app's parent/child controls are client checks, not server-enforced role authorization. Synchronization occurs on foreground, local changes, and refresh, with no real-time or background delivery guarantee.
+Invite only trusted family participants. A CloudKit read/write participant can modify or delete any shared record; the app's parent/child controls are client checks, not server-enforced role authorization. Synchronization occurs on foreground, local changes, and pull-to-refresh, with no real-time or background delivery guarantee.
 
 Signed testing on two devices with distinct iCloud accounts remains required for invitation delivery and acceptance, profile approval, offline recovery, account changes, read-only access, and revocation. Local integration tests and Simulator flows do not establish live iCloud behavior or production readiness. No production schema deployment is included.
 

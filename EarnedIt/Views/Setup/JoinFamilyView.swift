@@ -16,7 +16,7 @@ struct JoinFamilyView: View {
                 Section {
                     Label("Your parent chose your role and profile before sending the invitation.",
                           systemImage: "person.crop.circle.badge.checkmark")
-                    Label("Apple’s private iCloud share connects this device to the existing family.",
+                    Label("Your invitation securely connects this device to the existing family.",
                           systemImage: "lock.icloud")
                 } header: {
                     Text("One family, the right profile")
@@ -58,7 +58,7 @@ struct JoinFamilyView: View {
                 }
 
                 Section {
-                    Button("Find Connected Families", systemImage: "icloud.and.arrow.down") {
+                    Button("Find My Family", systemImage: "icloud.and.arrow.down") {
                         run { connectedFamilies = try await store.discoverOwnerRecoveries() }
                     }
                     .disabled(busy)
@@ -70,9 +70,9 @@ struct JoinFamilyView: View {
                         .accessibilityLabel("Reconnect to \(family.name)")
                     }
                 } header: {
-                    Text("Owner recovery")
+                    Text("Replacement device")
                 } footer: {
-                    Text("Use this on a replacement device for a family owned by this iCloud account. Ambiguous older families require a new parent invitation.")
+                    Text("Use this if you created the family on another device. If Earned It cannot identify one family safely, ask another parent for a new invitation.")
                 }
             }
             .navigationTitle("Join Existing Family")

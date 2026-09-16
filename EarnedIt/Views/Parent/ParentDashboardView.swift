@@ -63,9 +63,9 @@ struct ParentDashboardView: View {
         .navigationTitle("Family Today")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                NavigationLink { WeekdayListsView() } label: { Label("Weekday Lists", systemImage: "calendar") }
+                NavigationLink { WeekdayListsView() } label: { Label("Chores", systemImage: "calendar") }
                     .accessibilityIdentifier("weekday-lists-link")
-                NavigationLink { FamilyManagementView(parent: parent) } label: { Label("Family & Sharing", systemImage: "person.3") }
+                NavigationLink { FamilyManagementView(parent: parent) } label: { Label("Manage Family", systemImage: "person.3") }
                     .accessibilityIdentifier("family-management")
             }
         }

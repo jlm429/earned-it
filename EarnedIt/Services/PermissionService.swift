@@ -22,7 +22,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .alreadyHasHousehold: "This installation already has a family. Disconnect in Settings before joining another."
         case .cloudUnavailable: "iCloud sharing is unavailable. Sign in to iCloud on a device with the app's iCloud capability enabled, then try again. Local changes are kept."
         case .wrongAccount: "The iCloud account has changed. Switch back to the connected account before syncing this family."
-        case .invitation: "Use an Earned It iCloud family invitation. Ask a parent to send it from Family & Sharing."
+        case .invitation: "Use an Earned It iCloud family invitation. Ask a parent to send it from Manage Family."
         case .invitationNotFound: "This invitation could not be matched to your approved family profile. Scan the QR code in Earned It or open the complete invitation a parent shared. If it still fails, ask them for a new invitation."
         case .invitationExpired: "That invitation has expired. Ask a parent for a new one."
         case .invitationRevoked: "That invitation was revoked. Ask a parent for a new one."
@@ -75,9 +75,10 @@ enum PermissionService {
     }
 
     static func canSetState(actor: FamilyMember, target: UUID, chore: DailyChore, state: DailyStateKind) -> Bool {
-        guard chore.day <= chore.today,
+        guard !chore.isNotNeeded, chore.day <= chore.today,
               chore.eligibleMembers.contains(where: { $0.id == target }) else { return false }
         if actor.role == .parent { return state != .unmarked || chore.day == chore.today }
-        return actor.id == target && canChildEdit(day: chore.day, today: chore.today) && state != .missed
+        return actor.id == target && canChildEdit(day: chore.day, today: chore.today)
+            && state != .missed && state != .notNeeded
     }
 }

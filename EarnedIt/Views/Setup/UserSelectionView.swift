@@ -32,12 +32,13 @@ struct UserSelectionView: View {
                     }
                     if store.profiles.isEmpty {
                         invitationAccess
-                        NavigationLink("Connection Settings") { HouseholdSettingsView() }
+                        NavigationLink("Device Settings") { HouseholdSettingsView() }
                     }
                     SyncStatusView()
                 }
                 .padding(20)
             }
+            .refreshable { await refreshFamily() }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("Profiles")
             .sheet(isPresented: $scanning) {
@@ -93,6 +94,11 @@ struct UserSelectionView: View {
             catch { store.errorMessage = error.localizedDescription }
         }
     }
+
+    private func refreshFamily() async {
+        do { try await store.synchronize() }
+        catch { store.errorMessage = error.localizedDescription }
+    }
 }
 
 struct SyncStatusView: View {
@@ -100,22 +106,23 @@ struct SyncStatusView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if store.session.location != nil {
+            if store.session.location != nil && shouldShowStatus {
                 Label(store.syncMessage, systemImage: store.cloudAccessBlocked ? "exclamationmark.icloud" : "icloud")
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("sync-status")
                 if !store.rejectedChanges.isEmpty {
-                    Text("\(store.rejectedChanges.count) changes kept on this device but not shared. Ask a parent to restore profile access, then refresh. Archived profiles need parent review.")
+                    Text("\(store.rejectedChanges.count) changes are saved on this device but not shared. Ask a parent to restore access, then pull down to check again. Archived profiles need parent review.")
                         .font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("rejected-changes")
                 }
                 if store.pendingCount > 0 { Text("\(store.pendingCount) changes waiting to sync").font(.caption).foregroundStyle(.secondary) }
-                Button("Refresh Family", systemImage: "arrow.clockwise") {
-                    Task { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }
-                }
-                .disabled(store.isSyncing)
-                .accessibilityIdentifier("refresh-family")
             }
         }
+    }
+
+    private var shouldShowStatus: Bool {
+        store.isSyncing || store.cloudAccessBlocked || store.cloudIsReadOnly
+            || store.syncMessage == "Sync needs attention. Changes are kept."
+            || store.pendingCount > 0 || !store.rejectedChanges.isEmpty
     }
 }

@@ -112,16 +112,14 @@ final class EarnedItUITests: XCTestCase {
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
     }
 
-    func testLastJoinReceiptIsVisibleAfterReturningToOnboarding() {
+    func testJoinDiagnosticsStayOutOfOnboarding() {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-last-join-receipt"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-        let receipt = screen("last-join-receipt")
-        reveal(receipt)
-        XCTAssertTrue(receipt.exists)
-        XCTAssertTrue(app.staticTexts["cloudKitPermission"].exists)
-        XCTAssertTrue(app.staticTexts["claim"].exists)
+        XCTAssertFalse(screen("last-join-receipt").exists)
+        XCTAssertFalse(app.staticTexts["cloudKitPermission"].exists)
+        XCTAssertFalse(app.staticTexts["claim"].exists)
         XCTAssertFalse(screen("child-home").exists)
         XCTAssertFalse(screen("parent-dashboard").exists)
     }
@@ -229,11 +227,10 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Unmarked"))
         XCTAssertFalse(app.alerts["Remove this contribution?"].exists)
         app.buttons["state-feed-dog-new-child"].press(forDuration: 1)
-        tap("Not Needed Today")
-        XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Not Needed Today"))
-        keepScreenshot("after-child-own-control-and-sibling-states")
-        tap("state-feed-dog-new-child")
+        XCTAssertFalse(app.buttons["Not Needed Today"].exists)
+        tap("Done")
         XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Done"))
+        keepScreenshot("after-child-own-control-and-sibling-states")
         relaunch()
         XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
         reveal(app.buttons["state-feed-dog-new-child"])
@@ -311,6 +308,81 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Set the table"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["state-set-the-table-alek"].exists)
         keepScreenshot("alternating-other-child-hidden")
+    }
+
+    func testParentActivatesAndCompletesAsNeededChore() {
+        createFamily()
+        addChild("Hanna")
+        tap("finish-setup")
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        tap("add-as-needed-chore")
+        fill("responsibility-title", with: "Unload dishwasher")
+        tap("chore-requirement")
+        tap("One child")
+        app.switches["eligible-hanna"].switches.firstMatch.tap()
+        tap("save-responsibility")
+
+        tap("make-available-unload-dishwasher")
+        XCTAssertTrue(app.staticTexts["Available Today"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("state-unload-dishwasher-hanna")
+        XCTAssertTrue(waitForLabel(app.buttons["state-unload-dishwasher-hanna"], containing: "Done"))
+
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
+        keepScreenshot("as-needed-completed-today")
+        relaunch()
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
+        keepScreenshot("as-needed-completed-after-relaunch")
+    }
+
+    func testParentChoosesAlternatingNotNeededRotationBehavior() {
+        createFamily()
+        addChild("Hanna")
+        addChild("Alek")
+        addChild("Nora")
+        tap("setup-weekday-lists")
+        tap("weekday-\(Calendar.current.component(.weekday, from: Date()))")
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Set the table")
+        tap("chore-requirement")
+        tap("Alternate / take turns")
+        app.switches["eligible-hanna"].switches.firstMatch.tap()
+        app.switches["eligible-alek"].switches.firstMatch.tap()
+        app.switches["eligible-nora"].switches.firstMatch.tap()
+        tap("save-responsibility")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("finish-setup")
+
+        tap("not-needed-set-the-table")
+        XCTAssertTrue(app.buttons["keep-turn"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["advance-rotation"].firstMatch.exists)
+        app.buttons["keep-turn"].firstMatch.tap()
+        XCTAssertEqual(app.staticTexts["full-status-set-the-table"].label, "Not needed today")
+        XCTAssertFalse(app.buttons["state-set-the-table-alek"].exists)
+        keepScreenshot("alternating-not-needed-today")
+        tap("switch-user")
+        tap("user-card-alek")
+        XCTAssertFalse(app.staticTexts["Set the table"].waitForExistence(timeout: 2))
+    }
+
+    func testManageFamilyUsesPullToRefreshWithoutDedicatedRefreshButton() {
+        createFamily()
+        addChild("Hanna")
+        tap("finish-setup")
+        tap("family-management")
+
+        XCTAssertTrue(app.navigationBars["Manage Family"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Refresh Family"].exists)
+        app.swipeDown()
+        XCTAssertTrue(app.navigationBars["Manage Family"].exists)
+        keepScreenshot("manage-family-pull-to-refresh")
     }
 
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {

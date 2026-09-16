@@ -165,7 +165,8 @@ final class AllowanceTests: XCTestCase {
     func testExcusesAndNotNeededAccountForRequiredItemsWithoutSiblingCredit() throws {
         let family = try TestFamily()
         let chore = try family.chore()
-        try family.complete(chore, as: family.hanna, state: .notNeeded)
+        try family.store.setCompletion(choreID: chore, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .notNeeded)
         family.move(to: "2026-09-14T16:00:00Z")
         XCTAssertTrue(family.store.allowanceHistory(for: family.hanna.id)[1].earned)
         XCTAssertFalse(family.store.allowanceHistory(for: family.alek.id)[1].earned)

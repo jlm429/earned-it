@@ -11,25 +11,31 @@ struct HouseholdSettingsView: View {
                 Text("Lists and history always use this family timezone, even when a device travels.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Section("This installation") {
+            Section("This Device") {
                 SyncStatusView()
                 Text(store.session.location == nil
-                     ? "This family is saved on this device. Connect iCloud from Family & Sharing to invite others."
-                     : "Disconnect removes synced local data unless rejected changes need it as evidence. Reconnect to the same family to review retained changes. iCloud and other devices keep their data.")
-                Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Installation", role: .destructive) {
+                     ? "This family is saved only on this device. Invite a family member from Manage Family to begin sharing."
+                     : "Disconnect removes this family from this device. Other family devices keep their data, and you can reconnect later.")
+                Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
                     confirmingReset = true
                 }
                 .accessibilityIdentifier("clear-all-data")
             }
         }
+        .refreshable { await refreshFamily() }
         .navigationTitle("Settings")
         .alert("Remove local family data?", isPresented: $confirmingReset) {
             Button("Remove Local Data", role: .destructive) { store.perform { try store.resetLocalData() } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(store.session.location == nil
-                 ? "This deletes the family saved on this installation. This cannot be undone."
-                 : "iCloud and other installations keep their data. Sync pending changes first. You can reconnect later.")
+                 ? "This deletes the family saved on this device. This cannot be undone."
+                 : "Other family devices keep their data. Any waiting changes must finish syncing first. You can reconnect later.")
         }
+    }
+
+    private func refreshFamily() async {
+        do { try await store.synchronize() }
+        catch { store.errorMessage = error.localizedDescription }
     }
 }

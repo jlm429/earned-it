@@ -5,6 +5,7 @@ struct ResponsibilityFormView: View {
     @Environment(HouseholdStore.self) private var store
     let existing: ChoreRevision?
     @State private var choreID: UUID
+    @State private var schedulingMode: ChoreSchedulingMode
     @State private var weekday: Weekday
     @State private var title: String
     @State private var notes: String
@@ -13,9 +14,11 @@ struct ResponsibilityFormView: View {
     @State private var memberIDs: Set<UUID>
     @State private var errorMessage: String?
 
-    init(weekday: Weekday, existing: ChoreRevision? = nil) {
+    init(weekday: Weekday, existing: ChoreRevision? = nil,
+         schedulingMode: ChoreSchedulingMode = .scheduled) {
         self.existing = existing
         _choreID = State(initialValue: existing?.choreID ?? UUID())
+        _schedulingMode = State(initialValue: existing?.schedulingMode ?? schedulingMode)
         _weekday = State(initialValue: existing?.weekday ?? weekday)
         _title = State(initialValue: existing?.title ?? "")
         _notes = State(initialValue: existing?.notes ?? "")
@@ -54,9 +57,15 @@ struct ResponsibilityFormView: View {
                 Section("Chore") {
                     TextField("Title", text: $title).accessibilityIdentifier("responsibility-title")
                     TextField("Notes (optional)", text: $notes, axis: .vertical).lineLimit(2...5)
-                    Picker("Weekday", selection: $weekday) {
-                        ForEach(Weekday.allCases) { day in Text(day.title).tag(day) }
-                    }.accessibilityIdentifier("chore-weekday")
+                    Picker("Schedule", selection: $schedulingMode) {
+                        ForEach(ChoreSchedulingMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    .accessibilityIdentifier("chore-schedule")
+                    if schedulingMode == .scheduled {
+                        Picker("Weekday", selection: $weekday) {
+                            ForEach(Weekday.allCases) { day in Text(day.title).tag(day) }
+                        }.accessibilityIdentifier("chore-weekday")
+                    }
                     Picker("Category", selection: $category) {
                         ForEach(ResponsibilityCategory.allCases) { category in
                             Label(category.rawValue, systemImage: category.symbolName).tag(category)
@@ -100,9 +109,7 @@ struct ResponsibilityFormView: View {
                     }
                 }
                 Section {
-                    Text(existing == nil
-                         ? "Repeats on \(weekday.title)s, starting today. Each date starts with no completions."
-                         : "Changes start tomorrow. Today’s assignment and all dated completions are kept.")
+                    Text(scheduleHelp)
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -123,7 +130,7 @@ struct ResponsibilityFormView: View {
                             let assignment = try assignmentToSave()
                             try store.saveChore(choreID: choreID, weekday: weekday, title: title, notes: notes,
                                                 category: category, mode: assignment.mode,
-                                                memberIDs: assignment.memberIDs)
+                                                memberIDs: assignment.memberIDs, schedulingMode: schedulingMode)
                             dismiss()
                         } catch { errorMessage = error.localizedDescription }
                     }
@@ -141,7 +148,18 @@ struct ResponsibilityFormView: View {
     private var alternatingHelp: String {
         let names = selectedChildrenInTurnOrder.map(\.displayName)
         if names.count < 2 { return "Choose at least two children. One child owns each date." }
-        return "Turn order: \(names.joined(separator: ", ")). It advances with each scheduled date, even when a turn is not completed."
+        let trigger = schedulingMode == .asNeeded ? "each activation" : "each scheduled date"
+        return "Turn order: \(names.joined(separator: ", ")). It advances with \(trigger), even when a turn is not completed."
+    }
+
+    private var scheduleHelp: String {
+        if existing != nil {
+            return "Changes start tomorrow. Today’s assignment and all dated history are kept."
+        }
+        if schedulingMode == .asNeeded {
+            return "This chore stays in your family’s As Needed list until a parent makes it available."
+        }
+        return "Repeats on \(weekday.title)s, starting today. Each date starts with no completions."
     }
 
     private func assignmentToSave() throws -> (mode: RequirementMode, memberIDs: [UUID]) {

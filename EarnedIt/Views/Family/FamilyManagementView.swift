@@ -13,7 +13,7 @@ struct FamilyManagementView: View {
 
     var body: some View {
         List {
-            Section("Family members") {
+            Section("Family Members") {
                 ForEach(store.snapshot.members.filter { $0.archivedFrom == nil || store.snapshot.isActive($0, on: store.day) }) { member in
                     HStack(spacing: 12) {
                         AvatarView(user: member, size: 44)
@@ -31,24 +31,20 @@ struct FamilyManagementView: View {
                         .accessibilityLabel("Manage \(member.displayName)")
                     }
                 }
-                Button("Add Parent") { addingRole = .parent }
                 Button("Add Child") { addingRole = .child }.accessibilityIdentifier("family-add-child")
+                Button("Add Parent Profile") { addingRole = .parent }
             }
-            Section("Invite & connect") {
+            Section("Sharing") {
                 SyncStatusView()
-                if store.session.location == nil {
-                    Button("Connect Family to iCloud") { run { try await store.connect() } }
-                        .disabled(busy).accessibilityIdentifier("connect-icloud")
-                }
-                Button("Invite a Parent or Child", systemImage: "person.badge.plus") { inviting = true }
+                Button("Invite Family Member", systemImage: "person.badge.plus") { inviting = true }
                     .disabled(busy)
                     .accessibilityIdentifier("invite-profile")
                 if store.session.location != nil, store.session.location?.isOwner != true {
-                    Text("Apple requires the family owner to create and revoke participant access. Other approved parents retain full family management access in Earned It.")
+                    Text("Only the person who first shared this family can invite or remove devices. Other parents can still manage the family in Earned It.")
                 }
-                Text("Each invitation is bound to one role and profile, expires after 24 hours, and uses Apple’s private one-time sharing access.")
+                Text("Each invitation is for one family member and expires after 24 hours. Earned It will turn on family sharing automatically when needed.")
                     .font(.footnote).foregroundStyle(.secondary)
-                if busy { ProgressView("Connecting…") }
+                if busy { ProgressView("Updating…") }
             }
             if !store.familyInvitations.isEmpty {
                 Section("Invitations") {
@@ -58,7 +54,7 @@ struct FamilyManagementView: View {
                             Label(invitationStatusText(invitation), systemImage: invitationStatusSymbol(invitation))
                                 .font(.caption).foregroundStyle(.secondary)
                             if store.invitationStatus(invitation) != .revoked {
-                                Button(store.invitationStatus(invitation) == .consumed ? "Remove Installation Access" : "Revoke Invitation",
+                                Button(store.invitationStatus(invitation) == .consumed ? "Remove Device Access" : "Revoke Invitation",
                                        role: .destructive) {
                                     revokingInvitation = invitation
                                 }
@@ -69,7 +65,7 @@ struct FamilyManagementView: View {
                 }
             }
             if !store.pendingRequests.isEmpty {
-                Section("Profile requests") {
+                Section("Access Requests") {
                     ForEach(store.pendingRequests) { request in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(request.deviceName).font(.headline)
@@ -84,10 +80,10 @@ struct FamilyManagementView: View {
                 }
             }
             if !store.snapshot.grants.isEmpty {
-                Section("Approved installations") {
+                Section("Devices with Access") {
                     ForEach(store.snapshot.grants.filter { !$0.memberIDs.isEmpty }, id: \.key) { grant in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(store.snapshot.requests.first { $0.id == grant.requestID }?.deviceName ?? "Family installation")
+                            Text(store.snapshot.requests.first { $0.id == grant.requestID }?.deviceName ?? "Family device")
                                 .font(.headline)
                             Text(profileNames(grant.memberIDs)).foregroundStyle(.secondary)
                             Button("Remove Profile Access", role: .destructive) {
@@ -99,7 +95,8 @@ struct FamilyManagementView: View {
             }
             Section { NavigationLink("Settings") { HouseholdSettingsView() }.accessibilityIdentifier("household-settings") }
         }
-        .navigationTitle("Family & Sharing")
+        .refreshable { await refreshFamily() }
+        .navigationTitle("Manage Family")
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
         .sheet(isPresented: $inviting) { FamilyInvitationView() }
@@ -132,7 +129,7 @@ struct FamilyManagementView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The code will stop working. If it was already used, this installation loses Apple and profile access without changing family data.")
+            Text("The code will stop working. If it was already used, that device will lose family access without changing family data.")
         }
         .accessibilityIdentifier("family-management-screen")
     }
@@ -170,5 +167,10 @@ struct FamilyManagementView: View {
             defer { busy = false }
             do { try await action() } catch { store.errorMessage = error.localizedDescription }
         }
+    }
+
+    private func refreshFamily() async {
+        do { try await store.synchronize() }
+        catch { store.errorMessage = error.localizedDescription }
     }
 }
