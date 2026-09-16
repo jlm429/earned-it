@@ -193,6 +193,51 @@ final class SchedulingImprovementsTests: XCTestCase {
         }
     }
 
+    func testHistoryOnlyRowCannotBeMarkedNotNeededAfterConcurrentReschedule() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Set table", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let original = try XCTUnwrap(
+            family.store.snapshot.configuration(choreID: chore, on: family.store.day)
+        )
+        try family.complete(chore, as: family.hanna)
+        let completionFact = try XCTUnwrap(
+            family.repository.facts(householdID: original.householdID).first {
+                guard case .completion(let completion) = $0.body else { return false }
+                return completion.choreID == chore
+            }
+        )
+        let winningRevision = ChoreRevision(
+            id: UUID(), householdID: original.householdID, choreID: chore,
+            weekday: .tuesday, effectiveDay: family.store.day, title: original.title,
+            notes: original.notes, category: original.category, mode: original.mode,
+            memberIDs: original.memberIDs, isArchived: false
+        )
+        try family.repository.commit(facts: [HouseholdFact(
+            id: UUID(), householdID: original.householdID, sequence: completionFact.sequence,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .chore(winningRevision)
+        )], uploaded: true)
+
+        let reopened = try HouseholdStore(
+            repository: family.repository, clock: { family.clock.now }, automaticSync: false
+        )
+        try reopened.selectProfile(family.parent.id)
+        let row = try XCTUnwrap(reopened.dailyList().first { $0.id == chore })
+        XCTAssertEqual(row.configuration.id, winningRevision.id)
+        XCTAssertTrue(row.contributions.isEmpty)
+        XCTAssertEqual(row.historicalContributions, [
+            HistoricalContribution(revisionID: original.id, member: family.hanna, state: .done)
+        ])
+
+        XCTAssertThrowsError(try reopened.markOccurrenceNotNeeded(choreID: chore, date: family.clock.now)) {
+            XCTAssertEqual($0 as? HouseholdError, .unavailableDay)
+        }
+        XCTAssertNil(reopened.snapshot.occurrence(choreID: chore, on: reopened.day))
+    }
+
     func testConflictingAlternatingChoicesConvergeInEitherDeliveryOrder() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)

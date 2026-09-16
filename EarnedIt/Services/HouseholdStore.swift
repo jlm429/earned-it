@@ -295,9 +295,12 @@ final class HouseholdStore {
                                  alternatingSkipBehavior: AlternatingSkipBehavior? = nil) throws {
         try requireParent()
         let occurrenceDay = CivilDay(date, calendar: calendar)
+        let weekday = calendar.component(.weekday, from: occurrenceDay.date(in: calendar))
         guard occurrenceDay <= day,
               let chore = dailyList(on: date).first(where: { $0.id == choreID }),
+              !chore.configuration.isArchived,
               chore.configuration.schedulingMode == .scheduled,
+              chore.configuration.weekday.rawValue == weekday,
               !chore.isNotNeeded,
               let parent = selectedMember else { throw HouseholdError.unavailableDay }
         if chore.configuration.mode == .alternating {
