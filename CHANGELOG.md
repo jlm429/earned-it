@@ -9,6 +9,7 @@ User-visible changes to Earned It.
 - Added accessible privacy-policy and support links during setup, in Settings, and from parent and child screens.
 - Added a privacy manifest describing the family data retained in CloudKit for app functionality and confirming that the app does not track people.
 - Replaced the named quotation and loose attribution presentation with short, unattributed daily microcopy.
+- Updated the iOS app icon with the supplied Earned It artwork.
 - Reworked the public README and added App Store release, privacy, metadata, visual asset, and attribution documentation.
 
 ### As-needed chores and skipped occurrences
