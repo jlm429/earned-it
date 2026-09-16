@@ -334,4 +334,52 @@ final class SchedulingImprovementsTests: XCTestCase {
         XCTAssertEqual(peer.dailyList(on: nextMonday).first { $0.id == alternating }?.turnOwnerID,
                        family.store.dailyList(on: nextMonday).first { $0.id == alternating }?.turnOwnerID)
     }
+
+    func testDisplacedRevisionActivationRemainsAuditOnlyAfterSynchronization() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Unload dishwasher", mode: .particular,
+            memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+        let displacedRevision = try XCTUnwrap(
+            family.store.snapshot.configuration(choreID: chore, on: family.store.day)
+        )
+        try await family.store.connect()
+
+        let peerClock = TestClock()
+        let peer = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { peerClock.now }, automaticSync: false
+        )
+        try await peer.joinExisting(family.store.session.location!)
+        try peer.requestProfiles([family.parent.id], deviceName: "Other parent device")
+        try await peer.synchronize()
+        try await family.store.synchronize()
+        try family.store.approve(XCTUnwrap(family.store.pendingRequests.first), memberIDs: [family.parent.id])
+        try await family.store.synchronize()
+        try await peer.synchronize()
+        try peer.selectProfile(family.parent.id)
+
+        family.move(to: "2026-09-08T16:00:00Z")
+        try family.store.activateAsNeededChore(choreID: chore)
+        try peer.saveChore(
+            choreID: chore, weekday: .monday, title: "Unload and put away dishwasher",
+            mode: .particular, memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+        let winningRevision = try XCTUnwrap(
+            peer.snapshot.configuration(choreID: chore, on: family.store.day)
+        )
+
+        try await family.store.synchronize()
+        try await peer.synchronize()
+        try await family.store.synchronize()
+
+        XCTAssertEqual(family.store.snapshot.configuration(choreID: chore, on: family.store.day)?.id,
+                       winningRevision.id)
+        XCTAssertEqual(family.store.snapshot.occurrence(choreID: chore, on: family.store.day)?.revisionID,
+                       displacedRevision.id)
+        XCTAssertFalse(family.store.dailyList().contains { $0.id == chore })
+    }
 }

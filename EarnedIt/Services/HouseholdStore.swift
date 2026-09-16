@@ -2271,7 +2271,6 @@ final class HouseholdStore {
             guard let revision = resolved.revisions.first(where: {
                 $0.id == occurrence.revisionID && $0.choreID == occurrence.choreID
             }), revision.effectiveDay <= occurrence.day, !revision.isArchived,
-                  resolved.configuration(choreID: occurrence.choreID, on: occurrence.day)?.id == revision.id,
                   resolved.member(occurrence.recordedByMemberID)?.role == .parent else {
                 throw HouseholdError.malformedData
             }
