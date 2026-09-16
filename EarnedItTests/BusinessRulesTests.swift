@@ -776,10 +776,12 @@ final class BusinessRulesTests: XCTestCase {
     func testAnyOnePersonalExemptionDoesNotClearAnotherChildsOpportunity() throws {
         let family = try TestFamily()
         let id = try family.chore(.anyOne, ids: [family.hanna.id, family.alek.id])
-        try family.complete(id, as: family.hanna, state: .notNeeded)
+        try family.store.setCompletion(choreID: id, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .notNeeded)
         XCTAssertFalse(family.store.dailyList()[0].isFullyComplete)
         XCTAssertEqual(family.store.dailyList()[0].remainingMembers.map(\.id), [family.alek.id])
-        try family.complete(id, as: family.alek, state: .notNeeded)
+        try family.store.setCompletion(choreID: id, memberID: family.alek.id,
+                                       date: family.clock.now, state: .notNeeded)
         XCTAssertTrue(family.store.dailyList()[0].isFullyComplete)
         XCTAssertTrue(family.store.dailyList()[0].completedMembers.isEmpty)
     }
@@ -834,7 +836,8 @@ final class BusinessRulesTests: XCTestCase {
     func testDoneNotNeededExcusesAndStreakNeutrality() throws {
         let family = try TestFamily()
         let id = try family.chore()
-        try family.complete(id, as: family.hanna, state: .notNeeded)
+        try family.store.setCompletion(choreID: id, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .notNeeded)
         XCTAssertEqual(family.store.weekFacts(for: family.hanna.id)[0].accountedCount, 1)
         XCTAssertEqual(MetricsService.streak(childID: family.hanna.id, snapshot: family.store.snapshot, today: family.clock.now), 1)
         try family.store.selectProfile(family.parent.id)

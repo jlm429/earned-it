@@ -68,21 +68,6 @@ struct SetupView: View {
                               systemImage: "lock.shield")
                             .foregroundStyle(.secondary)
                     }
-                    if let receipt = store.lastJoinReceipt {
-                        Section("Last join diagnostic") {
-                            diagnosticRow("Native acceptance", receipt.nativeAcceptance.rawValue)
-                            diagnosticRow("Shared zone visible", receipt.sharedZoneVisible.rawValue)
-                            diagnosticRow("Claim", receipt.claim.rawValue)
-                            diagnosticRow("Membership lock", receipt.lock.rawValue)
-                            diagnosticRow("Exact membership", receipt.exactMembership.rawValue)
-                            diagnosticRow("Local attach", receipt.localAttach.rawValue)
-                            diagnosticRow("Root route", receipt.rootRoute.rawValue)
-                            diagnosticRow("Failure stage", receipt.failureStage?.rawValue ?? "none")
-                            diagnosticRow("Failure category", receipt.failureCategory.rawValue)
-                            diagnosticRow("Refusal reason", receipt.refusalReason?.rawValue ?? "none")
-                        }
-                        .accessibilityIdentifier("last-join-receipt")
-                    }
                 } else {
                     Section("Your family") {
                         Text(store.household?.name ?? "Family").font(.title2.bold())
@@ -93,23 +78,21 @@ struct SetupView: View {
                         Button("Add Child") { addingChild = true }
                             .accessibilityIdentifier("setup-add-child")
                     }
-                    Section("One shared list for each weekday") {
-                        Text("Choose who is needed for each chore. Each weekday’s list repeats; completions belong only to that date.")
-                        NavigationLink("Configure Weekday Lists") { WeekdayListsView() }
+                    Section("Add your first chores") {
+                        Text("You can add a few repeating chores now or do this later.")
+                        NavigationLink("Add Chores") { WeekdayListsView() }
                             .disabled(store.children.isEmpty)
                             .accessibilityIdentifier("setup-weekday-lists")
-                        Text("You can add chores later.").font(.footnote).foregroundStyle(.secondary)
                     }
                     Section("Progress & allowance") {
-                        Text("Each child earns credit for their own work. Required chores count toward their week. Any-one chores are optional contributions, so another child’s work never counts as yours.")
-                        Text("Every required item must be accounted for to earn allowance after Sunday. Excused days are left out. Parents can set a weekly amount for each child. This tracks eligibility, never payments.")
+                        Text("Each child earns credit for their own required chores. Parents can set a weekly allowance amount after setup.")
                     }
                     Section {
-                        Button("Start Our Week") { store.perform { try store.finishSetup() } }
+                        Button("Finish Setup") { store.perform { try store.finishSetup() } }
                             .disabled(store.children.isEmpty)
                             .accessibilityIdentifier("finish-setup")
                     } footer: {
-                        Text("Saved members and chores stay if you close the app. Parents can invite devices from Family & Sharing.")
+                        Text("You can invite family members and make changes later from Manage Family.")
                     }
                 }
             }
@@ -121,9 +104,5 @@ struct SetupView: View {
             )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
             .accessibilityIdentifier("setup-screen")
         }
-    }
-
-    private func diagnosticRow(_ label: String, _ value: String) -> some View {
-        LabeledContent(label, value: value)
     }
 }

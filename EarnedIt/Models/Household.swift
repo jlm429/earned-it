@@ -130,6 +130,63 @@ struct ChoreRevision: Codable, Equatable, Identifiable {
     let mode: RequirementMode
     let memberIDs: [UUID]
     let isArchived: Bool
+    let schedulingMode: ChoreSchedulingMode
+
+    init(id: UUID, householdID: UUID, choreID: UUID, weekday: Weekday, effectiveDay: CivilDay,
+         title: String, notes: String, category: ResponsibilityCategory, mode: RequirementMode,
+         memberIDs: [UUID], isArchived: Bool, schedulingMode: ChoreSchedulingMode = .scheduled) {
+        self.id = id
+        self.householdID = householdID
+        self.choreID = choreID
+        self.weekday = weekday
+        self.effectiveDay = effectiveDay
+        self.title = title
+        self.notes = notes
+        self.category = category
+        self.mode = mode
+        self.memberIDs = memberIDs
+        self.isArchived = isArchived
+        self.schedulingMode = schedulingMode
+    }
+}
+
+extension ChoreRevision {
+    private enum CodingKeys: String, CodingKey {
+        case id, householdID, choreID, weekday, effectiveDay, title, notes, category, mode, memberIDs, isArchived
+        case schedulingMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        householdID = try container.decode(UUID.self, forKey: .householdID)
+        choreID = try container.decode(UUID.self, forKey: .choreID)
+        weekday = try container.decode(Weekday.self, forKey: .weekday)
+        effectiveDay = try container.decode(CivilDay.self, forKey: .effectiveDay)
+        title = try container.decode(String.self, forKey: .title)
+        notes = try container.decode(String.self, forKey: .notes)
+        category = try container.decode(ResponsibilityCategory.self, forKey: .category)
+        mode = try container.decode(RequirementMode.self, forKey: .mode)
+        memberIDs = try container.decode([UUID].self, forKey: .memberIDs)
+        isArchived = try container.decode(Bool.self, forKey: .isArchived)
+        schedulingMode = try container.decodeIfPresent(ChoreSchedulingMode.self, forKey: .schedulingMode) ?? .scheduled
+    }
+}
+
+enum ChoreOccurrenceState: String, Codable, Equatable {
+    case available
+    case notNeeded
+}
+
+struct ChoreOccurrenceDisposition: Codable, Equatable {
+    let choreID: UUID
+    let revisionID: UUID
+    let day: CivilDay
+    let state: ChoreOccurrenceState
+    let alternatingSkipBehavior: AlternatingSkipBehavior?
+    let recordedByMemberID: UUID
+
+    var key: String { "\(choreID)/\(day)" }
 }
 
 struct DatedCompletion: Codable, Equatable {
@@ -205,6 +262,7 @@ enum HouseholdFactBody: Codable, Equatable {
     case member(FamilyMember)
     case chore(ChoreRevision)
     case completion(DatedCompletion)
+    case occurrence(ChoreOccurrenceDisposition)
     case allowance(AllowanceRevision)
     case excuse(Excuse)
     case request(ProfileRequest)
@@ -234,6 +292,7 @@ struct HouseholdSnapshot: Equatable {
     var revisions: [ChoreRevision] = []
     var completions: [DatedCompletion] = []
     var recordedAssignments: [DatedCompletion] = []
+    var occurrenceDispositions: [ChoreOccurrenceDisposition] = []
     private var parentCreationOrder: [UUID] = []
     var allowances: [AllowanceRevision] = []
     var excuses: [Excuse] = []
@@ -247,6 +306,7 @@ struct HouseholdSnapshot: Equatable {
         var membersByID: [UUID: FamilyMember] = [:]
         var creationSequence: [UUID: Int64] = [:]
         var completionsByKey: [String: DatedCompletion] = [:]
+        var occurrencesByKey: [String: ChoreOccurrenceDisposition] = [:]
         var excusesByKey: [String: Excuse] = [:]
         var requestsByID: [UUID: ProfileRequest] = [:]
         var grantsByKey: [String: ProfileGrant] = [:]
@@ -263,6 +323,7 @@ struct HouseholdSnapshot: Equatable {
             case .completion(let value):
                 completionsByKey[value.key] = value
                 recordedAssignments.append(value)
+            case .occurrence(let value): occurrencesByKey[value.key] = value
             case .allowance(let value): allowances.append(value)
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
@@ -280,6 +341,7 @@ struct HouseholdSnapshot: Equatable {
         parentCreationOrder = parents.map(\.id)
         members = membersByID.values.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         completions = completionsByKey.values.sorted { $0.key < $1.key }
+        occurrenceDispositions = occurrencesByKey.values.sorted { $0.key < $1.key }
         excuses = excusesByKey.values.sorted { $0.key < $1.key }
         requests = requestsByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
         grants = grantsByKey.values.sorted { $0.key < $1.key }
@@ -306,6 +368,10 @@ struct HouseholdSnapshot: Equatable {
     }
 
     func member(_ id: UUID) -> FamilyMember? { members.first { $0.id == id } }
+
+    func occurrence(choreID: UUID, on day: CivilDay) -> ChoreOccurrenceDisposition? {
+        occurrenceDispositions.first { $0.choreID == choreID && $0.day == day }
+    }
 
     func invitation(_ id: UUID) -> FamilyInvitation? { invitations.first { $0.id == id } }
     func invitationClaim(_ id: UUID) -> InvitationClaim? { invitationClaims.first { $0.invitationID == id } }

@@ -95,7 +95,7 @@ enum AllowanceService {
             let day = start.adding(days: offset, calendar: calendar)
             if snapshot.excuses.contains(where: { $0.memberID == childID && $0.day == day && $0.isExcused }) { return [] }
             return ChoreRules.dailyList(snapshot: snapshot, day: day, today: current)
-                .filter { $0.requiredMemberIDs.contains(childID) }
+                .filter { !$0.isNotNeeded && $0.requiredMemberIDs.contains(childID) }
                 .map { WeeklyItem(choreID: $0.id, day: day, title: $0.configuration.title, state: $0.state(for: childID)) }
         }
         let revision = snapshot.allowances.filter { $0.memberID == childID && $0.effectiveWeek <= start }

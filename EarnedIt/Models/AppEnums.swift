@@ -39,6 +39,32 @@ enum ResponsibilityCategory: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum ChoreSchedulingMode: String, Codable, CaseIterable, Identifiable {
+    case scheduled
+    case asNeeded
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .scheduled: "Scheduled"
+        case .asNeeded: "As Needed"
+        }
+    }
+}
+
+enum AlternatingSkipBehavior: String, Codable, CaseIterable, Identifiable {
+    case keepTurn
+    case advanceRotation
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .keepTurn: "Keep Turn"
+        case .advanceRotation: "Advance Rotation"
+        }
+    }
+}
+
 enum DailyStateKind: String, Codable, CaseIterable, Identifiable {
     case unmarked = "Unmarked"
     case done = "Done"
