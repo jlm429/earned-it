@@ -331,6 +331,30 @@ final class ProductionCleanupTests: XCTestCase {
                                              today: family.clock.now), streakBeforeDeletion)
     }
 
+    func testDeleteChoreDropsIncompleteSiblingObligations() throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.multiple, ids: [family.hanna.id, family.alek.id])
+        let monday = family.clock.now
+        try family.complete(chore, as: family.hanna)
+        try family.store.selectProfile(family.parent.id)
+
+        try family.store.deleteChore(chore)
+        family.move(to: "2026-09-08T16:00:00Z")
+
+        let hidden = try XCTUnwrap(family.store.dailyList(on: monday).first { $0.id == chore })
+        XCTAssertEqual(Set(hidden.eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertEqual(hidden.requiredMemberIDs, [family.hanna.id])
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id, containing: monday).items
+            .first { $0.choreID == chore }?.state, .done)
+        XCTAssertNil(family.store.allowanceWeek(for: family.alek.id, containing: monday).items
+            .first { $0.choreID == chore })
+        let alekMonday = MetricsService.weekFacts(
+            childID: family.alek.id, containing: monday,
+            snapshot: family.store.snapshot, today: family.clock.now
+        ).first
+        XCTAssertEqual(alekMonday?.requiredStates, [])
+    }
+
     func testDeleteChoreKeepsDisplacedRevisionOutOfRequirements() throws {
         let family = try TestFamily()
         let children = [family.hanna, family.alek].sorted { $0.id.uuidString < $1.id.uuidString }

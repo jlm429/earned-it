@@ -111,7 +111,7 @@ enum ChoreRules {
                     snapshot.revisions.first { $0.id == completion.revisionID }
                 }) else { return nil }
                 let eligibleIDs = Set(retained.flatMap(\.eligibleMemberIDs))
-                let requiredIDs = original.mode == .anyOne ? [] : eligibleIDs
+                let requiredIDs = original.mode == .anyOne ? [] : Set(retained.map(\.memberID))
                 let members = snapshot.members.filter { eligibleIDs.contains($0.id) }
                 return DailyChore(
                     configuration: original, day: day, eligibleMembers: members,
