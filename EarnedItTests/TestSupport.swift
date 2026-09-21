@@ -274,9 +274,8 @@ final class TestTransport: HouseholdTransport {
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
         await beforeFetch?()
         if let fetchError { throw fetchError }
-        guard let zone = server.zones[location.zoneName], zone.owner == account || zone.participants.contains(account) else {
-            throw CKError(.permissionFailure)
-        }
+        guard let zone = server.zones[location.zoneName] else { throw CKError(.zoneNotFound) }
+        guard zone.owner == account || zone.participants.contains(account) else { throw CKError(.permissionFailure) }
         return Array(zone.facts.values)
     }
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws {

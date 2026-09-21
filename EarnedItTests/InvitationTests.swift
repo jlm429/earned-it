@@ -1112,7 +1112,7 @@ final class InvitationTests: XCTestCase {
         XCTAssertNotNil(server.accountMembershipLocks[account]?.claimBinding)
     }
 
-    func testRevocationRetainsLockRetryUntilConditionalReleaseSucceeds() async throws {
+    func testRevocationRetainsSurvivingFamilyMembershipLock() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
@@ -1121,14 +1121,15 @@ final class InvitationTests: XCTestCase {
                                        clock: { family.clock.now }, automaticSync: false)
         try await child.redeemInvitation(invitation.qrPayload)
         try await family.store.revokeInvitation(invitation.invitation)
-        transport.accountLockReleaseFailures = 1
+        let lock = try XCTUnwrap(server.accountMembershipLocks["revoked-child"])
 
         do { try await child.synchronize(); XCTFail("Revoked access must fail") } catch {}
         XCTAssertNotNil(child.session.accountMembershipLockAttemptID)
-        XCTAssertEqual(server.accountMembershipLocks["revoked-child"]?.state, .active)
+        XCTAssertEqual(server.accountMembershipLocks["revoked-child"], lock)
         do { try await child.synchronize(); XCTFail("Revoked access must keep failing") } catch {}
-        XCTAssertNil(child.session.accountMembershipLockAttemptID)
-        XCTAssertEqual(server.accountMembershipLocks["revoked-child"]?.state, .released)
+        XCTAssertNotNil(child.session.accountMembershipLockAttemptID)
+        XCTAssertEqual(server.accountMembershipLocks["revoked-child"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
     }
 
     func testCloudKitLockConflictClassificationDoesNotMaskServiceErrors() {

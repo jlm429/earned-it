@@ -51,27 +51,30 @@ final class ProductionCleanupTests: XCTestCase {
         )
         let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
         try family.store.activateAsNeededChore(choreID: chore)
+        let firstOwner = try XCTUnwrap(family.store.dailyList().first { $0.id == chore }?.turnOwnerID)
         let facts = try family.repository.facts(householdID: revision.householdID)
         let secondDay = CivilDay(rawValue: "2026-09-08")!
-        let staleActivation = HouseholdFact(
+        let mergedActivation = HouseholdFact(
             id: UUID(), householdID: revision.householdID,
             sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
             authorDeviceID: UUID(), authorMemberID: family.parent.id,
             body: .occurrence(ChoreOccurrenceDisposition(
                 choreID: chore, revisionID: revision.id, day: secondDay,
                 state: .available, alternatingSkipBehavior: nil,
-                recordedByMemberID: family.parent.id
+                recordedByMemberID: family.parent.id, assignedMemberID: firstOwner
             ))
         )
-        try family.repository.commit(facts: [staleActivation], uploaded: true)
+        try family.repository.commit(facts: [mergedActivation], uploaded: true)
         let merged = try HouseholdStore(repository: family.repository,
                                         clock: { family.clock.now }, automaticSync: false)
-        let firstOwner = try XCTUnwrap(merged.dailyList().first { $0.id == chore }?.turnOwnerID)
         let secondDate = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
         let secondOwner = try XCTUnwrap(merged.dailyList(on: secondDate).first { $0.id == chore }?.turnOwnerID)
 
         XCTAssertEqual(secondOwner, firstOwner)
         XCTAssertEqual(firstOwner, revision.memberIDs[0])
+        let thirdDay = CivilDay(rawValue: "2026-09-09")!
+        XCTAssertEqual(ChoreRules.nextAlternatingOwner(choreID: chore, on: thirdDay,
+                                                       snapshot: merged.snapshot)?.id, firstOwner)
     }
 
     func testSkipConvergesAndExcludesArchivedChildInSavedOrder() throws {
@@ -163,7 +166,7 @@ final class ProductionCleanupTests: XCTestCase {
                                                         snapshot: merged.snapshot)?.id, revision.memberIDs[1])
     }
 
-    func testLegacyAsNeededActivationsRetainOriginalOwnershipAcrossUpgrade() throws {
+    func testIncompleteLegacyActivationsAdvanceByHistoricalActivationOrder() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
         let chore = try family.store.saveChore(
@@ -493,7 +496,7 @@ final class ProductionCleanupTests: XCTestCase {
         try await fixture.family.store.deleteFamily()
 
         do { try await fixture.guest.synchronize(); XCTFail("Deleted family must not synchronize") }
-        catch { XCTAssertEqual((error as? CKError)?.code, .permissionFailure) }
+        catch { XCTAssertEqual((error as? CKError)?.code, .zoneNotFound) }
         XCTAssertTrue(fixture.guest.familyAccessLost)
         XCTAssertTrue(fixture.guest.cloudIsReadOnly)
         XCTAssertNil(fixture.server.zones[location.zoneName])

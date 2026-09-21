@@ -2138,7 +2138,7 @@ final class HouseholdStore {
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
                 familyAccessLost = [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
-                if [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code),
+                if [.zoneNotFound, .userDeletedZone].contains(cloudError.code),
                    let attemptID = session.accountMembershipLockAttemptID,
                    let expectedParticipantID = session.cloudParticipantID {
                     do {
