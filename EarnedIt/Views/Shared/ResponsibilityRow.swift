@@ -232,8 +232,24 @@ struct SharedDailyList: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(store.calendar.isDate(date, inSameDayAs: store.today) ? "Today’s Chores" : "Chores for This Day").font(.title2.bold())
             if chores.isEmpty {
-                ContentUnavailableView("Nothing expected", systemImage: "checkmark.circle",
-                    description: Text(actor.role == .parent ? "Configure a shared weekday list to get started." : "Enjoy your day. Your family’s list has nothing for you here."))
+                SectionCard {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Nothing expected").font(.headline)
+                            Text(actor.role == .parent
+                                 ? "Configure a shared weekday list to get started."
+                                 : "Enjoy your day. Your family’s list has nothing for you here.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                }
             } else {
                 ForEach(chores) { chore in ResponsibilityRow(chore: chore, actor: actor) }
                 if !store.cloudIsReadOnly && !store.cloudAccessBlocked && chores.contains(where: { chore in

@@ -46,6 +46,7 @@ protocol HouseholdTransport {
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation
     func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws
     func leave(_ location: CloudLocation, expectedParticipantID: String) async throws
+    func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact]
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws
     func share(for location: CloudLocation, title: String) async throws -> CKShare

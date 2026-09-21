@@ -79,6 +79,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var acceptedURLs: [URL] = []
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
+    var deleteFamilyFailures = 0
     var accountLockReleaseFailures = 0
     var accountLockActivationFailures = 0
     var claimError: Error?
@@ -87,6 +88,7 @@ final class TestTransport: HouseholdTransport {
     var invitationValidationTimeFailures = 0
     var extendedShareAccess: Set<String> = ["InProcessOneTimeLinks"]
     private(set) var leaveAttempts = 0
+    private(set) var deleteFamilyAttempts = 0
     private(set) var leaveMutationEnqueues = 0
     private(set) var accountLockMutationEnqueues = 0
     var beforeAccept: (() async -> Void)?
@@ -252,6 +254,22 @@ final class TestTransport: HouseholdTransport {
         for participantID in participantIDs {
             server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID)
         }
+    }
+    func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws {
+        deleteFamilyAttempts += 1
+        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        guard location.isOwner,
+              let zone = server.zones[location.zoneName],
+              zone.householdID == location.householdID,
+              zone.owner == account else {
+            if server.zones[location.zoneName] == nil { return }
+            throw HouseholdError.permission
+        }
+        if deleteFamilyFailures > 0 {
+            deleteFamilyFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        server.zones.removeValue(forKey: location.zoneName)
     }
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
         await beforeFetch?()

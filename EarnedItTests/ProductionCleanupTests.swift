@@ -1,0 +1,590 @@
+import XCTest
+import CloudKit
+@testable import EarnedIt
+
+@MainActor
+final class ProductionCleanupTests: XCTestCase {
+    func testAsNeededAlternatingNextOwnerCompletionSkipAndEligibility() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let order = revision.memberIDs
+
+        XCTAssertTrue(family.store.dailyList().allSatisfy { $0.id != chore })
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[0])
+        try family.store.skipNextAlternatingChild(choreID: chore)
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[1])
+        try family.store.activateAsNeededChore(choreID: chore)
+
+        let active = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        XCTAssertEqual(active.turnOwnerID, order[1])
+        XCTAssertEqual(active.eligibleMembers.map(\.id), [order[1]])
+        XCTAssertEqual(active.requiredMembers.map(\.id), [order[1]])
+        XCTAssertEqual(active.turnLabel(for: family.parent), "\(active.turnOwner!.displayName)’s turn")
+        XCTAssertEqual(active.turnLabel(for: active.turnOwner!), "Your turn")
+        for child in [family.hanna, family.alek, nora] {
+            let visible = ChoreRules.visibleList([active], to: child)
+            XCTAssertEqual(visible.isEmpty, child.id != order[1])
+        }
+
+        try family.store.setCompletion(choreID: chore, memberID: order[1],
+                                       date: family.clock.now, state: .done)
+        family.move(to: "2026-09-08T16:00:00Z")
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[2])
+
+        try family.store.skipNextAlternatingChild(choreID: chore)
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[0])
+        try family.store.skipNextAlternatingChild(choreID: chore)
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[1])
+    }
+
+    func testIncompleteActivationDoesNotConsumeTurnAfterMergedOfflineActivation() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        try family.store.activateAsNeededChore(choreID: chore)
+        let facts = try family.repository.facts(householdID: revision.householdID)
+        let secondDay = CivilDay(rawValue: "2026-09-08")!
+        let staleActivation = HouseholdFact(
+            id: UUID(), householdID: revision.householdID,
+            sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .occurrence(ChoreOccurrenceDisposition(
+                choreID: chore, revisionID: revision.id, day: secondDay,
+                state: .available, alternatingSkipBehavior: nil,
+                recordedByMemberID: family.parent.id
+            ))
+        )
+        try family.repository.commit(facts: [staleActivation], uploaded: true)
+        let merged = try HouseholdStore(repository: family.repository,
+                                        clock: { family.clock.now }, automaticSync: false)
+        let firstOwner = try XCTUnwrap(merged.dailyList().first { $0.id == chore }?.turnOwnerID)
+        let secondDate = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
+        let secondOwner = try XCTUnwrap(merged.dailyList(on: secondDate).first { $0.id == chore }?.turnOwnerID)
+
+        XCTAssertEqual(secondOwner, firstOwner)
+        XCTAssertEqual(firstOwner, revision.memberIDs[0])
+    }
+
+    func testSkipConvergesAndExcludesArchivedChildInSavedOrder() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        try family.store.skipNextAlternatingChild(choreID: chore)
+        try family.store.archiveMember(revision.memberIDs[1])
+        family.move(to: "2026-09-08T16:00:00Z")
+
+        let expected = revision.memberIDs[2]
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, expected)
+        let facts = try family.repository.facts(householdID: revision.householdID)
+        let first = HouseholdSnapshot(facts: facts)
+        let second = HouseholdSnapshot(facts: facts.reversed())
+        XCTAssertEqual(ChoreRules.nextAlternatingOwner(choreID: chore, on: family.store.day, snapshot: first)?.id,
+                       expected)
+        XCTAssertEqual(ChoreRules.nextAlternatingOwner(choreID: chore, on: family.store.day, snapshot: second)?.id,
+                       expected)
+    }
+
+    func testConcurrentDuplicateSkipConsumesOnlyExpectedChildOnce() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let base = try family.repository.facts(householdID: revision.householdID)
+        let sequence = try XCTUnwrap(base.map(\.sequence).max()) + 1
+        let duplicateFacts = [
+            UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        ].map { id in
+            HouseholdFact(
+                id: id, householdID: revision.householdID, sequence: sequence,
+                authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                body: .alternatingTurnAdvance(AlternatingTurnAdvance(
+                    choreID: chore, revisionID: revision.id,
+                    expectedMemberID: revision.memberIDs[0], day: family.store.day,
+                    recordedByMemberID: family.parent.id
+                ))
+            )
+        }
+        let snapshot = HouseholdSnapshot(facts: base + duplicateFacts.reversed())
+
+        XCTAssertEqual(ChoreRules.nextAlternatingOwner(choreID: chore, on: family.store.day,
+                                                       snapshot: snapshot)?.id,
+                       revision.memberIDs[1])
+    }
+
+    func testLateOfflineSkipCannotChangeActiveAssignmentOrCompletion() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let firstOwner = try XCTUnwrap(family.store.nextAlternatingOwner(choreID: chore))
+        try family.store.activateAsNeededChore(choreID: chore)
+        XCTAssertEqual(family.store.snapshot.occurrence(choreID: chore, on: family.store.day)?.assignedMemberID,
+                       firstOwner.id)
+
+        let facts = try family.repository.facts(householdID: revision.householdID)
+        let staleSkip = HouseholdFact(
+            id: UUID(), householdID: revision.householdID,
+            sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .alternatingTurnAdvance(AlternatingTurnAdvance(
+                choreID: chore, revisionID: revision.id, expectedMemberID: firstOwner.id,
+                day: family.store.day, recordedByMemberID: family.parent.id
+            ))
+        )
+        try family.repository.commit(facts: [staleSkip], uploaded: true)
+        let merged = try HouseholdStore(repository: family.repository,
+                                        clock: { family.clock.now }, automaticSync: false)
+
+        XCTAssertEqual(merged.dailyList().first { $0.id == chore }?.turnOwnerID, firstOwner.id)
+        try merged.setCompletion(choreID: chore, memberID: firstOwner.id,
+                                 date: family.clock.now, state: .done)
+        let tomorrow = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
+        XCTAssertEqual(ChoreRules.nextAlternatingOwner(choreID: chore, on: CivilDay(tomorrow, calendar: merged.calendar),
+                                                        snapshot: merged.snapshot)?.id, revision.memberIDs[1])
+    }
+
+    func testLegacyAsNeededActivationsRetainOriginalOwnershipAcrossUpgrade() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let base = try family.repository.facts(householdID: revision.householdID)
+        let initialSequence = try XCTUnwrap(base.map(\.sequence).max())
+        let legacyDays = [CivilDay(rawValue: "2026-09-07")!, CivilDay(rawValue: "2026-09-08")!]
+        let legacy = legacyDays.enumerated().map { offset, day in
+            HouseholdFact(
+                id: UUID(), householdID: revision.householdID,
+                sequence: initialSequence + Int64(offset + 1),
+                authorDeviceID: UUID(), authorMemberID: family.parent.id,
+                body: .occurrence(ChoreOccurrenceDisposition(
+                    choreID: chore, revisionID: revision.id, day: day,
+                    state: .available, alternatingSkipBehavior: nil,
+                    recordedByMemberID: family.parent.id
+                ))
+            )
+        }
+        try family.repository.commit(facts: legacy, uploaded: true)
+        family.move(to: "2026-09-09T16:00:00Z")
+        let upgraded = try HouseholdStore(repository: family.repository,
+                                          clock: { family.clock.now }, automaticSync: false)
+
+        for (offset, day) in legacyDays.enumerated() {
+            let date = day.date(in: upgraded.calendar)
+            XCTAssertEqual(upgraded.dailyList(on: date).first { $0.id == chore }?.turnOwnerID,
+                           revision.memberIDs[offset])
+        }
+        XCTAssertEqual(upgraded.nextAlternatingOwner(choreID: chore)?.id, revision.memberIDs[2])
+        try upgraded.setCompletion(choreID: chore, memberID: revision.memberIDs[0],
+                                   date: legacyDays[0].date(in: upgraded.calendar), state: .done)
+        try upgraded.setCompletion(choreID: chore, memberID: revision.memberIDs[1],
+                                   date: legacyDays[1].date(in: upgraded.calendar), state: .done)
+        try upgraded.activateAsNeededChore(choreID: chore)
+        XCTAssertEqual(upgraded.dailyList().first { $0.id == chore }?.turnOwnerID, revision.memberIDs[2])
+    }
+
+    func testLegacyActivationDecodesWithoutRecordedOwner() throws {
+        let oldActivation = ChoreOccurrenceDisposition(
+            choreID: UUID(), revisionID: UUID(), day: CivilDay(rawValue: "2026-09-07")!,
+            state: .available, alternatingSkipBehavior: nil, recordedByMemberID: UUID()
+        )
+        let encoded = try JSONEncoder().encode(oldActivation)
+        var legacyRecord = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacyRecord.removeValue(forKey: "assignedMemberID")
+        let oldPayload = try JSONSerialization.data(withJSONObject: legacyRecord)
+
+        let decoded = try JSONDecoder().decode(ChoreOccurrenceDisposition.self, from: oldPayload)
+        XCTAssertEqual(decoded, oldActivation)
+        XCTAssertNil(decoded.assignedMemberID)
+    }
+
+    func testDeleteChoreRemovesCurrentVariantsAndPreservesCompletedCredit() throws {
+        let family = try TestFamily()
+        let scheduledIncomplete = try family.store.saveChore(
+            weekday: .monday, title: "Scheduled Incomplete", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let scheduledDone = try family.store.saveChore(
+            weekday: .monday, title: "Scheduled Done", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let inactiveAsNeeded = try family.store.saveChore(
+            weekday: .monday, title: "Inactive As Needed", mode: .particular,
+            memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+        let activeAsNeeded = try family.store.saveChore(
+            weekday: .monday, title: "Active As Needed", mode: .particular,
+            memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+        let completedAsNeeded = try family.store.saveChore(
+            weekday: .monday, title: "Completed As Needed", mode: .particular,
+            memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+        let scheduledAlternating = try family.store.saveChore(
+            weekday: .monday, title: "Scheduled Alternating", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id]
+        )
+        let activeAlternating = try family.store.saveChore(
+            weekday: .monday, title: "Active Alternating", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id], schedulingMode: .asNeeded
+        )
+        try family.store.activateAsNeededChore(choreID: activeAsNeeded)
+        try family.store.activateAsNeededChore(choreID: completedAsNeeded)
+        try family.store.activateAsNeededChore(choreID: activeAlternating)
+        try family.store.selectProfile(family.hanna.id)
+        try family.store.setCompletion(choreID: scheduledDone, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .done)
+        try family.store.setCompletion(choreID: completedAsNeeded, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .done)
+        try family.store.selectProfile(family.parent.id)
+
+        let deleted = [scheduledIncomplete, scheduledDone, inactiveAsNeeded, activeAsNeeded, completedAsNeeded,
+                       scheduledAlternating, activeAlternating]
+        for chore in deleted { try family.store.deleteChore(chore) }
+
+        let current = family.store.dailyList()
+        XCTAssertTrue(ChoreRules.visibleList(current, to: family.parent).allSatisfy { !deleted.contains($0.id) })
+        XCTAssertTrue(ChoreRules.visibleList(current, to: family.hanna).allSatisfy { !deleted.contains($0.id) })
+        XCTAssertNil(current.first { $0.id == scheduledIncomplete })
+        XCTAssertNil(current.first { $0.id == activeAsNeeded })
+        XCTAssertNil(current.first { $0.id == scheduledAlternating })
+        XCTAssertNil(current.first { $0.id == activeAlternating })
+        let retained = try XCTUnwrap(current.first { $0.id == scheduledDone })
+        XCTAssertTrue(retained.isDeleted)
+        XCTAssertEqual(retained.state(for: family.hanna.id), .done)
+        XCTAssertFalse(PermissionService.canSetState(actor: family.hanna, target: family.hanna.id,
+                                                     chore: retained, state: .unmarked))
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).items
+            .first { $0.choreID == scheduledDone }?.state, .done)
+        XCTAssertTrue(try XCTUnwrap(current.first { $0.id == completedAsNeeded }).isDeleted)
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).items
+            .first { $0.choreID == completedAsNeeded }?.state, .done)
+        XCTAssertTrue(deleted.allSatisfy {
+            family.store.snapshot.configuration(choreID: $0, on: family.store.day)?.isArchived == true
+        })
+    }
+
+    func testDeleteChoreKeepsPriorWeekHistoryAllowanceAndStreak() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Water Plants", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        try family.complete(chore, as: family.hanna)
+        family.move(to: "2026-09-14T16:00:00Z")
+        try family.store.selectProfile(family.parent.id)
+        try family.store.deleteChore(chore)
+
+        let priorDate = ISO8601DateFormatter().date(from: "2026-09-07T16:00:00Z")!
+        let prior = family.store.allowanceWeek(for: family.hanna.id, containing: priorDate)
+        XCTAssertEqual(prior.items.first { $0.choreID == chore }?.state, .done)
+        XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
+                                             snapshot: family.store.snapshot,
+                                             today: family.clock.now), 1)
+        XCTAssertTrue(ChoreRules.visibleList(family.store.dailyList(), to: family.parent).isEmpty)
+    }
+
+    func testChoreDeletionConvergesAcrossParentAndChildInstallations() async throws {
+        let fixture = try await connectedParentInstallation()
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .particular,
+            memberIDs: [fixture.family.hanna.id]
+        )
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        try fixture.guest.selectProfile(fixture.family.hanna.id)
+        XCTAssertTrue(ChoreRules.visibleList(fixture.guest.dailyList(), to: fixture.family.hanna)
+            .contains { $0.id == chore })
+
+        try fixture.family.store.deleteChore(chore)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        XCTAssertTrue(ChoreRules.visibleList(fixture.family.store.dailyList(), to: fixture.family.parent)
+            .allSatisfy { $0.id != chore })
+        XCTAssertTrue(ChoreRules.visibleList(fixture.guest.dailyList(), to: fixture.family.hanna)
+            .allSatisfy { $0.id != chore })
+        XCTAssertThrowsError(try fixture.guest.setCompletion(
+            choreID: chore, memberID: fixture.family.hanna.id,
+            date: fixture.family.clock.now, state: .done
+        ))
+    }
+
+    func testAlternatingCurrentAndNextTurnSynchronizeAcrossInstallations() async throws {
+        let fixture = try await connectedParentInstallation()
+        let nora = try fixture.family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [fixture.family.hanna.id, fixture.family.alek.id, nora.id],
+            schedulingMode: .asNeeded
+        )
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        let first = try XCTUnwrap(fixture.family.store.nextAlternatingOwner(choreID: chore))
+        XCTAssertEqual(fixture.guest.nextAlternatingOwner(choreID: chore)?.id, first.id)
+
+        try fixture.family.store.skipNextAlternatingChild(choreID: chore)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        let next = try XCTUnwrap(fixture.family.store.nextAlternatingOwner(choreID: chore))
+        XCTAssertNotEqual(next.id, first.id)
+        XCTAssertEqual(fixture.guest.nextAlternatingOwner(choreID: chore)?.id, next.id)
+
+        try fixture.family.store.activateAsNeededChore(choreID: chore)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
+        XCTAssertEqual(fixture.guest.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
+    }
+
+    func testDeleteChoreAlsoDefeatsPendingTomorrowEdit() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Original", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        try family.store.saveChore(choreID: chore, weekday: .tuesday, title: "Edited",
+                                   mode: .particular, memberIDs: [family.alek.id])
+        try family.store.deleteChore(chore)
+        family.move(to: "2026-09-08T16:00:00Z")
+
+        XCTAssertTrue(family.store.snapshot.configuration(choreID: chore, on: family.store.day)?.isArchived == true)
+        XCTAssertTrue(ChoreRules.visibleList(family.store.dailyList(), to: family.parent)
+            .allSatisfy { $0.id != chore })
+    }
+
+    func testLateOfflineEditCannotResurrectDeletedChoreOnAnyDevice() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Water Plants", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        try family.store.setCompletion(choreID: chore, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .done)
+        let oldRevision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        try family.store.deleteChore(chore)
+        let facts = try family.repository.facts(householdID: oldRevision.householdID)
+        let lateRevision = ChoreRevision(
+            id: UUID(), householdID: oldRevision.householdID, choreID: chore,
+            weekday: .tuesday, effectiveDay: family.store.day,
+            title: "Stale Offline Edit", notes: oldRevision.notes,
+            category: oldRevision.category, mode: oldRevision.mode,
+            memberIDs: oldRevision.memberIDs, isArchived: false,
+            schedulingMode: oldRevision.schedulingMode
+        )
+        let lateEdit = HouseholdFact(
+            id: UUID(), householdID: oldRevision.householdID,
+            sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .chore(lateRevision)
+        )
+        try family.repository.commit(facts: [lateEdit], uploaded: true)
+        let merged = try HouseholdStore(repository: family.repository,
+                                        clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(merged.snapshot.configuration(choreID: chore, on: merged.day)?.id, lateRevision.id)
+        XCTAssertTrue(ChoreRules.visibleList(merged.dailyList(), to: family.parent).allSatisfy { $0.id != chore })
+        XCTAssertTrue(ChoreRules.visibleList(merged.dailyList(), to: family.hanna).allSatisfy { $0.id != chore })
+        XCTAssertEqual(merged.allowanceWeek(for: family.hanna.id).items.first { $0.choreID == chore }?.state, .done)
+        XCTAssertThrowsError(try merged.setCompletion(choreID: chore, memberID: family.hanna.id,
+                                                       date: family.clock.now, state: .unmarked))
+        XCTAssertThrowsError(try merged.saveChore(choreID: chore, weekday: .monday, title: "Restore",
+                                                  mode: .particular, memberIDs: [family.hanna.id]))
+
+        family.move(to: "2026-09-08T16:00:00Z")
+        let onNextDay = try HouseholdStore(repository: family.repository,
+                                           clock: { family.clock.now }, automaticSync: false)
+        XCTAssertTrue(ChoreRules.visibleList(onNextDay.dailyList(), to: family.parent)
+            .allSatisfy { $0.id != chore })
+        XCTAssertTrue(onNextDay.snapshot.isChoreDeleted(chore, on: onNextDay.day))
+    }
+
+    func testCreatorOwnerDeletionIsPermanentAndAllowsNewFamily() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let location = try XCTUnwrap(family.store.session.location)
+        XCTAssertTrue(family.store.canDeleteFamily)
+
+        try await family.store.deleteFamily()
+
+        XCTAssertNil(server.zones[location.zoneName])
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+        XCTAssertNil(family.store.household)
+        let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                              transport: transport,
+                                              clock: { family.clock.now }, automaticSync: false)
+        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertNil(replacement.household)
+        try replacement.createFamily(name: "New Family", parentName: "New Parent")
+        XCTAssertEqual(replacement.household?.name, "New Family")
+    }
+
+    func testDeleteFamilyRequiresCreatorAndCloudOwner() async throws {
+        let fixture = try await connectedParentInstallation()
+        let secondParent = try fixture.family.store.saveMember(name: "Second Parent", role: .parent, avatar: .sun)
+        fixture.family.move(to: "2026-09-08T16:00:00Z")
+        try fixture.family.store.selectProfile(secondParent.id)
+        XCTAssertFalse(fixture.family.store.canDeleteFamily)
+        do { try await fixture.family.store.deleteFamily(); XCTFail("Another parent must not delete the family") }
+        catch { XCTAssertEqual(error as? HouseholdError, .permission) }
+
+        XCTAssertFalse(fixture.guest.canDeleteFamily)
+        do { try await fixture.guest.deleteFamily(); XCTFail("A shared participant must not delete the family") }
+        catch { XCTAssertEqual(error as? HouseholdError, .permission) }
+        XCTAssertNotNil(fixture.server.zones[fixture.family.store.session.location!.zoneName])
+    }
+
+    func testDeleteFamilyRetriesCloudAndMembershipFailuresWithoutFalseSuccess() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let location = try XCTUnwrap(family.store.session.location)
+        transport.deleteFamilyFailures = 1
+
+        do { try await family.store.deleteFamily(); XCTFail("Network failure must be reported") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .networkFailure) }
+        XCTAssertNotNil(family.store.household)
+        XCTAssertNotNil(server.zones[location.zoneName])
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .active)
+
+        transport.accountLockReleaseFailures = 1
+        do { try await family.store.deleteFamily(); XCTFail("Membership cleanup failure must be reported") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .networkFailure) }
+        XCTAssertNotNil(family.store.household)
+        XCTAssertNil(server.zones[location.zoneName])
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .active)
+
+        let relaunched = try HouseholdStore(repository: family.repository, transport: transport,
+                                             clock: { family.clock.now }, automaticSync: false)
+        XCTAssertTrue(relaunched.canDeleteFamily)
+        try await relaunched.deleteFamily()
+        XCTAssertNil(relaunched.household)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+        XCTAssertEqual(transport.deleteFamilyAttempts, 3)
+    }
+
+    func testInvitedDeviceDetectsDeletedFamilyAndCannotResurrectIt() async throws {
+        let fixture = try await connectedParentInstallation()
+        let location = try XCTUnwrap(fixture.family.store.session.location)
+        try await fixture.family.store.deleteFamily()
+
+        do { try await fixture.guest.synchronize(); XCTFail("Deleted family must not synchronize") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .permissionFailure) }
+        XCTAssertTrue(fixture.guest.familyAccessLost)
+        XCTAssertTrue(fixture.guest.cloudIsReadOnly)
+        XCTAssertNil(fixture.server.zones[location.zoneName])
+        XCTAssertEqual(fixture.server.accountMembershipLocks["guest"]?.state, .released)
+        try fixture.guest.removeUnavailableFamilyFromDevice()
+        XCTAssertNil(fixture.guest.household)
+        try fixture.guest.createFamily(name: "Guest New Family", parentName: "Guest Parent")
+        XCTAssertEqual(fixture.guest.household?.name, "Guest New Family")
+        XCTAssertNil(fixture.server.zones[location.zoneName])
+    }
+
+    func testReinstalledChildCannotRecoverDeletedFamilyAndCanJoinNewInvitation() async throws {
+        let server = TestCloudServer()
+        let oldFamily = try TestFamily(transport: TestTransport(server: server, account: "old-owner"))
+        let oldInvitation = try await oldFamily.store.createChildInvitation(memberID: oldFamily.hanna.id)
+        let childAccount = "reinstalled-child"
+        var installedChild: HouseholdStore? = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: childAccount),
+            clock: { oldFamily.clock.now }, automaticSync: false
+        )
+        try await installedChild?.redeemInvitation(oldInvitation.qrPayload)
+        let oldHouseholdID = try XCTUnwrap(oldFamily.store.household?.id)
+        let oldLocation = try XCTUnwrap(oldFamily.store.session.location)
+        XCTAssertEqual(installedChild?.household?.id, oldHouseholdID)
+        XCTAssertEqual(server.accountMembershipLocks[childAccount]?.state, .active)
+
+        try await oldFamily.store.deleteFamily()
+        installedChild = nil
+
+        let reinstalledChild = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: childAccount),
+            clock: { oldFamily.clock.now }, automaticSync: false
+        )
+        do {
+            try await reinstalledChild.reconcileAccountMembershipLock()
+            XCTFail("A deleted family must not recover after reinstall")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitationUnavailable)
+        }
+
+        XCTAssertNil(server.zones[oldLocation.zoneName])
+        XCTAssertEqual(server.accountMembershipLocks[childAccount]?.householdID, oldHouseholdID)
+        XCTAssertEqual(server.accountMembershipLocks[childAccount]?.state, .active)
+        XCTAssertTrue(reinstalledChild.requiresMembershipRecovery)
+        XCTAssertNil(reinstalledChild.household)
+        let recoveredFamilies = try await reinstalledChild.discoverFamilies()
+        XCTAssertTrue(recoveredFamilies.isEmpty)
+        do {
+            try await reinstalledChild.redeemInvitation(oldInvitation.qrPayload)
+            XCTFail("A deleted family's invitation must not be redeemable after reinstall")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitation)
+        }
+        XCTAssertNil(reinstalledChild.household)
+        XCTAssertNil(reinstalledChild.session.pendingInvitationPackage)
+
+        let newFamily = try TestFamily(transport: TestTransport(server: server, account: "new-owner"))
+        let newInvitation = try await newFamily.store.createChildInvitation(memberID: newFamily.hanna.id)
+        try await reinstalledChild.redeemInvitation(newInvitation.qrPayload)
+
+        XCTAssertEqual(reinstalledChild.household?.id, newFamily.store.household?.id)
+        XCTAssertEqual(reinstalledChild.selectedMember?.id, newFamily.hanna.id)
+        XCTAssertEqual(server.accountMembershipLocks[childAccount]?.householdID, newFamily.store.household?.id)
+        XCTAssertEqual(server.accountMembershipLocks[childAccount]?.state, .active)
+        XCTAssertNotEqual(reinstalledChild.household?.id, oldHouseholdID)
+    }
+
+    private typealias ConnectedInstallation = (
+        family: TestFamily, server: TestCloudServer, guest: HouseholdStore
+    )
+
+    private func connectedParentInstallation() async throws -> ConnectedInstallation {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let guestTransport = TestTransport(server: server, account: "guest")
+        let guest = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                       transport: guestTransport,
+                                       clock: { family.clock.now }, automaticSync: false)
+        let location = try XCTUnwrap(family.store.session.location)
+        try await guest.join(url: URL(string: "https://test.invalid/\(location.zoneName)")!)
+        try guest.requestProfiles([family.parent.id, family.hanna.id], deviceName: "Family iPad")
+        try await guest.synchronize()
+        try await family.store.synchronize()
+        try family.store.approve(try XCTUnwrap(family.store.pendingRequests.first),
+                                 memberIDs: [family.parent.id, family.hanna.id])
+        try await family.store.synchronize()
+        try await guest.synchronize()
+        try guest.selectProfile(family.parent.id)
+        return (family, server, guest)
+    }
+}

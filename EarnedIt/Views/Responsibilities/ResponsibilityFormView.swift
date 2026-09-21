@@ -148,8 +148,10 @@ struct ResponsibilityFormView: View {
     private var alternatingHelp: String {
         let names = selectedChildrenInTurnOrder.map(\.displayName)
         if names.count < 2 { return "Choose at least two children. One child owns each date." }
-        let trigger = schedulingMode == .asNeeded ? "each activation" : "each scheduled date"
-        return "Turn order: \(names.joined(separator: ", ")). It advances with \(trigger), even when a turn is not completed."
+        if schedulingMode == .asNeeded {
+            return "Turn order: \(names.joined(separator: ", ")). The next child is shown before you make it available. Completing it advances the turn."
+        }
+        return "Turn order: \(names.joined(separator: ", ")). It advances with each scheduled date."
     }
 
     private var scheduleHelp: String {

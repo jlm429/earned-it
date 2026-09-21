@@ -57,7 +57,10 @@ struct ParentDashboardView: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("parent-child-\(child.displayName.accessibilitySlug)")
                 }
-            }.padding()
+            }
+            .padding()
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Family Today")
