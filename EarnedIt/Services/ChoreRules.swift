@@ -99,17 +99,23 @@ enum ChoreRules {
             guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return nil }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
             if snapshot.isChoreDeleted(choreID, on: day) {
+                let deletion = snapshot.choreDeletions.last {
+                    $0.choreID == choreID && $0.day <= day
+                }
+                let winningRevisionID = deletion?.revisionID
                 let retained = snapshot.completions.filter {
                     $0.choreID == choreID && $0.day == day && $0.state.isAccountedFor
+                        && (winningRevisionID == nil || $0.revisionID == winningRevisionID)
                 }
                 guard let original = retained.first.flatMap({ completion in
                     snapshot.revisions.first { $0.id == completion.revisionID }
                 }) else { return nil }
-                let retainedIDs = Set(retained.map(\.memberID))
-                let members = snapshot.members.filter { retainedIDs.contains($0.id) }
+                let eligibleIDs = Set(retained.flatMap(\.eligibleMemberIDs))
+                let requiredIDs = original.mode == .anyOne ? [] : eligibleIDs
+                let members = snapshot.members.filter { eligibleIDs.contains($0.id) }
                 return DailyChore(
                     configuration: original, day: day, eligibleMembers: members,
-                    requiredMemberIDs: retainedIDs,
+                    requiredMemberIDs: requiredIDs,
                     turnOwnerID: original.mode == .alternating ? retained.first?.memberID : nil,
                     contributions: retained, historicalContributions: [], occurrenceDisposition: nil,
                     isActiveOccurrence: false, isDeleted: true, today: today

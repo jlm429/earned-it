@@ -309,6 +309,69 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertTrue(ChoreRules.visibleList(family.store.dailyList(), to: family.parent).isEmpty)
     }
 
+    func testDeleteChorePreservesOptionalAnyOneAllowanceSemantics() throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.anyOne, ids: [family.hanna.id, family.alek.id])
+        try family.complete(chore, as: family.hanna)
+        let streakBeforeDeletion = MetricsService.streak(
+            childID: family.hanna.id, snapshot: family.store.snapshot, today: family.clock.now
+        )
+        XCTAssertNil(family.store.allowanceWeek(for: family.hanna.id).items.first { $0.choreID == chore })
+        try family.store.selectProfile(family.parent.id)
+
+        try family.store.deleteChore(chore)
+
+        let hidden = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        XCTAssertTrue(hidden.isDeleted)
+        XCTAssertTrue(hidden.requiredMemberIDs.isEmpty)
+        XCTAssertEqual(Set(hidden.eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
+        XCTAssertNil(family.store.allowanceWeek(for: family.hanna.id).items.first { $0.choreID == chore })
+        XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
+                                             snapshot: family.store.snapshot,
+                                             today: family.clock.now), streakBeforeDeletion)
+    }
+
+    func testDeleteChoreKeepsDisplacedRevisionOutOfRequirements() throws {
+        let family = try TestFamily()
+        let children = [family.hanna, family.alek].sorted { $0.id.uuidString < $1.id.uuidString }
+        let displacedMember = children[0]
+        let winningMember = children[1]
+        let chore = try family.chore(.particular, ids: [displacedMember.id])
+        try family.complete(chore, as: displacedMember)
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let winningRevision = ChoreRevision(
+            id: UUID(), householdID: original.householdID, choreID: chore,
+            weekday: original.weekday, effectiveDay: family.store.day,
+            title: original.title, notes: original.notes, category: original.category,
+            mode: .particular, memberIDs: [winningMember.id], isArchived: false
+        )
+        let facts = try family.repository.facts(householdID: original.householdID)
+        let winningFact = HouseholdFact(
+            id: UUID(), householdID: original.householdID,
+            sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .chore(winningRevision)
+        )
+        try family.repository.commit(facts: [winningFact], uploaded: true)
+        let merged = try HouseholdStore(repository: family.repository,
+                                        clock: { family.clock.now }, automaticSync: false)
+        try merged.selectProfile(winningMember.id)
+        try merged.setCompletion(choreID: chore, memberID: winningMember.id,
+                                 date: family.clock.now, state: .done)
+        try merged.selectProfile(family.parent.id)
+
+        try merged.deleteChore(chore)
+
+        let hidden = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+        XCTAssertEqual(hidden.configuration.id, winningRevision.id)
+        XCTAssertEqual(hidden.eligibleMembers.map(\.id), [winningMember.id])
+        XCTAssertEqual(hidden.requiredMemberIDs, [winningMember.id])
+        XCTAssertEqual(hidden.contributions.map(\.memberID), [winningMember.id])
+        XCTAssertNil(merged.allowanceWeek(for: displacedMember.id).items.first { $0.choreID == chore })
+        XCTAssertEqual(merged.allowanceWeek(for: winningMember.id).items
+            .first { $0.choreID == chore }?.state, .done)
+    }
+
     func testChoreDeletionConvergesAcrossParentAndChildInstallations() async throws {
         let fixture = try await connectedParentInstallation()
         let chore = try fixture.family.store.saveChore(
@@ -501,6 +564,7 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertTrue(fixture.guest.cloudIsReadOnly)
         XCTAssertNil(fixture.server.zones[location.zoneName])
         XCTAssertEqual(fixture.server.accountMembershipLocks["guest"]?.state, .released)
+        XCTAssertTrue(fixture.guest.canRemoveUnavailableFamilyFromDevice)
         try fixture.guest.removeUnavailableFamilyFromDevice()
         XCTAssertNil(fixture.guest.household)
         try fixture.guest.createFamily(name: "Guest New Family", parentName: "Guest Parent")

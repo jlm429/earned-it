@@ -65,6 +65,9 @@ final class HouseholdStore {
     }
     var familyInvitations: [FamilyInvitation] { snapshot.invitations.sorted { $0.createdAt > $1.createdAt } }
     var familyAccessLost: Bool { session.familyAccessLost == true }
+    var canRemoveUnavailableFamilyFromDevice: Bool {
+        familyAccessLost && session.accountMembershipLockAttemptID == nil
+    }
     var canDeleteFamily: Bool {
         guard let selectedMember else { return false }
         return selectedMember.role == .parent && session.location?.isOwner == true
@@ -313,7 +316,8 @@ final class HouseholdStore {
             )))
         }
         tombstones.append(.choreDeletion(ChoreDeletion(
-            choreID: choreID, day: day, recordedByMemberID: parent.id
+            choreID: choreID, day: day, recordedByMemberID: parent.id,
+            revisionID: current?.id
         )))
         try append(tombstones)
     }
@@ -2224,9 +2228,7 @@ final class HouseholdStore {
     }
 
     func removeUnavailableFamilyFromDevice() throws {
-        guard familyAccessLost, session.accountMembershipLockAttemptID == nil else {
-            throw HouseholdError.cloudUnavailable
-        }
+        guard canRemoveUnavailableFamilyFromDevice else { throw HouseholdError.cloudUnavailable }
         syncTask?.cancel()
         try repository.clearLocalData()
         try resetAfterLocalRemoval()
@@ -2325,7 +2327,9 @@ final class HouseholdStore {
         case .chore(let value): return hasMembers(value.memberIDs)
         case .choreDeletion(let value):
             return hasMembers([value.recordedByMemberID])
-                && available.revisions.contains { $0.choreID == value.choreID }
+                && available.revisions.contains {
+                    $0.choreID == value.choreID && (value.revisionID == nil || $0.id == value.revisionID)
+                }
         case .completion(let value):
             return hasMembers(value.eligibleMemberIDs + [value.memberID, value.recordedByMemberID])
                 && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
@@ -2373,7 +2377,13 @@ final class HouseholdStore {
             case .chore(let value):
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
             case .choreDeletion(let value):
-                guard fact.authorMemberID == value.recordedByMemberID else {
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      value.revisionID == nil || facts.contains(where: {
+                          if case .chore(let revision) = $0.body {
+                              return revision.id == value.revisionID && revision.choreID == value.choreID
+                          }
+                          return false
+                      }) else {
                     throw HouseholdError.malformedData
                 }
             case .occurrence(let value):

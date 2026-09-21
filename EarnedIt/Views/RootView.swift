@@ -53,9 +53,9 @@ struct RootView: View {
                 .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.familyAccessLost && store.household != nil {
                 ContentUnavailableView {
-                    Label("Family Access Ended", systemImage: "person.3.fill")
+                    Label("Family Access Needs Attention", systemImage: "person.3.fill")
                 } description: {
-                    Text("This family is no longer available in iCloud. Your device will not send changes to it.")
+                    Text("This device cannot currently access the family in iCloud. Check access to retry. Your saved family stays on this device.")
                 } actions: {
                     if store.canDeleteFamily {
                         Button("Finish Deleting Family", role: .destructive) {
@@ -72,10 +72,12 @@ struct RootView: View {
                             catch { store.errorMessage = error.localizedDescription }
                         }
                     }
-                    Button("Remove From This Device", role: .destructive) {
-                        store.perform { try store.removeUnavailableFamilyFromDevice() }
+                    if store.canRemoveUnavailableFamilyFromDevice {
+                        Button("Remove From This Device", role: .destructive) {
+                            store.perform { try store.removeUnavailableFamilyFromDevice() }
+                        }
+                        .accessibilityIdentifier("remove-unavailable-family")
                     }
-                    .accessibilityIdentifier("remove-unavailable-family")
                 }
                 .accessibilityIdentifier("family-access-ended")
             } else if store.household == nil || store.household?.isSetupComplete == false {

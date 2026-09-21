@@ -217,6 +217,14 @@ struct ChoreDeletion: Codable, Equatable {
     let choreID: UUID
     let day: CivilDay
     let recordedByMemberID: UUID
+    let revisionID: UUID?
+
+    init(choreID: UUID, day: CivilDay, recordedByMemberID: UUID, revisionID: UUID? = nil) {
+        self.choreID = choreID
+        self.day = day
+        self.recordedByMemberID = recordedByMemberID
+        self.revisionID = revisionID
+    }
 }
 
 struct DatedCompletion: Codable, Equatable {

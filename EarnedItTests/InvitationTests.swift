@@ -1130,6 +1130,9 @@ final class InvitationTests: XCTestCase {
         XCTAssertNotNil(child.session.accountMembershipLockAttemptID)
         XCTAssertEqual(server.accountMembershipLocks["revoked-child"], lock)
         XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertFalse(child.canRemoveUnavailableFamilyFromDevice)
+        XCTAssertThrowsError(try child.removeUnavailableFamilyFromDevice())
+        XCTAssertNotNil(child.household)
     }
 
     func testCloudKitLockConflictClassificationDoesNotMaskServiceErrors() {
