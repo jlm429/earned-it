@@ -577,6 +577,34 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(transport.deleteFamilyAttempts, 3)
     }
 
+    func testCompletedCloudDeletionOffersSuccessfulLocalCleanup() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let location = try XCTUnwrap(family.store.session.location)
+        transport.accountLockReleaseFailures = 2
+
+        do { try await family.store.deleteFamily(); XCTFail("Membership cleanup must fail") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .networkFailure) }
+        XCTAssertNil(server.zones[location.zoneName])
+
+        do { try await family.store.synchronize(); XCTFail("Deleted family must not synchronize") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .zoneNotFound) }
+        XCTAssertTrue(family.store.canFinishDeletingFamily)
+        XCTAssertFalse(family.store.canRemoveUnavailableFamilyFromDevice)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .active)
+
+        do { try await family.store.synchronize(); XCTFail("Deleted family must not synchronize") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .zoneNotFound) }
+        XCTAssertFalse(family.store.canFinishDeletingFamily)
+        XCTAssertTrue(family.store.canRemoveUnavailableFamilyFromDevice)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+
+        try family.store.removeUnavailableFamilyFromDevice()
+        XCTAssertNil(family.store.household)
+    }
+
     func testInvitedDeviceDetectsDeletedFamilyAndCannotResurrectIt() async throws {
         let fixture = try await connectedParentInstallation()
         let location = try XCTUnwrap(fixture.family.store.session.location)

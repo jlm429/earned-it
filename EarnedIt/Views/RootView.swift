@@ -57,7 +57,7 @@ struct RootView: View {
                 } description: {
                     Text("This device cannot currently access the family in iCloud. Check access to retry. Your saved family stays on this device.")
                 } actions: {
-                    if store.canDeleteFamily {
+                    if store.canFinishDeletingFamily {
                         Button("Finish Deleting Family", role: .destructive) {
                             Task {
                                 do { try await store.deleteFamily() }

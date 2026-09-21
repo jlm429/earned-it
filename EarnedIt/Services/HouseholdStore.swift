@@ -73,6 +73,9 @@ final class HouseholdStore {
         return selectedMember.role == .parent && session.location?.isOwner == true
             && selectedMember.id == snapshot.creatorMemberID
     }
+    var canFinishDeletingFamily: Bool {
+        canDeleteFamily && familyAccessLost && session.accountMembershipLockAttemptID != nil
+    }
     var pendingInvitationCleanupID: String? {
         guard let pending = session.pendingInvitationAcceptance else { return nil }
         return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")/\(pending.phase.rawValue)"
