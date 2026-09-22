@@ -270,6 +270,19 @@ enum ChoreRules {
             revisionsByDay[revision.effectiveDay] = revision
         }
         let timeline = revisionsByDay.values.sorted { $0.effectiveDay < $1.effectiveDay }
+        var alternatingEraStarts: [UUID: CivilDay] = [:]
+        var eraStart: CivilDay?
+        var wasAlternating = false
+        for revision in timeline {
+            let isAlternating = revision.mode == .alternating && !revision.isArchived
+            if isAlternating {
+                if !wasAlternating { eraStart = revision.effectiveDay }
+                alternatingEraStarts[revision.id] = eraStart
+            } else {
+                eraStart = nil
+            }
+            wasAlternating = isAlternating
+        }
         var eventDays: Set<CivilDay> = []
         for entry in timeline.enumerated() {
             let (index, revision) = entry
@@ -295,10 +308,16 @@ enum ChoreRules {
         }.map(\.day))
 
         var priorOwnerID: UUID?
+        var activeEraStart: CivilDay?
         var activeOwnerID: UUID?
         for eventDay in eventDays.sorted() {
             guard let revision = snapshot.configuration(choreID: choreID, on: eventDay),
                   !revision.isArchived, revision.mode == .alternating else { continue }
+            let eventEraStart = alternatingEraStarts[revision.id]
+            if activeEraStart != eventEraStart {
+                priorOwnerID = nil
+                activeEraStart = eventEraStart
+            }
             let eligibleIDs = Set(snapshot.members.filter {
                 $0.role == .child && $0.isActive(on: eventDay) && revision.memberIDs.contains($0.id)
             }.map(\.id))
@@ -345,6 +364,7 @@ enum ChoreRules {
         guard let revision = snapshot.configuration(choreID: choreID, on: day),
               !revision.isArchived, revision.mode == .alternating,
               revision.schedulingMode == .asNeeded else { return nil }
+        if activeEraStart != alternatingEraStarts[revision.id] { priorOwnerID = nil }
         let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
                                 eligibleIDs: Set(snapshot.members.filter {
                                     $0.role == .child && $0.isActive(on: day)

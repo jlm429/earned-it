@@ -368,6 +368,7 @@ struct HouseholdSnapshot: Equatable {
         var invitationsByID: [UUID: FamilyInvitation] = [:]
         var claimsByInvitationID: [UUID: InvitationClaim] = [:]
         var revocationsByInvitationID: [UUID: InvitationRevocation] = [:]
+        var deletedChoreIDs: Set<UUID> = []
         for fact in facts.sorted(by: HouseholdFact.precedes) {
             switch fact.body {
             case .household(let value):
@@ -376,13 +377,22 @@ struct HouseholdSnapshot: Equatable {
             case .member(let value):
                 if creationSequence[value.id] == nil { creationSequence[value.id] = fact.sequence }
                 membersByID[value.id] = value
-            case .chore(let value): revisions.append(value)
+            case .chore(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+                revisions.append(value)
             case .completion(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
                 completionsByKey[value.key] = value
                 recordedAssignments.append(value)
-            case .occurrence(let value): occurrencesByKey[value.key] = value
-            case .alternatingTurnAdvance(let value): alternatingTurnAdvances.append(value)
-            case .choreDeletion(let value): choreDeletions.append(value)
+            case .occurrence(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+                occurrencesByKey[value.key] = value
+            case .alternatingTurnAdvance(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+                alternatingTurnAdvances.append(value)
+            case .choreDeletion(let value):
+                guard deletedChoreIDs.insert(value.choreID).inserted else { continue }
+                choreDeletions.append(value)
             case .allowance(let value): allowances.append(value)
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value

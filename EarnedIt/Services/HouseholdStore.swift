@@ -2484,8 +2484,16 @@ final class HouseholdStore {
             }
         }
         let resolved = HouseholdSnapshot(facts: facts)
-        for deletion in resolved.choreDeletions {
-            guard resolved.revisions.contains(where: {
+        let revisions = facts.compactMap { fact -> ChoreRevision? in
+            if case .chore(let revision) = fact.body { return revision }
+            return nil
+        }
+        let deletions = facts.compactMap { fact -> ChoreDeletion? in
+            if case .choreDeletion(let deletion) = fact.body { return deletion }
+            return nil
+        }
+        for deletion in deletions {
+            guard revisions.contains(where: {
                 $0.choreID == deletion.choreID && $0.effectiveDay <= deletion.day
             }), resolved.member(deletion.recordedByMemberID)?.role == .parent else {
                 throw HouseholdError.malformedData
