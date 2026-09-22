@@ -42,6 +42,52 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[1])
     }
 
+    func testScheduledToAsNeededEditPreservesNextAlternatingChild() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id]
+        )
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let order = original.memberIDs
+        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[0])
+
+        try family.store.saveChore(
+            choreID: chore, weekday: .monday, title: original.title,
+            mode: .alternating, memberIDs: order, schedulingMode: .asNeeded
+        )
+        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[0])
+
+        family.move(to: "2026-09-08T16:00:00Z")
+        XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[1])
+        try family.store.activateAsNeededChore(choreID: chore)
+        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+    }
+
+    func testAsNeededToScheduledEditPreservesNextAlternatingChild() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id], schedulingMode: .asNeeded
+        )
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let order = original.memberIDs
+        try family.store.activateAsNeededChore(choreID: chore)
+        try family.store.setCompletion(choreID: chore, memberID: order[0],
+                                       date: family.clock.now, state: .done)
+
+        try family.store.saveChore(
+            choreID: chore, weekday: .tuesday, title: original.title,
+            mode: .alternating, memberIDs: order, schedulingMode: .scheduled
+        )
+        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[0])
+
+        family.move(to: "2026-09-08T16:00:00Z")
+        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+    }
+
     func testIncompleteActivationDoesNotConsumeTurnAfterMergedOfflineActivation() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
@@ -728,6 +774,53 @@ final class ProductionCleanupTests: XCTestCase {
         try await fixture.guest.synchronize()
         XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
         XCTAssertEqual(fixture.guest.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
+    }
+
+    func testSchedulingModeEditsPreserveAlternatingTurnsAcrossInstallations() async throws {
+        let fixture = try await connectedParentInstallation()
+        let nora = try fixture.family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let participants = [fixture.family.hanna.id, fixture.family.alek.id, nora.id]
+        let scheduledToAsNeeded = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Scheduled Switch", mode: .alternating,
+            memberIDs: participants
+        )
+        let asNeededToScheduled = try fixture.family.store.saveChore(
+            weekday: .monday, title: "As Needed Switch", mode: .alternating,
+            memberIDs: participants, schedulingMode: .asNeeded
+        )
+        let scheduledOrder = try XCTUnwrap(fixture.family.store.snapshot.configuration(
+            choreID: scheduledToAsNeeded, on: fixture.family.store.day
+        )).memberIDs
+        let asNeededOrder = try XCTUnwrap(fixture.family.store.snapshot.configuration(
+            choreID: asNeededToScheduled, on: fixture.family.store.day
+        )).memberIDs
+        try fixture.family.store.activateAsNeededChore(choreID: asNeededToScheduled)
+        try fixture.family.store.setCompletion(choreID: asNeededToScheduled, memberID: asNeededOrder[0],
+                                               date: fixture.family.clock.now, state: .done)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        try fixture.family.store.saveChore(
+            choreID: scheduledToAsNeeded, weekday: .monday, title: "Scheduled Switch",
+            mode: .alternating, memberIDs: scheduledOrder, schedulingMode: .asNeeded
+        )
+        try fixture.family.store.saveChore(
+            choreID: asNeededToScheduled, weekday: .tuesday, title: "As Needed Switch",
+            mode: .alternating, memberIDs: asNeededOrder, schedulingMode: .scheduled
+        )
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        fixture.family.move(to: "2026-09-08T16:00:00Z")
+        fixture.guest.refreshDate()
+        XCTAssertEqual(fixture.family.store.nextAlternatingOwner(choreID: scheduledToAsNeeded)?.id,
+                       scheduledOrder[1])
+        XCTAssertEqual(fixture.guest.nextAlternatingOwner(choreID: scheduledToAsNeeded)?.id,
+                       scheduledOrder[1])
+        XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == asNeededToScheduled }?.turnOwnerID,
+                       asNeededOrder[1])
+        XCTAssertEqual(fixture.guest.dailyList().first { $0.id == asNeededToScheduled }?.turnOwnerID,
+                       asNeededOrder[1])
     }
 
     func testDeleteChoreAlsoDefeatsPendingTomorrowEdit() throws {

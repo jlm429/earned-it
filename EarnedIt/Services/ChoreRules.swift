@@ -199,7 +199,8 @@ enum ChoreRules {
               !revision.isArchived, !snapshot.isChoreDeleted(choreID, on: day),
               revision.mode == .alternating,
               revision.schedulingMode == .asNeeded else { return nil }
-        return asNeededAlternatingOwner(choreID: choreID, on: day, snapshot: snapshot)
+        return alternatingOwner(choreID: choreID, on: day, snapshot: snapshot,
+                                calendar: snapshot.household?.calendar ?? AppCalendar.current)
     }
 
     private static func resolveOccurrence(revision: ChoreRevision, scheduledMembers: [FamilyMember],
@@ -207,13 +208,7 @@ enum ChoreRules {
                                           calendar: Calendar) -> ResolvedOccurrence {
         var owner: FamilyMember?
         if revision.mode == .alternating, !scheduledMembers.isEmpty {
-            switch revision.schedulingMode {
-            case .scheduled:
-                owner = scheduledAlternatingOwner(choreID: choreID, on: day,
-                                                  snapshot: snapshot, calendar: calendar)
-            case .asNeeded:
-                owner = asNeededAlternatingOwner(choreID: choreID, on: day, snapshot: snapshot)
-            }
+            owner = alternatingOwner(choreID: choreID, on: day, snapshot: snapshot, calendar: calendar)
         }
         func isActive(_ contribution: DatedCompletion) -> Bool {
             guard contribution.revisionID == revision.id else { return false }
@@ -256,103 +251,94 @@ enum ChoreRules {
                                   displacedHistoricalContributions: historical)
     }
 
-    private static func scheduledAlternatingOwner(choreID: UUID, on day: CivilDay,
-                                                  snapshot: HouseholdSnapshot,
-                                                  calendar: Calendar) -> FamilyMember? {
+    private static func alternatingOwner(choreID: UUID, on day: CivilDay,
+                                         snapshot: HouseholdSnapshot,
+                                         calendar: Calendar) -> FamilyMember? {
         var revisionsByDay: [CivilDay: ChoreRevision] = [:]
         for revision in snapshot.revisions where revision.choreID == choreID && revision.effectiveDay <= day {
             revisionsByDay[revision.effectiveDay] = revision
         }
         let timeline = revisionsByDay.values.sorted { $0.effectiveDay < $1.effectiveDay }
-        var priorOwnerID: UUID?
-        var ownerID: UUID?
-        func applyOccurrence(_ occurrence: CivilDay, revision: ChoreRevision) {
-            let eligibleIDs = Set(snapshot.members.filter {
-                $0.role == .child && $0.isActive(on: occurrence) && revision.memberIDs.contains($0.id)
-            }.map(\.id))
-            guard let nextOwnerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
-                                              eligibleIDs: eligibleIDs) else { return }
-            if occurrence == day { ownerID = nextOwnerID }
-            let disposition = snapshot.occurrence(choreID: choreID, on: occurrence)
-            let keepsTurn = disposition?.revisionID == revision.id
-                && disposition?.state == .notNeeded
-                && disposition?.alternatingSkipBehavior == .keepTurn
-            if !keepsTurn { priorOwnerID = nextOwnerID }
-        }
+        var eventDays: Set<CivilDay> = []
         for entry in timeline.enumerated() {
             let (index, revision) = entry
-            guard revision.mode == .alternating, !revision.isArchived else { continue }
+            guard revision.mode == .alternating, !revision.isArchived,
+                  revision.schedulingMode == .scheduled else { continue }
             let end = timeline.indices.contains(index + 1)
                 ? min(timeline[index + 1].effectiveDay, day.adding(days: 1, calendar: calendar))
                 : day.adding(days: 1, calendar: calendar)
-            guard revision.schedulingMode == .scheduled else { continue }
             let startDate = revision.effectiveDay.date(in: calendar)
             let weekday = calendar.component(.weekday, from: startDate)
             let offset = (revision.weekday.rawValue - weekday + 7) % 7
             var occurrence = revision.effectiveDay.adding(days: offset, calendar: calendar)
             while occurrence < end {
-                applyOccurrence(occurrence, revision: revision)
+                eventDays.insert(occurrence)
                 occurrence = occurrence.adding(days: 7, calendar: calendar)
             }
         }
-        return ownerID.flatMap { snapshot.member($0) }
-    }
+        eventDays.formUnion(snapshot.occurrenceDispositions.filter {
+            $0.choreID == choreID && $0.state == .available && $0.day <= day
+        }.map(\.day))
+        eventDays.formUnion(snapshot.alternatingTurnAdvances.filter {
+            $0.choreID == choreID && $0.day <= day
+        }.map(\.day))
 
-    private static func asNeededAlternatingOwner(choreID: UUID, on day: CivilDay,
-                                                 snapshot: HouseholdSnapshot) -> FamilyMember? {
         var priorOwnerID: UUID?
         var activeOwnerID: UUID?
-        let eventDays = Set(
-            snapshot.occurrenceDispositions.filter {
-                $0.choreID == choreID && $0.state == .available && $0.day <= day
-            }.map(\.day)
-            + snapshot.alternatingTurnAdvances.filter {
-                $0.choreID == choreID && $0.day <= day
-            }.map(\.day)
-        ).sorted()
-
-        func eligibleIDs(for revision: ChoreRevision, on eventDay: CivilDay) -> Set<UUID> {
-            Set(snapshot.members.filter {
+        for eventDay in eventDays.sorted() {
+            guard let revision = snapshot.configuration(choreID: choreID, on: eventDay),
+                  !revision.isArchived, revision.mode == .alternating else { continue }
+            let eligibleIDs = Set(snapshot.members.filter {
                 $0.role == .child && $0.isActive(on: eventDay) && revision.memberIDs.contains($0.id)
             }.map(\.id))
-        }
-
-        for eventDay in eventDays {
-            guard let revision = snapshot.configuration(choreID: choreID, on: eventDay),
-                  !revision.isArchived, revision.mode == .alternating,
-                  revision.schedulingMode == .asNeeded else { continue }
-            let eligible = eligibleIDs(for: revision, on: eventDay)
-            let activation = snapshot.occurrenceDispositions.first {
-                $0.choreID == choreID && $0.revisionID == revision.id
-                    && $0.day == eventDay && $0.state == .available
-            }
-            if activation?.assignedMemberID != nil || activation == nil {
-                for advance in snapshot.alternatingTurnAdvances where advance.choreID == choreID
-                    && advance.revisionID == revision.id && advance.day == eventDay {
-                    guard let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
-                                                  eligibleIDs: eligible),
-                          ownerID != activation?.assignedMemberID,
-                          ownerID == advance.expectedMemberID else { continue }
-                    priorOwnerID = ownerID
+            switch revision.schedulingMode {
+            case .scheduled:
+                let weekday = calendar.component(.weekday, from: eventDay.date(in: calendar))
+                guard revision.weekday.rawValue == weekday,
+                      let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
+                                              eligibleIDs: eligibleIDs) else { continue }
+                if eventDay == day { activeOwnerID = ownerID }
+                let disposition = snapshot.occurrence(choreID: choreID, on: eventDay)
+                let keepsTurn = disposition?.revisionID == revision.id
+                    && disposition?.state == .notNeeded
+                    && disposition?.alternatingSkipBehavior == .keepTurn
+                if !keepsTurn { priorOwnerID = ownerID }
+            case .asNeeded:
+                let activation = snapshot.occurrenceDispositions.first {
+                    $0.choreID == choreID && $0.revisionID == revision.id
+                        && $0.day == eventDay && $0.state == .available
                 }
+                if activation?.assignedMemberID != nil || activation == nil {
+                    for advance in snapshot.alternatingTurnAdvances where advance.choreID == choreID
+                        && advance.revisionID == revision.id && advance.day == eventDay {
+                        guard let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
+                                                      eligibleIDs: eligibleIDs),
+                              ownerID != activation?.assignedMemberID,
+                              ownerID == advance.expectedMemberID else { continue }
+                        priorOwnerID = ownerID
+                    }
+                }
+                guard let activation,
+                      let ownerID = activation.assignedMemberID
+                        ?? nextOwner(after: priorOwnerID, participants: revision.memberIDs,
+                                     eligibleIDs: eligibleIDs) else { continue }
+                if eventDay == day { activeOwnerID = ownerID }
+                let completed = snapshot.recordedAssignments.last {
+                    $0.choreID == choreID && $0.revisionID == revision.id && $0.day == eventDay
+                        && $0.memberID == ownerID
+                }?.state.isAccountedFor == true
+                if completed || activation.assignedMemberID == nil { priorOwnerID = ownerID }
             }
-            guard let activation,
-                  let ownerID = activation.assignedMemberID
-                    ?? nextOwner(after: priorOwnerID, participants: revision.memberIDs,
-                                 eligibleIDs: eligible) else { continue }
-            if eventDay == day { activeOwnerID = ownerID }
-            let completed = snapshot.recordedAssignments.last {
-                $0.choreID == choreID && $0.revisionID == revision.id && $0.day == eventDay
-                    && $0.memberID == ownerID
-            }?.state.isAccountedFor == true
-            if completed || activation.assignedMemberID == nil { priorOwnerID = ownerID }
         }
         if let activeOwnerID { return snapshot.member(activeOwnerID) }
         guard let revision = snapshot.configuration(choreID: choreID, on: day),
               !revision.isArchived, revision.mode == .alternating,
               revision.schedulingMode == .asNeeded else { return nil }
         let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
-                                eligibleIDs: eligibleIDs(for: revision, on: day))
+                                eligibleIDs: Set(snapshot.members.filter {
+                                    $0.role == .child && $0.isActive(on: day)
+                                        && revision.memberIDs.contains($0.id)
+                                }.map(\.id)))
         return ownerID.flatMap { snapshot.member($0) }
     }
 
