@@ -101,7 +101,7 @@ enum ChoreRules {
             guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return nil }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
             if snapshot.isChoreDeleted(choreID, on: day) {
-                guard let deletion = snapshot.choreDeletions.last(where: {
+                guard let deletion = snapshot.choreDeletions.first(where: {
                     $0.choreID == choreID && $0.day <= day
                 }), deletion.day == day,
                       let winningRevisionID = deletion.revisionID,

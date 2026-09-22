@@ -840,6 +840,75 @@ final class ProductionCleanupTests: XCTestCase {
         }
     }
 
+    func testFirstDeterministicChoreDeletionSnapshotWinsAcrossDeliveryOrder() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Completed Chore", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        try family.complete(chore, as: family.hanna)
+        let occurrence = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        let baseFacts = try family.repository.facts(householdID: occurrence.configuration.householdID)
+        let sequence = try XCTUnwrap(baseFacts.map(\.sequence).max()) + 1
+        let resolved = ChoreDeletion(
+            choreID: chore, day: family.store.day, recordedByMemberID: family.parent.id,
+            revisionID: occurrence.configuration.id,
+            eligibleMemberIDs: occurrence.eligibleMembers.map(\.id),
+            turnOwnerID: occurrence.turnOwnerID, wasNotNeeded: occurrence.isNotNeeded,
+            resolvedContributions: occurrence.contributions.filter { $0.state != .unmarked },
+            resolvedExcusedMemberIDs: []
+        )
+        let stale = ChoreDeletion(
+            choreID: chore, day: family.store.day, recordedByMemberID: family.parent.id,
+            revisionID: occurrence.configuration.id,
+            eligibleMemberIDs: occurrence.eligibleMembers.map(\.id),
+            turnOwnerID: occurrence.turnOwnerID, wasNotNeeded: occurrence.isNotNeeded,
+            resolvedContributions: [], resolvedExcusedMemberIDs: []
+        )
+        let resolvedFact = HouseholdFact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            householdID: occurrence.configuration.householdID, sequence: sequence,
+            authorDeviceID: family.store.session.deviceID, authorMemberID: family.parent.id,
+            body: .choreDeletion(resolved)
+        )
+        let staleFact = HouseholdFact(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            householdID: occurrence.configuration.householdID, sequence: sequence,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .choreDeletion(stale)
+        )
+        let allowanceBefore = family.store.allowanceWeek(for: family.hanna.id)
+        let factsBefore = family.store.weekFacts(for: family.hanna.id)
+        let streakBefore = MetricsService.streak(childID: family.hanna.id,
+                                                 snapshot: family.store.snapshot,
+                                                 today: family.clock.now)
+
+        func projectedStore(deliveries: [HouseholdFact]) throws -> HouseholdStore {
+            let repository = try HouseholdRepository(inMemory: true)
+            try repository.commit(facts: baseFacts, session: family.store.session, uploaded: true)
+            for fact in deliveries { try repository.commit(facts: [fact], uploaded: true) }
+            return try HouseholdStore(repository: repository, clock: { family.clock.now }, automaticSync: false)
+        }
+
+        let stores = try [
+            projectedStore(deliveries: [resolvedFact, staleFact]),
+            projectedStore(deliveries: [staleFact, resolvedFact])
+        ]
+        XCTAssertEqual(stores[0].snapshot, stores[1].snapshot)
+        for store in stores {
+            let history = try XCTUnwrap(store.dailyList().first { $0.id == chore })
+            XCTAssertEqual(history.configuration.title, "Completed Chore")
+            XCTAssertEqual(history.state(for: family.hanna.id), .done)
+            XCTAssertEqual(store.allowanceWeek(for: family.hanna.id), allowanceBefore)
+            XCTAssertEqual(store.weekFacts(for: family.hanna.id), factsBefore)
+            XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
+                                                 snapshot: store.snapshot,
+                                                 today: family.clock.now), streakBefore)
+            XCTAssertFalse(ChoreRules.visibleList(store.dailyList(), to: family.parent)
+                .contains { $0.id == chore })
+        }
+    }
+
     func testChoreDeletionConvergesAcrossParentAndChildInstallations() async throws {
         let fixture = try await connectedParentInstallation()
         let chore = try fixture.family.store.saveChore(
@@ -1022,6 +1091,36 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertNil(replacement.household)
         try replacement.createFamily(name: "New Family", parentName: "New Parent")
         XCTAssertEqual(replacement.household?.name, "New Family")
+    }
+
+    func testSuspendedFamilyDeletionCannotClearReplacementFamily() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let suspended = expectation(description: "Family deletion suspended")
+        var resume: CheckedContinuation<Void, Never>?
+        transport.beforeDeleteFamilyData = {
+            await withCheckedContinuation { continuation in
+                resume = continuation
+                suspended.fulfill()
+            }
+        }
+        let deletion = Task { try await family.store.deleteFamily() }
+        await fulfillment(of: [suspended], timeout: 5)
+
+        try family.store.resetLocalData()
+        try family.store.createFamily(name: "Replacement Family", parentName: "Replacement Parent")
+        let replacementSession = family.store.session
+        let replacementFacts = family.store.snapshot
+        resume?.resume()
+
+        do { try await deletion.value; XCTFail("Stale deletion must not clear the replacement family") }
+        catch { XCTAssertEqual(error as? HouseholdError, .permission) }
+        XCTAssertEqual(family.store.session, replacementSession)
+        XCTAssertEqual(family.store.snapshot, replacementFacts)
+        XCTAssertEqual(family.store.household?.name, "Replacement Family")
+        XCTAssertEqual(try family.repository.session(), replacementSession)
     }
 
     func testDeleteFamilyRequiresCreatorAndCloudOwner() async throws {

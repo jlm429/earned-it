@@ -2246,7 +2246,20 @@ final class HouseholdStore {
               let participant = session.cloudParticipantID,
               let attemptID = session.accountMembershipLockAttemptID,
               let transport else { throw HouseholdError.permission }
+        let deviceID = session.deviceID
+        let householdID = location.householdID
+        func requireDeletionSession(pending: Bool? = nil) throws {
+            guard session.deviceID == deviceID,
+                  session.householdID == householdID,
+                  session.location == location,
+                  session.cloudParticipantID == participant,
+                  session.accountMembershipLockAttemptID == attemptID,
+                  pending.map({ session.pendingFamilyDeletion == $0 }) ?? true else {
+                throw HouseholdError.permission
+            }
+        }
         guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+        try requireDeletionSession()
 
         if session.pendingFamilyDeletion != true {
             var updated = session
@@ -2258,11 +2271,14 @@ final class HouseholdStore {
         // Delete the owner zone first. It contains the share, invitations, and all family facts.
         // Local state remains available for retry until the account membership is also released.
         try await transport.deleteFamilyData(at: location, expectedParticipantID: participant)
+        try requireDeletionSession(pending: true)
         guard try await transport.releaseAccountMembershipLock(
             householdID: location.householdID, attemptID: attemptID,
             expectedParticipantID: participant, now: clock()
         ) else { throw HouseholdError.cloudUnavailable }
+        try requireDeletionSession(pending: true)
         syncTask?.cancel()
+        try requireDeletionSession(pending: true)
         try repository.clearLocalData()
         try resetAfterLocalRemoval()
     }

@@ -96,6 +96,7 @@ final class TestTransport: HouseholdTransport {
     var beforeLeaveSubmission: (() async -> Void)?
     var beforeAccountLockRelease: (() async -> Void)?
     var beforeAccountLockReleaseSubmission: (() async -> Void)?
+    var beforeDeleteFamilyData: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
 
@@ -258,6 +259,7 @@ final class TestTransport: HouseholdTransport {
     func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws {
         deleteFamilyAttempts += 1
         guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        await beforeDeleteFamilyData?()
         guard location.isOwner,
               let zone = server.zones[location.zoneName],
               zone.householdID == location.householdID,
