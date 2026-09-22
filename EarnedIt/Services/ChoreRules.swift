@@ -113,7 +113,7 @@ enum ChoreRules {
                         && contribution.day == day && contribution.revisionID == winningRevisionID {
                         latestByMember[contribution.memberID] = contribution
                     }
-                    retained = latestByMember.values.filter(\.state.isAccountedFor).sorted { $0.key < $1.key }
+                    retained = latestByMember.values.filter { $0.state != .unmarked }.sorted { $0.key < $1.key }
                 }
                 guard !retained.isEmpty || deletion.wasNotNeeded == true else { return nil }
                 let eligibleIDs = Set(deletion.eligibleMemberIDs ?? retained.flatMap(\.eligibleMemberIDs))

@@ -370,6 +370,31 @@ final class ProductionCleanupTests: XCTestCase {
         })
     }
 
+    func testDeleteChorePreservesExplicitMissedHistoryAndAllowance() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Missed Chore", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let monday = family.clock.now
+        try family.store.setCompletion(choreID: chore, memberID: family.hanna.id,
+                                       date: monday, state: .missed)
+        let allowanceBefore = family.store.allowanceWeek(for: family.hanna.id)
+
+        try family.store.deleteChore(chore)
+
+        let historical = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        XCTAssertTrue(historical.isDeleted)
+        XCTAssertEqual(historical.state(for: family.hanna.id), .missed)
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id), allowanceBefore)
+
+        family.move(to: "2026-09-08T16:00:00Z")
+        let allowanceAfter = family.store.allowanceWeek(for: family.hanna.id, containing: monday)
+        XCTAssertEqual(allowanceAfter.items.first { $0.choreID == chore }?.state, .missed)
+        XCTAssertEqual(allowanceAfter.missing.map(\.choreID), [chore])
+        XCTAssertFalse(allowanceAfter.earned)
+    }
+
     func testDeleteChoreKeepsPriorWeekHistoryAllowanceAndStreak() throws {
         let family = try TestFamily()
         let chore = try family.store.saveChore(

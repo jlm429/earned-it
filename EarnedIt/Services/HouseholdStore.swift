@@ -335,7 +335,7 @@ final class HouseholdStore {
             eligibleMemberIDs: currentOccurrence?.eligibleMembers.map(\.id),
             turnOwnerID: currentOccurrence?.turnOwnerID,
             wasNotNeeded: currentOccurrence?.isNotNeeded,
-            resolvedContributions: currentOccurrence?.contributions.filter(\.state.isAccountedFor)
+            resolvedContributions: currentOccurrence?.contributions.filter { $0.state != .unmarked }
         )))
         try append(tombstones)
     }
@@ -2410,7 +2410,7 @@ final class HouseholdStore {
                       value.turnOwnerID.map({ value.eligibleMemberIDs?.contains($0) == true }) ?? true,
                       value.resolvedContributions?.allSatisfy({
                           $0.choreID == value.choreID && $0.day == value.day
-                              && $0.revisionID == value.revisionID && $0.state.isAccountedFor
+                              && $0.revisionID == value.revisionID && $0.state != .unmarked
                       }) ?? true,
                       value.revisionID == nil || facts.contains(where: {
                           if case .chore(let revision) = $0.body {
