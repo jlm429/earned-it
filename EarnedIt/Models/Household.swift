@@ -185,8 +185,58 @@ struct ChoreOccurrenceDisposition: Codable, Equatable {
     let state: ChoreOccurrenceState
     let alternatingSkipBehavior: AlternatingSkipBehavior?
     let recordedByMemberID: UUID
+    let assignedMemberID: UUID?
+
+    init(choreID: UUID, revisionID: UUID, day: CivilDay, state: ChoreOccurrenceState,
+         alternatingSkipBehavior: AlternatingSkipBehavior?, recordedByMemberID: UUID,
+         assignedMemberID: UUID? = nil) {
+        self.choreID = choreID
+        self.revisionID = revisionID
+        self.day = day
+        self.state = state
+        self.alternatingSkipBehavior = alternatingSkipBehavior
+        self.recordedByMemberID = recordedByMemberID
+        self.assignedMemberID = assignedMemberID
+    }
 
     var key: String { "\(choreID)/\(day)" }
+}
+
+/// Advances an inactive alternating As Needed chore only when the expected child is still next.
+/// The expected owner makes concurrent duplicate skips deterministic and idempotent.
+struct AlternatingTurnAdvance: Codable, Equatable {
+    let choreID: UUID
+    let revisionID: UUID
+    let expectedMemberID: UUID
+    let day: CivilDay
+    let recordedByMemberID: UUID
+}
+
+/// A durable removal boundary that a later offline configuration cannot undo.
+struct ChoreDeletion: Codable, Equatable {
+    let choreID: UUID
+    let day: CivilDay
+    let recordedByMemberID: UUID
+    let revisionID: UUID?
+    let eligibleMemberIDs: [UUID]?
+    let turnOwnerID: UUID?
+    let wasNotNeeded: Bool?
+    let resolvedContributions: [DatedCompletion]?
+    let resolvedExcusedMemberIDs: [UUID]?
+
+    init(choreID: UUID, day: CivilDay, recordedByMemberID: UUID, revisionID: UUID? = nil,
+         eligibleMemberIDs: [UUID]? = nil, turnOwnerID: UUID? = nil, wasNotNeeded: Bool? = nil,
+         resolvedContributions: [DatedCompletion]? = nil, resolvedExcusedMemberIDs: [UUID]? = nil) {
+        self.choreID = choreID
+        self.day = day
+        self.recordedByMemberID = recordedByMemberID
+        self.revisionID = revisionID
+        self.eligibleMemberIDs = eligibleMemberIDs
+        self.turnOwnerID = turnOwnerID
+        self.wasNotNeeded = wasNotNeeded
+        self.resolvedContributions = resolvedContributions
+        self.resolvedExcusedMemberIDs = resolvedExcusedMemberIDs
+    }
 }
 
 struct DatedCompletion: Codable, Equatable {
@@ -263,6 +313,8 @@ enum HouseholdFactBody: Codable, Equatable {
     case chore(ChoreRevision)
     case completion(DatedCompletion)
     case occurrence(ChoreOccurrenceDisposition)
+    case alternatingTurnAdvance(AlternatingTurnAdvance)
+    case choreDeletion(ChoreDeletion)
     case allowance(AllowanceRevision)
     case excuse(Excuse)
     case request(ProfileRequest)
@@ -293,6 +345,9 @@ struct HouseholdSnapshot: Equatable {
     var completions: [DatedCompletion] = []
     var recordedAssignments: [DatedCompletion] = []
     var occurrenceDispositions: [ChoreOccurrenceDisposition] = []
+    var alternatingTurnAdvances: [AlternatingTurnAdvance] = []
+    var choreDeletions: [ChoreDeletion] = []
+    private(set) var creatorMemberID: UUID?
     private var parentCreationOrder: [UUID] = []
     var allowances: [AllowanceRevision] = []
     var excuses: [Excuse] = []
@@ -313,17 +368,31 @@ struct HouseholdSnapshot: Equatable {
         var invitationsByID: [UUID: FamilyInvitation] = [:]
         var claimsByInvitationID: [UUID: InvitationClaim] = [:]
         var revocationsByInvitationID: [UUID: InvitationRevocation] = [:]
+        var deletedChoreIDs: Set<UUID> = []
         for fact in facts.sorted(by: HouseholdFact.precedes) {
             switch fact.body {
-            case .household(let value): household = value
+            case .household(let value):
+                household = value
+                if creatorMemberID == nil { creatorMemberID = fact.authorMemberID }
             case .member(let value):
                 if creationSequence[value.id] == nil { creationSequence[value.id] = fact.sequence }
                 membersByID[value.id] = value
-            case .chore(let value): revisions.append(value)
+            case .chore(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+                revisions.append(value)
             case .completion(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
                 completionsByKey[value.key] = value
                 recordedAssignments.append(value)
-            case .occurrence(let value): occurrencesByKey[value.key] = value
+            case .occurrence(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+                occurrencesByKey[value.key] = value
+            case .alternatingTurnAdvance(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+                alternatingTurnAdvances.append(value)
+            case .choreDeletion(let value):
+                guard deletedChoreIDs.insert(value.choreID).inserted else { continue }
+                choreDeletions.append(value)
             case .allowance(let value): allowances.append(value)
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
@@ -357,6 +426,10 @@ struct HouseholdSnapshot: Equatable {
                 $0.element.effectiveDay == $1.element.effectiveDay
                     ? $0.offset < $1.offset : $0.element.effectiveDay < $1.element.effectiveDay
             }?.element
+    }
+
+    func isChoreDeleted(_ choreID: UUID, on day: CivilDay) -> Bool {
+        choreDeletions.contains { $0.choreID == choreID && $0.day <= day }
     }
 
     func isActive(_ member: FamilyMember, on day: CivilDay) -> Bool {

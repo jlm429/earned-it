@@ -93,8 +93,12 @@ enum AllowanceService {
         let current = CivilDay(today, calendar: calendar)
         let items = (0..<7).flatMap { offset -> [WeeklyItem] in
             let day = start.adding(days: offset, calendar: calendar)
-            if snapshot.excuses.contains(where: { $0.memberID == childID && $0.day == day && $0.isExcused }) { return [] }
-            return ChoreRules.dailyList(snapshot: snapshot, day: day, today: current)
+            let chores = ChoreRules.dailyList(snapshot: snapshot, day: day, today: current)
+            if chores.contains(where: { $0.isExcused(childID) })
+                || snapshot.excuses.contains(where: {
+                    $0.memberID == childID && $0.day == day && $0.isExcused
+                }) { return [] }
+            return chores
                 .filter { !$0.isNotNeeded && $0.requiredMemberIDs.contains(childID) }
                 .map { WeeklyItem(choreID: $0.id, day: day, title: $0.configuration.title, state: $0.state(for: childID)) }
         }

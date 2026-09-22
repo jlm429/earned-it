@@ -75,7 +75,7 @@ enum PermissionService {
     }
 
     static func canSetState(actor: FamilyMember, target: UUID, chore: DailyChore, state: DailyStateKind) -> Bool {
-        guard !chore.isNotNeeded, chore.day <= chore.today,
+        guard !chore.isDeleted, !chore.isNotNeeded, chore.day <= chore.today,
               chore.eligibleMembers.contains(where: { $0.id == target }) else { return false }
         if actor.role == .parent { return state != .unmarked || chore.day == chore.today }
         return actor.id == target && canChildEdit(day: chore.day, today: chore.today)

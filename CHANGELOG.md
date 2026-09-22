@@ -4,6 +4,15 @@ User-visible changes to Earned It.
 
 ## Unreleased
 
+### Earned It 1.0.1
+
+- Alternating As Needed chores now show the next child before activation, assign an active occurrence only to that child, and advance only after that occurrence is accounted for. Switching between Scheduled and As Needed preserves the next child, while entering alternating mode starts with the parent's selected child.
+- Parents can skip the next child in the saved turn order. Inactive or archived children are bypassed without changing earlier assignments or completions.
+- Chore management now uses Delete Chore. Deletion removes the chore from current parent and child lists immediately while preserving resolved completed, missed, excused, and Not Needed history, allowance results, and streaks.
+- Family creators who also own the iCloud family can permanently delete the family and its cloud data through a two-step confirmation. Disconnecting a device or deleting the app continues to leave the cloud family available for recovery.
+- Adaptive layout improvements keep dashboards and child content readable on larger screens. The shipping 1.0.1 application remains iPhone-only.
+- The marketing version is 1.0.1. Archive and Upload uses unique, monotonically increasing integer build numbers and refuses workflow reruns that would reuse an uploaded number.
+
 ### Public release preparation
 
 - Added accessible privacy-policy and support links during setup, in Settings, and from parent and child screens.

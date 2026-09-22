@@ -21,12 +21,12 @@ struct FamilyManagementView: View {
                             Text(member.displayName).font(.headline)
                             Text(member.role.title).font(.caption).foregroundStyle(.secondary)
                             if member.joinedDay > store.day { Text("Joins lists tomorrow").font(.caption) }
-                            if member.archivedFrom != nil && !store.snapshot.isActive(member, on: store.tomorrow) { Text("Archived from tomorrow").font(.caption) }
+                            if member.archivedFrom != nil && !store.snapshot.isActive(member, on: store.tomorrow) { Text("Leaves family lists tomorrow").font(.caption) }
                         }
                         Spacer()
                         Menu {
                             Button("Edit Member") { editing = member }
-                            Button("Archive Member", role: .destructive) { archiving = member }
+                            Button("Remove Family Member", role: .destructive) { archiving = member }
                         } label: { Image(systemName: "ellipsis.circle") }
                         .accessibilityLabel("Manage \(member.displayName)")
                     }
@@ -100,15 +100,15 @@ struct FamilyManagementView: View {
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
         .sheet(isPresented: $inviting) { FamilyInvitationView() }
-        .alert("Archive family member?", isPresented: Binding(
+        .alert(archiving.map { "Remove \"\($0.displayName)\"?" } ?? "Remove Family Member?", isPresented: Binding(
             get: { archiving != nil }, set: { if !$0 { archiving = nil } }
         )) {
-            Button("Archive from Tomorrow", role: .destructive) {
+            Button("Remove", role: .destructive) {
                 if let member = archiving { store.perform { try store.archiveMember(member.id) } }
                 archiving = nil
             }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("Today’s expectations and dated history stay intact.") }
+        } message: { Text("They will leave new family lists tomorrow. Their past activity stays in family history.") }
         .alert("Approve these profiles?", isPresented: Binding(
             get: { approving != nil }, set: { if !$0 { approving = nil } }
         )) {

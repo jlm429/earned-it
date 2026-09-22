@@ -26,6 +26,22 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
+      - name: Validate build-number semantics
+        run: ./scripts/test-build-number.sh
+
+      - name: Build and validate Release metadata
+        run: |
+          release_derived_data="$RUNNER_TEMP/EarnedItRelease"
+          xcodebuild build \
+            -project EarnedIt.xcodeproj \
+            -scheme EarnedIt \
+            -configuration Release \
+            -destination "$DESTINATION" \
+            -derivedDataPath "$release_derived_data" \
+            CODE_SIGNING_ALLOWED=NO
+          ./scripts/validate-release-device-family.sh \
+            "$release_derived_data/Build/Products/Release-iphonesimulator/Earned It.app"
+
       - name: Build and test unit suite
         run: |
           xcodebuild test \
@@ -46,5 +62,6 @@ jobs:
             -only-testing:EarnedItTests/SharingTests/testDeterministicRevisionResolutionRegardlessOfDeliveryOrder \
             -only-testing:EarnedItTests/SharingTests/testConcurrentChildCompletionsAndScopedRemovalConverge \
             -only-testing:EarnedItTests/SharingTests/testPartialUploadRetryIsIdempotentAndLocalQueueSurvivesRelaunch \
+            -only-testing:EarnedItTests/ProductionCleanupTests \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO

@@ -78,7 +78,10 @@ struct ChildHomeView: View {
                         Text(quote.text)
                     }
                 }
-            }.padding()
+            }
+            .padding()
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Today")

@@ -37,6 +37,8 @@ struct UserSelectionView: View {
                     SyncStatusView()
                 }
                 .padding(20)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
             }
             .refreshable { await refreshFamily() }
             .background(Color(uiColor: .systemGroupedBackground))
@@ -111,7 +113,7 @@ struct SyncStatusView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("sync-status")
                 if !store.rejectedChanges.isEmpty {
-                    Text("\(store.rejectedChanges.count) changes are saved on this device but not shared. Ask a parent to restore access, then pull down to check again. Archived profiles need parent review.")
+                    Text("\(store.rejectedChanges.count) changes are saved on this device but not shared. Ask a parent to restore access, then pull down to check again. Removed profiles need parent review.")
                         .font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("rejected-changes")
                 }

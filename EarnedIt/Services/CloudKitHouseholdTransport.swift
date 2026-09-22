@@ -235,6 +235,24 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             || error.code == .permissionFailure {}
     }
 
+    func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws {
+        let expectedGeneration = accountGeneration
+        guard location.isOwner else { throw HouseholdError.permission }
+        try Task.checkCancellation()
+        guard try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        try Task.checkCancellation()
+        guard accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        do {
+            _ = try await container.privateCloudDatabase.deleteRecordZone(withID: zoneID(for: location))
+        } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound
+            || error.code == .userDeletedZone {
+            // A prior confirmed attempt already reached the cloud-authoritative postcondition.
+        }
+        try Task.checkCancellation()
+        guard accountGeneration == expectedGeneration,
+              try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+    }
+
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
         let database = database(for: location)
         var cursor: CKServerChangeToken?

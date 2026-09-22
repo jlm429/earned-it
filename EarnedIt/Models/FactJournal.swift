@@ -153,4 +153,6 @@ struct DeviceSession: Codable, Equatable {
     var accountMembershipLockAttemptID: UUID?
     var accountMembershipClaimBinding: String?
     var lastJoinReceipt: LastJoinReceipt?
+    var familyAccessLost: Bool?
+    var pendingFamilyDeletion: Bool?
 }

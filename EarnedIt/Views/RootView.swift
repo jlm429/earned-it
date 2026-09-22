@@ -51,6 +51,35 @@ struct RootView: View {
                 }
                 .accessibilityIdentifier("membership-recovery-required")
                 .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
+            } else if store.familyAccessLost && store.household != nil {
+                ContentUnavailableView {
+                    Label("Family Access Needs Attention", systemImage: "person.3.fill")
+                } description: {
+                    Text("This device cannot currently access the family in iCloud. Check access to retry. Your saved family stays on this device.")
+                } actions: {
+                    if store.canFinishDeletingFamily {
+                        Button("Finish Deleting Family", role: .destructive) {
+                            Task {
+                                do { try await store.deleteFamily() }
+                                catch { store.errorMessage = error.localizedDescription }
+                            }
+                        }
+                        .accessibilityIdentifier("retry-delete-family")
+                    }
+                    Button("Check Family Access") {
+                        Task {
+                            do { try await store.synchronize() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    if store.canRemoveUnavailableFamilyFromDevice {
+                        Button("Remove From This Device", role: .destructive) {
+                            store.perform { try store.removeUnavailableFamilyFromDevice() }
+                        }
+                        .accessibilityIdentifier("remove-unavailable-family")
+                    }
+                }
+                .accessibilityIdentifier("family-access-ended")
             } else if store.household == nil || store.household?.isSetupComplete == false {
                 SetupView()
                     .onAppear { store.recordJoinRootRoute(.onboarding) }

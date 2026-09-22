@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: testflight-archive-upload
+  cancel-in-progress: false
+
 jobs:
   upload:
     name: Archive and upload
@@ -63,7 +67,7 @@ jobs:
           archive_path="${work_directory}/EarnedIt.xcarchive"
           export_path="${work_directory}/export"
           export_options_path="${work_directory}/ExportOptions.plist"
-          build_number="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          build_number="$(./scripts/build-number.sh)"
 
           cat > "$export_options_path" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
@@ -87,7 +91,7 @@ jobs:
           PLIST
 
           echo "Using $(xcodebuild -version | tr '\n' ' ')"
-          echo "Archiving Earned It 1.0 build ${build_number}."
+          echo "Archiving Earned It 1.0.1 build ${build_number}."
           xcodebuild archive \
             -project EarnedIt.xcodeproj \
             -scheme EarnedIt \
@@ -102,6 +106,8 @@ jobs:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             -quiet \
             -showBuildTimingSummary
+
+          ./scripts/validate-release-device-family.sh "$archive_path"
 
           echo "Exporting the App Store Connect IPA."
           xcodebuild -exportArchive \
