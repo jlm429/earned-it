@@ -293,6 +293,31 @@ final class ProductionCleanupTests: XCTestCase {
         ))
     }
 
+    func testAlternatingEditNormalizesArchivedSavedFirstChild() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Set Table", mode: .alternating,
+            memberIDs: [family.hanna.id, family.alek.id, nora.id]
+        )
+        let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        let archivedFirst = try XCTUnwrap(original.memberIDs.first)
+        try family.store.archiveMember(archivedFirst)
+        let remaining = original.memberIDs.filter { $0 != archivedFirst }
+
+        try family.store.saveChore(
+            choreID: chore, weekday: .monday, title: "Set Table Carefully",
+            mode: .alternating, memberIDs: remaining,
+            firstAlternatingMemberID: archivedFirst
+        )
+
+        let edited = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.tomorrow))
+        XCTAssertEqual(edited.title, "Set Table Carefully")
+        XCTAssertEqual(edited.memberIDs, remaining)
+        XCTAssertEqual(family.store.snapshot.configuration(choreID: chore, on: family.store.day)?.id, original.id)
+        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, archivedFirst)
+    }
+
     func testIncompleteLegacyActivationsAdvanceByHistoricalActivationOrder() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)

@@ -275,7 +275,12 @@ final class HouseholdStore {
             : orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
         if mode == .alternating {
             let implicitFirstID = current?.memberIDs.first(where: orderedIDs.contains) ?? memberIDs.first
-            let firstID = firstAlternatingMemberID ?? implicitFirstID
+            var firstID = firstAlternatingMemberID ?? implicitFirstID
+            if current?.mode == .alternating,
+               firstAlternatingMemberID == current?.memberIDs.first,
+               firstAlternatingMemberID.map({ !orderedIDs.contains($0) }) == true {
+                firstID = implicitFirstID
+            }
             guard let firstID, let index = orderedIDs.firstIndex(of: firstID) else {
                 throw HouseholdError.invalidAssignment
             }
