@@ -531,6 +531,82 @@ final class ProductionCleanupTests: XCTestCase {
                                              today: family.clock.now), beforeStreak)
     }
 
+    func testDeletedChoreSnapshotRejectsLaterSameRevisionUnmarkedFact() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Water Plants", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+        try family.store.setCompletion(choreID: chore, memberID: family.hanna.id,
+                                       date: family.clock.now, state: .done)
+        let allowanceBefore = family.store.allowanceWeek(for: family.hanna.id)
+        let factsBefore = family.store.weekFacts(for: family.hanna.id)
+        let streakBefore = MetricsService.streak(childID: family.hanna.id,
+                                                 snapshot: family.store.snapshot,
+                                                 today: family.clock.now)
+        try family.store.deleteChore(chore)
+
+        let facts = try family.repository.facts(householdID: revision.householdID)
+        let staleUnmarked = HouseholdFact(
+            id: UUID(), householdID: revision.householdID,
+            sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
+            authorDeviceID: UUID(), authorMemberID: family.hanna.id,
+            body: .completion(DatedCompletion(
+                choreID: chore, revisionID: revision.id, memberID: family.hanna.id,
+                day: family.store.day, state: .unmarked, eligibleMemberIDs: [family.hanna.id],
+                mode: .particular, recordedByMemberID: family.hanna.id
+            ))
+        )
+        try family.repository.commit(facts: [staleUnmarked], uploaded: true)
+        let merged = try HouseholdStore(repository: family.repository,
+                                        clock: { family.clock.now }, automaticSync: false)
+        let hidden = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+
+        XCTAssertEqual(hidden.state(for: family.hanna.id), .done)
+        XCTAssertEqual(merged.allowanceWeek(for: family.hanna.id), allowanceBefore)
+        XCTAssertEqual(merged.weekFacts(for: family.hanna.id), factsBefore)
+        XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
+                                             snapshot: merged.snapshot,
+                                             today: family.clock.now), streakBefore)
+    }
+
+    func testOfflineSameRevisionUnmarkedCannotRewriteSynchronizedDeletionHistory() async throws {
+        let fixture = try await connectedParentInstallation()
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Water Plants", mode: .particular,
+            memberIDs: [fixture.family.hanna.id]
+        )
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        try fixture.guest.selectProfile(fixture.family.hanna.id)
+
+        try fixture.family.store.setCompletion(choreID: chore, memberID: fixture.family.hanna.id,
+                                               date: fixture.family.clock.now, state: .done)
+        let allowanceBefore = fixture.family.store.allowanceWeek(for: fixture.family.hanna.id)
+        let streakBefore = MetricsService.streak(childID: fixture.family.hanna.id,
+                                                 snapshot: fixture.family.store.snapshot,
+                                                 today: fixture.family.clock.now)
+        try fixture.family.store.deleteChore(chore)
+        try await fixture.family.store.synchronize()
+
+        try fixture.guest.setCompletion(choreID: chore, memberID: fixture.family.hanna.id,
+                                        date: fixture.family.clock.now, state: .unmarked)
+        try await fixture.guest.synchronize()
+        try await fixture.family.store.synchronize()
+
+        let parentHistory = try XCTUnwrap(fixture.family.store.dailyList().first { $0.id == chore })
+        let guestHistory = try XCTUnwrap(fixture.guest.dailyList().first { $0.id == chore })
+        XCTAssertEqual(parentHistory.state(for: fixture.family.hanna.id), .done)
+        XCTAssertEqual(guestHistory.state(for: fixture.family.hanna.id), .done)
+        XCTAssertEqual(fixture.family.store.allowanceWeek(for: fixture.family.hanna.id), allowanceBefore)
+        XCTAssertEqual(MetricsService.streak(childID: fixture.family.hanna.id,
+                                             snapshot: fixture.family.store.snapshot,
+                                             today: fixture.family.clock.now), streakBefore)
+        XCTAssertTrue(ChoreRules.visibleList(fixture.guest.dailyList(), to: fixture.family.hanna)
+            .allSatisfy { $0.id != chore })
+    }
+
     func testDeletingChoresPreservesPriorResolvedOutcomesAndScoring() throws {
         let family = try TestFamily()
         let done = try family.store.saveChore(

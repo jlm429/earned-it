@@ -334,7 +334,8 @@ final class HouseholdStore {
             revisionID: current?.id,
             eligibleMemberIDs: currentOccurrence?.eligibleMembers.map(\.id),
             turnOwnerID: currentOccurrence?.turnOwnerID,
-            wasNotNeeded: currentOccurrence?.isNotNeeded
+            wasNotNeeded: currentOccurrence?.isNotNeeded,
+            resolvedContributions: currentOccurrence?.contributions.filter(\.state.isAccountedFor)
         )))
         try append(tombstones)
     }
@@ -2351,7 +2352,10 @@ final class HouseholdStore {
         case .chore(let value): return hasMembers(value.memberIDs)
         case .choreDeletion(let value):
             return hasMembers([value.recordedByMemberID] + (value.eligibleMemberIDs ?? [])
-                + [value.turnOwnerID].compactMap { $0 })
+                + [value.turnOwnerID].compactMap { $0 }
+                + (value.resolvedContributions ?? []).flatMap {
+                    $0.eligibleMemberIDs + [$0.memberID, $0.recordedByMemberID]
+                })
                 && available.revisions.contains {
                     $0.choreID == value.choreID && (value.revisionID == nil || $0.id == value.revisionID)
                 }
@@ -2404,6 +2408,10 @@ final class HouseholdStore {
             case .choreDeletion(let value):
                 guard fact.authorMemberID == value.recordedByMemberID,
                       value.turnOwnerID.map({ value.eligibleMemberIDs?.contains($0) == true }) ?? true,
+                      value.resolvedContributions?.allSatisfy({
+                          $0.choreID == value.choreID && $0.day == value.day
+                              && $0.revisionID == value.revisionID && $0.state.isAccountedFor
+                      }) ?? true,
                       value.revisionID == nil || facts.contains(where: {
                           if case .chore(let revision) = $0.body {
                               return revision.id == value.revisionID && revision.choreID == value.choreID

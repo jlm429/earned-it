@@ -101,14 +101,20 @@ enum ChoreRules {
             if snapshot.isChoreDeleted(choreID, on: day) {
                 guard let deletion = snapshot.choreDeletions.last(where: {
                     $0.choreID == choreID && $0.day <= day
-                }), let winningRevisionID = deletion.revisionID,
+                }), deletion.day == day,
+                      let winningRevisionID = deletion.revisionID,
                       let original = snapshot.revisions.first(where: { $0.id == winningRevisionID }) else { return nil }
-                var latestByMember: [UUID: DatedCompletion] = [:]
-                for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
-                    && contribution.day == day && contribution.revisionID == winningRevisionID {
-                    latestByMember[contribution.memberID] = contribution
+                let retained: [DatedCompletion]
+                if let resolved = deletion.resolvedContributions {
+                    retained = resolved
+                } else {
+                    var latestByMember: [UUID: DatedCompletion] = [:]
+                    for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
+                        && contribution.day == day && contribution.revisionID == winningRevisionID {
+                        latestByMember[contribution.memberID] = contribution
+                    }
+                    retained = latestByMember.values.filter(\.state.isAccountedFor).sorted { $0.key < $1.key }
                 }
-                let retained = latestByMember.values.filter(\.state.isAccountedFor).sorted { $0.key < $1.key }
                 guard !retained.isEmpty || deletion.wasNotNeeded == true else { return nil }
                 let eligibleIDs = Set(deletion.eligibleMemberIDs ?? retained.flatMap(\.eligibleMemberIDs))
                 let requiredIDs = original.mode == .anyOne ? [] : Set(retained.map(\.memberID))
