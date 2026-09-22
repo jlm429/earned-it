@@ -274,6 +274,9 @@ final class HouseholdStore {
         var orderedIDs = preservesLegacy ? memberIDs
             : orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
         if mode == .alternating {
+            if current != nil, current?.mode != .alternating, firstAlternatingMemberID == nil {
+                throw HouseholdError.invalidAssignment
+            }
             let implicitFirstID = current?.memberIDs.first(where: orderedIDs.contains) ?? memberIDs.first
             var firstID = firstAlternatingMemberID ?? implicitFirstID
             if current?.mode == .alternating,
@@ -340,7 +343,14 @@ final class HouseholdStore {
             eligibleMemberIDs: currentOccurrence?.eligibleMembers.map(\.id),
             turnOwnerID: currentOccurrence?.turnOwnerID,
             wasNotNeeded: currentOccurrence?.isNotNeeded,
-            resolvedContributions: currentOccurrence?.contributions.filter { $0.state != .unmarked }
+            resolvedContributions: currentOccurrence?.contributions.filter { $0.state != .unmarked },
+            resolvedExcusedMemberIDs: currentOccurrence.map { occurrence in
+                occurrence.eligibleMembers.filter { member in
+                    snapshot.excuses.contains {
+                        $0.memberID == member.id && $0.day == day && $0.isExcused
+                    }
+                }.map(\.id)
+            } ?? []
         )))
         try append(tombstones)
     }
@@ -2358,6 +2368,7 @@ final class HouseholdStore {
         case .choreDeletion(let value):
             return hasMembers([value.recordedByMemberID] + (value.eligibleMemberIDs ?? [])
                 + [value.turnOwnerID].compactMap { $0 }
+                + (value.resolvedExcusedMemberIDs ?? [])
                 + (value.resolvedContributions ?? []).flatMap {
                     $0.eligibleMemberIDs + [$0.memberID, $0.recordedByMemberID]
                 })
@@ -2413,6 +2424,9 @@ final class HouseholdStore {
             case .choreDeletion(let value):
                 guard fact.authorMemberID == value.recordedByMemberID,
                       value.turnOwnerID.map({ value.eligibleMemberIDs?.contains($0) == true }) ?? true,
+                      value.resolvedExcusedMemberIDs.map({
+                          Set($0).isSubset(of: Set(value.eligibleMemberIDs ?? []))
+                      }) ?? true,
                       value.resolvedContributions?.allSatisfy({
                           $0.choreID == value.choreID && $0.day == value.day
                               && $0.revisionID == value.revisionID && $0.state != .unmarked

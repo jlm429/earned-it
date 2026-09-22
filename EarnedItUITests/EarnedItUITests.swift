@@ -345,6 +345,11 @@ final class EarnedItUITests: XCTestCase {
 
         tap("make-available-unload-dishwasher")
         XCTAssertTrue(app.staticTexts["Available Today"].waitForExistence(timeout: 5))
+        app.buttons["Manage Chore"].tap()
+        app.buttons["Edit"].tap()
+        tap("save-responsibility")
+        XCTAssertTrue(app.staticTexts["Available Today"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["make-available-unload-dishwasher"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
         tap("state-unload-dishwasher-hanna")
@@ -359,6 +364,33 @@ final class EarnedItUITests: XCTestCase {
         tap("as-needed-chores")
         XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
         keepScreenshot("as-needed-completed-after-relaunch")
+    }
+
+    func testConvertingChoreToAlternatingRequiresFirstChild() {
+        createFamily()
+        addChild("Hanna")
+        addChild("Alek")
+        addChild("Nora")
+        tap("finish-setup")
+        tap("weekday-lists-link")
+        tap("weekday-\(Calendar.current.component(.weekday, from: Date()))")
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Set the table")
+        tap("save-responsibility")
+
+        tap("Edit")
+        tap("chore-requirement")
+        tap("Alternate / take turns")
+        app.switches["eligible-hanna"].switches.firstMatch.tap()
+        app.switches["eligible-alek"].switches.firstMatch.tap()
+        app.switches["eligible-nora"].switches.firstMatch.tap()
+        XCTAssertTrue(app.buttons["alternating-first-child"].exists)
+        XCTAssertFalse(app.buttons["save-responsibility"].isEnabled)
+        tap("alternating-first-child")
+        tap("Nora")
+        XCTAssertTrue(app.buttons["save-responsibility"].isEnabled)
+        tap("save-responsibility")
+        XCTAssertTrue(app.staticTexts["Starts tomorrow"].waitForExistence(timeout: 5))
     }
 
     func testAlternatingAsNeededShowsNextSkipOwnerAndImmediateDelete() {

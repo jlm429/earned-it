@@ -50,13 +50,17 @@ struct ResponsibilityFormView: View {
         }
         return Array(selectedChildrenInTurnOrder[index...] + selectedChildrenInTurnOrder[..<index])
     }
+    private var isChoosingInitialAlternatingChild: Bool {
+        selectedMode == .alternating && existing?.mode != .alternating
+    }
     private var canSaveAssignment: Bool {
         guard let selectedMode else { return legacyConfiguration != nil }
         switch selectedMode {
         case .all: return !eligibleChildren.isEmpty
         case .particular: return selectedIDs.count == 1
         case .alternating:
-            return selectedIDs.count >= 2 && (existing != nil || firstAlternatingMemberID != nil)
+            return selectedIDs.count >= 2
+                && (!isChoosingInitialAlternatingChild || firstAlternatingMemberID != nil)
         case .multiple: return selectedIDs.count >= 2
         case .anyOne: return !selectedIDs.isEmpty
         }
@@ -114,7 +118,7 @@ struct ResponsibilityFormView: View {
                         }
                     }
                     if selectedMode == .alternating {
-                        if existing == nil && selectedChildrenInTurnOrder.count >= 2 {
+                        if isChoosingInitialAlternatingChild && selectedChildrenInTurnOrder.count >= 2 {
                             Picker("First turn", selection: $firstAlternatingMemberID) {
                                 Text("Choose child").tag(Optional<UUID>.none)
                                 ForEach(selectedChildrenInTurnOrder) { member in
@@ -138,6 +142,8 @@ struct ResponsibilityFormView: View {
             .onChange(of: selectedMode) { _, mode in
                 if mode == .particular {
                     memberIDs = selectedChildrenInTurnOrder.first.map { Set([$0.id]) } ?? []
+                } else if mode == .alternating && existing?.mode != .alternating {
+                    firstAlternatingMemberID = nil
                 }
             }
             .toolbar {
@@ -174,7 +180,9 @@ struct ResponsibilityFormView: View {
     private var alternatingHelp: String {
         let names = alternatingTurnOrder.map(\.displayName)
         if names.count < 2 { return "Choose at least two children. One child owns each date." }
-        if existing == nil && firstAlternatingMemberID == nil { return "Choose which child takes the first turn." }
+        if isChoosingInitialAlternatingChild && firstAlternatingMemberID == nil {
+            return "Choose which child takes the first turn."
+        }
         if schedulingMode == .asNeeded {
             return "Turn order: \(names.joined(separator: ", ")). The next child is shown before you make it available. Completing it advances the turn."
         }

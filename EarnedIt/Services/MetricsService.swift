@@ -26,7 +26,8 @@ enum MetricsService {
             let chores = ChoreRules.dailyList(snapshot: snapshot, day: day, today: currentDay)
                 .filter { !$0.isNotNeeded }
             let states = chores.compactMap { $0.creditState(for: childID) }
-            let excused = snapshot.excuses.contains { $0.memberID == childID && $0.day == day && $0.isExcused }
+            let excused = chores.contains { $0.isExcused(childID) }
+                || snapshot.excuses.contains { $0.memberID == childID && $0.day == day && $0.isExcused }
             return DayFacts(date: day.date(in: calendar), states: states, isExcused: excused,
                             requiredStates: chores.filter { $0.requiredMemberIDs.contains(childID) }.map { $0.state(for: childID) })
         }

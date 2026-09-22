@@ -222,10 +222,11 @@ struct ChoreDeletion: Codable, Equatable {
     let turnOwnerID: UUID?
     let wasNotNeeded: Bool?
     let resolvedContributions: [DatedCompletion]?
+    let resolvedExcusedMemberIDs: [UUID]?
 
     init(choreID: UUID, day: CivilDay, recordedByMemberID: UUID, revisionID: UUID? = nil,
          eligibleMemberIDs: [UUID]? = nil, turnOwnerID: UUID? = nil, wasNotNeeded: Bool? = nil,
-         resolvedContributions: [DatedCompletion]? = nil) {
+         resolvedContributions: [DatedCompletion]? = nil, resolvedExcusedMemberIDs: [UUID]? = nil) {
         self.choreID = choreID
         self.day = day
         self.recordedByMemberID = recordedByMemberID
@@ -234,6 +235,7 @@ struct ChoreDeletion: Codable, Equatable {
         self.turnOwnerID = turnOwnerID
         self.wasNotNeeded = wasNotNeeded
         self.resolvedContributions = resolvedContributions
+        self.resolvedExcusedMemberIDs = resolvedExcusedMemberIDs
     }
 }
 

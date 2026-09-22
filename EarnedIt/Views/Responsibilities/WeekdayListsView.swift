@@ -43,7 +43,7 @@ private struct AsNeededConfigurationView: View {
     }
 
     private func todayOccurrence(_ chore: ChoreRevision) -> DailyChore? {
-        ChoreRules.activeOccurrence(for: chore, in: store.dailyList())
+        store.dailyList().first { $0.id == chore.choreID && $0.isAsNeededOccurrence }
     }
 
     private func hasEligibleChildrenToday(_ chore: ChoreRevision) -> Bool {

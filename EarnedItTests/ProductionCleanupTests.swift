@@ -318,6 +318,32 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, archivedFirst)
     }
 
+    func testConvertingExistingChoreToAlternatingRequiresChosenFirstChild() throws {
+        let family = try TestFamily()
+        let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Set Table", mode: .all, memberIDs: []
+        )
+        let selected = [family.hanna.id, family.alek.id, nora.id]
+        XCTAssertThrowsError(try family.store.saveChore(
+            choreID: chore, weekday: .monday, title: "Set Table",
+            mode: .alternating, memberIDs: selected
+        )) {
+            XCTAssertEqual($0 as? HouseholdError, .invalidAssignment)
+        }
+
+        try family.store.saveChore(
+            choreID: chore, weekday: .monday, title: "Set Table",
+            mode: .alternating, memberIDs: selected,
+            firstAlternatingMemberID: nora.id
+        )
+
+        let converted = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.tomorrow))
+        XCTAssertEqual(converted.memberIDs.first, nora.id)
+        XCTAssertEqual(Set(converted.memberIDs), Set(selected))
+        XCTAssertEqual(family.store.snapshot.configuration(choreID: chore, on: family.store.day)?.mode, .all)
+    }
+
     func testIncompleteLegacyActivationsAdvanceByHistoricalActivationOrder() throws {
         let family = try TestFamily()
         let nora = try family.store.saveMember(name: "Nora", role: .child, avatar: .star)
@@ -745,6 +771,73 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
                                              snapshot: family.store.snapshot,
                                              today: family.clock.now), beforeHannaStreak)
+    }
+
+    func testSameDayExcusedDeletionPreservesResolvedHistoryAfterOfflineCorrection() throws {
+        let family = try TestFamily()
+        let chore = try family.store.saveChore(
+            weekday: .monday, title: "Excused Chore", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let monday = family.clock.now
+        try family.store.setExcused(memberID: family.hanna.id, date: monday, excused: true)
+        let factsBefore = family.store.weekFacts(for: family.hanna.id, containing: monday)
+        let streakBefore = MetricsService.streak(childID: family.hanna.id,
+                                                 snapshot: family.store.snapshot,
+                                                 today: monday)
+        try family.store.deleteChore(chore)
+
+        let householdID = try XCTUnwrap(family.store.household?.id)
+        let facts = try family.repository.facts(householdID: householdID)
+        let staleCorrection = HouseholdFact(
+            id: UUID(), householdID: householdID,
+            sequence: try XCTUnwrap(facts.map(\.sequence).max()) + 1,
+            authorDeviceID: UUID(), authorMemberID: family.parent.id,
+            body: .excuse(Excuse(memberID: family.hanna.id, day: family.store.day, isExcused: false))
+        )
+        try family.repository.commit(facts: [staleCorrection], uploaded: true)
+        let merged = try HouseholdStore(repository: family.repository,
+                                        clock: { family.clock.now }, automaticSync: false)
+        let historical = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+
+        XCTAssertEqual(historical.configuration.title, "Excused Chore")
+        XCTAssertTrue(historical.isExcused(family.hanna.id))
+        XCTAssertTrue(merged.allowanceWeek(for: family.hanna.id, containing: monday).items.isEmpty)
+        let factsAfter = merged.weekFacts(for: family.hanna.id, containing: monday)
+        XCTAssertEqual(factsAfter.map(\.date), factsBefore.map(\.date))
+        XCTAssertEqual(factsAfter.map(\.states), factsBefore.map(\.states))
+        XCTAssertEqual(factsAfter.map(\.isExcused), factsBefore.map(\.isExcused))
+        XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
+                                             snapshot: merged.snapshot,
+                                             today: monday), streakBefore)
+    }
+
+    func testSameDayExcusedDeletionConvergesAcrossOfflineInstallation() async throws {
+        let fixture = try await connectedParentInstallation()
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Excused Chore", mode: .particular,
+            memberIDs: [fixture.family.hanna.id]
+        )
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        try fixture.family.store.setExcused(memberID: fixture.family.hanna.id,
+                                            date: fixture.family.clock.now, excused: true)
+        try fixture.family.store.deleteChore(chore)
+        try await fixture.family.store.synchronize()
+
+        try fixture.guest.setExcused(memberID: fixture.family.hanna.id,
+                                     date: fixture.family.clock.now, excused: false)
+        try await fixture.guest.synchronize()
+        try await fixture.family.store.synchronize()
+
+        for store in [fixture.family.store, fixture.guest] {
+            let historical = try XCTUnwrap(store.dailyList().first { $0.id == chore })
+            XCTAssertEqual(historical.configuration.title, "Excused Chore")
+            XCTAssertTrue(historical.isExcused(fixture.family.hanna.id))
+            XCTAssertTrue(store.allowanceWeek(for: fixture.family.hanna.id).items.isEmpty)
+            XCTAssertTrue(store.weekFacts(for: fixture.family.hanna.id).first?.isExcused == true)
+        }
     }
 
     func testChoreDeletionConvergesAcrossParentAndChildInstallations() async throws {

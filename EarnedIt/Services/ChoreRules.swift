@@ -28,6 +28,7 @@ struct DailyChore: Identifiable, Equatable {
     let turnOwnerID: UUID?
     let contributions: [DatedCompletion]
     let historicalContributions: [HistoricalContribution]
+    let excusedMemberIDs: Set<UUID>
     let occurrenceDisposition: ChoreOccurrenceDisposition?
     let isActiveOccurrence: Bool
     let isDeleted: Bool
@@ -43,6 +44,7 @@ struct DailyChore: Identifiable, Equatable {
     var completedMembers: [FamilyMember] { eligibleMembers.filter { state(for: $0.id) == .done } }
     var notNeededMembers: [FamilyMember] { eligibleMembers.filter { state(for: $0.id) == .notNeeded } }
     var accountedMembers: [FamilyMember] { eligibleMembers.filter { state(for: $0.id).isAccountedFor } }
+    func isExcused(_ memberID: UUID) -> Bool { excusedMemberIDs.contains(memberID) }
     var isFullyComplete: Bool {
         guard !eligibleMembers.isEmpty else { return false }
         if requiredMembers.isEmpty {
@@ -62,7 +64,7 @@ struct DailyChore: Identifiable, Equatable {
     }
 
     func creditState(for memberID: UUID) -> DailyStateKind? {
-        guard eligibleMembers.contains(where: { $0.id == memberID }) else { return nil }
+        guard eligibleMembers.contains(where: { $0.id == memberID }), !isExcused(memberID) else { return nil }
         let state = state(for: memberID)
         // Any-one chores are optional contributions, never another child's credit or penalty.
         if !requiredMemberIDs.contains(memberID) && !state.isAccountedFor { return nil }
@@ -115,8 +117,13 @@ enum ChoreRules {
                     }
                     retained = latestByMember.values.filter { $0.state != .unmarked }.sorted { $0.key < $1.key }
                 }
-                guard !retained.isEmpty || deletion.wasNotNeeded == true else { return nil }
-                let eligibleIDs = Set(deletion.eligibleMemberIDs ?? retained.flatMap(\.eligibleMemberIDs))
+                let resolvedExcusedIDs = Set(deletion.resolvedExcusedMemberIDs ?? snapshot.excuses.filter {
+                    $0.day == day && $0.isExcused
+                }.map(\.memberID))
+                guard !retained.isEmpty || !resolvedExcusedIDs.isEmpty
+                        || deletion.wasNotNeeded == true else { return nil }
+                let eligibleIDs = Set(deletion.eligibleMemberIDs
+                    ?? (retained.flatMap(\.eligibleMemberIDs) + Array(resolvedExcusedIDs)))
                 let requiredIDs = original.mode == .anyOne ? [] : Set(retained.map(\.memberID))
                 let members = snapshot.members.filter { eligibleIDs.contains($0.id) }
                 let disposition = deletion.wasNotNeeded == true ? ChoreOccurrenceDisposition(
@@ -128,7 +135,8 @@ enum ChoreRules {
                     configuration: original, day: day, eligibleMembers: members,
                     requiredMemberIDs: requiredIDs,
                     turnOwnerID: deletion.turnOwnerID,
-                    contributions: retained, historicalContributions: [], occurrenceDisposition: disposition,
+                    contributions: retained, historicalContributions: [],
+                    excusedMemberIDs: resolvedExcusedIDs, occurrenceDisposition: disposition,
                     isActiveOccurrence: false, isDeleted: true, today: today
                 )
             }
@@ -147,7 +155,7 @@ enum ChoreRules {
                     configuration: previous, day: day, eligibleMembers: members,
                     requiredMemberIDs: retainedIDs,
                     turnOwnerID: previous.mode == .alternating ? retained.first?.memberID : nil,
-                    contributions: retained, historicalContributions: [], occurrenceDisposition: nil,
+                    contributions: retained, historicalContributions: [], excusedMemberIDs: [], occurrenceDisposition: nil,
                     isActiveOccurrence: false, isDeleted: true, today: today
                 )
             }
@@ -179,6 +187,9 @@ enum ChoreRules {
                               requiredMemberIDs: requiredIDs, turnOwnerID: occurrence.scheduledOwner?.id,
                               contributions: occurrence.activeContributions,
                               historicalContributions: occurrence.displacedHistoricalContributions,
+                              excusedMemberIDs: Set(snapshot.excuses.filter {
+                                  $0.day == day && $0.isExcused
+                              }.map(\.memberID)),
                               occurrenceDisposition: notNeeded || activated ? disposition : nil,
                               isActiveOccurrence: occurrenceExists, isDeleted: false,
                               today: today)
