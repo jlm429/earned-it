@@ -12,6 +12,7 @@ struct ResponsibilityFormView: View {
     @State private var category: ResponsibilityCategory
     @State private var selectedMode: RequirementMode?
     @State private var memberIDs: Set<UUID>
+    @State private var firstAlternatingMemberID: UUID?
     @State private var errorMessage: String?
 
     init(weekday: Weekday, existing: ChoreRevision? = nil,
@@ -26,6 +27,7 @@ struct ResponsibilityFormView: View {
         let initialMode = existing?.mode ?? .all
         _selectedMode = State(initialValue: RequirementMode.assignmentChoices.contains(initialMode) ? initialMode : nil)
         _memberIDs = State(initialValue: Set(existing?.memberIDs ?? []))
+        _firstAlternatingMemberID = State(initialValue: existing?.memberIDs.first)
     }
 
     private var eligibleChildren: [FamilyMember] { store.eligibleChildren(choreID: choreID) }
@@ -41,12 +43,21 @@ struct ResponsibilityFormView: View {
     private var selectedChildrenInTurnOrder: [FamilyMember] {
         store.orderedEligibleChildren(choreID: choreID, selectedMemberIDs: selectedIDs)
     }
+    private var alternatingTurnOrder: [FamilyMember] {
+        guard let firstAlternatingMemberID,
+              let index = selectedChildrenInTurnOrder.firstIndex(where: { $0.id == firstAlternatingMemberID }) else {
+            return selectedChildrenInTurnOrder
+        }
+        return Array(selectedChildrenInTurnOrder[index...] + selectedChildrenInTurnOrder[..<index])
+    }
     private var canSaveAssignment: Bool {
         guard let selectedMode else { return legacyConfiguration != nil }
         switch selectedMode {
         case .all: return !eligibleChildren.isEmpty
         case .particular: return selectedIDs.count == 1
-        case .alternating, .multiple: return selectedIDs.count >= 2
+        case .alternating:
+            return selectedIDs.count >= 2 && (existing != nil || firstAlternatingMemberID != nil)
+        case .multiple: return selectedIDs.count >= 2
         case .anyOne: return !selectedIDs.isEmpty
         }
     }
@@ -103,6 +114,15 @@ struct ResponsibilityFormView: View {
                         }
                     }
                     if selectedMode == .alternating {
+                        if existing == nil && selectedChildrenInTurnOrder.count >= 2 {
+                            Picker("First turn", selection: $firstAlternatingMemberID) {
+                                Text("Choose child").tag(Optional<UUID>.none)
+                                ForEach(selectedChildrenInTurnOrder) { member in
+                                    Text(member.displayName).tag(Optional(member.id))
+                                }
+                            }
+                            .accessibilityIdentifier("alternating-first-child")
+                        }
                         Text(alternatingHelp)
                             .font(.footnote).foregroundStyle(.primary.opacity(0.7))
                             .accessibilityIdentifier("alternating-turn-order")
@@ -130,7 +150,8 @@ struct ResponsibilityFormView: View {
                             let assignment = try assignmentToSave()
                             try store.saveChore(choreID: choreID, weekday: weekday, title: title, notes: notes,
                                                 category: category, mode: assignment.mode,
-                                                memberIDs: assignment.memberIDs, schedulingMode: schedulingMode)
+                                                memberIDs: assignment.memberIDs, schedulingMode: schedulingMode,
+                                                firstAlternatingMemberID: firstAlternatingMemberID)
                             dismiss()
                         } catch { errorMessage = error.localizedDescription }
                     }
@@ -142,12 +163,18 @@ struct ResponsibilityFormView: View {
             .alert("Unable to Save", isPresented: Binding(
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
+            .onChange(of: memberIDs) { _, ids in
+                if let firstAlternatingMemberID, !ids.contains(firstAlternatingMemberID) {
+                    self.firstAlternatingMemberID = nil
+                }
+            }
         }
     }
 
     private var alternatingHelp: String {
-        let names = selectedChildrenInTurnOrder.map(\.displayName)
+        let names = alternatingTurnOrder.map(\.displayName)
         if names.count < 2 { return "Choose at least two children. One child owns each date." }
+        if existing == nil && firstAlternatingMemberID == nil { return "Choose which child takes the first turn." }
         if schedulingMode == .asNeeded {
             return "Turn order: \(names.joined(separator: ", ")). The next child is shown before you make it available. Completing it advances the turn."
         }

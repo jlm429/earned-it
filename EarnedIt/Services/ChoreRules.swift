@@ -99,25 +99,30 @@ enum ChoreRules {
             guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return nil }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
             if snapshot.isChoreDeleted(choreID, on: day) {
-                let deletion = snapshot.choreDeletions.last {
+                guard let deletion = snapshot.choreDeletions.last(where: {
                     $0.choreID == choreID && $0.day <= day
+                }), let winningRevisionID = deletion.revisionID,
+                      let original = snapshot.revisions.first(where: { $0.id == winningRevisionID }) else { return nil }
+                var latestByMember: [UUID: DatedCompletion] = [:]
+                for contribution in snapshot.recordedAssignments where contribution.choreID == choreID
+                    && contribution.day == day && contribution.revisionID == winningRevisionID {
+                    latestByMember[contribution.memberID] = contribution
                 }
-                let winningRevisionID = deletion?.revisionID
-                let retained = snapshot.completions.filter {
-                    $0.choreID == choreID && $0.day == day && $0.state.isAccountedFor
-                        && (winningRevisionID == nil || $0.revisionID == winningRevisionID)
-                }
-                guard let original = retained.first.flatMap({ completion in
-                    snapshot.revisions.first { $0.id == completion.revisionID }
-                }) else { return nil }
-                let eligibleIDs = Set(retained.flatMap(\.eligibleMemberIDs))
+                let retained = latestByMember.values.filter(\.state.isAccountedFor).sorted { $0.key < $1.key }
+                guard !retained.isEmpty || deletion.wasNotNeeded == true else { return nil }
+                let eligibleIDs = Set(deletion.eligibleMemberIDs ?? retained.flatMap(\.eligibleMemberIDs))
                 let requiredIDs = original.mode == .anyOne ? [] : Set(retained.map(\.memberID))
                 let members = snapshot.members.filter { eligibleIDs.contains($0.id) }
+                let disposition = deletion.wasNotNeeded == true ? ChoreOccurrenceDisposition(
+                    choreID: choreID, revisionID: original.id, day: day, state: .notNeeded,
+                    alternatingSkipBehavior: original.mode == .alternating ? .keepTurn : nil,
+                    recordedByMemberID: deletion.recordedByMemberID
+                ) : nil
                 return DailyChore(
                     configuration: original, day: day, eligibleMembers: members,
                     requiredMemberIDs: requiredIDs,
-                    turnOwnerID: original.mode == .alternating ? retained.first?.memberID : nil,
-                    contributions: retained, historicalContributions: [], occurrenceDisposition: nil,
+                    turnOwnerID: deletion.turnOwnerID,
+                    contributions: retained, historicalContributions: [], occurrenceDisposition: disposition,
                     isActiveOccurrence: false, isDeleted: true, today: today
                 )
             }
@@ -330,10 +335,10 @@ enum ChoreRules {
                     ?? nextOwner(after: priorOwnerID, participants: revision.memberIDs,
                                  eligibleIDs: eligible) else { continue }
             if eventDay == day { activeOwnerID = ownerID }
-            let completed = snapshot.completions.contains {
+            let completed = snapshot.recordedAssignments.last {
                 $0.choreID == choreID && $0.revisionID == revision.id && $0.day == eventDay
-                    && $0.memberID == ownerID && $0.state.isAccountedFor
-            }
+                    && $0.memberID == ownerID
+            }?.state.isAccountedFor == true
             if completed || activation.assignedMemberID == nil { priorOwnerID = ownerID }
         }
         if let activeOwnerID { return snapshot.member(activeOwnerID) }

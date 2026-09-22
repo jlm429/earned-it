@@ -74,7 +74,8 @@ final class HouseholdStore {
             && selectedMember.id == snapshot.creatorMemberID
     }
     var canFinishDeletingFamily: Bool {
-        canDeleteFamily && familyAccessLost && session.accountMembershipLockAttemptID != nil
+        canDeleteFamily && familyAccessLost && session.pendingFamilyDeletion == true
+            && session.accountMembershipLockAttemptID != nil
     }
     var pendingInvitationCleanupID: String? {
         guard let pending = session.pendingInvitationAcceptance else { return nil }
@@ -243,7 +244,8 @@ final class HouseholdStore {
     @discardableResult
     func saveChore(choreID: UUID = UUID(), weekday: Weekday, title: String, notes: String = "",
                    category: ResponsibilityCategory = .home, mode: RequirementMode, memberIDs: [UUID],
-                   schedulingMode: ChoreSchedulingMode = .scheduled) throws -> UUID {
+                   schedulingMode: ChoreSchedulingMode = .scheduled,
+                   firstAlternatingMemberID: UUID? = nil) throws -> UUID {
         try requireParent()
         guard let household else { throw HouseholdError.noHousehold }
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -269,8 +271,16 @@ final class HouseholdStore {
             case .alternating: guard ids.count >= 2 else { throw HouseholdError.invalidAssignment }
             }
         }
-        let orderedIDs = preservesLegacy ? memberIDs
+        var orderedIDs = preservesLegacy ? memberIDs
             : orderedEligibleChildren(choreID: choreID, selectedMemberIDs: ids).map(\.id)
+        if mode == .alternating {
+            let implicitFirstID = current?.memberIDs.first(where: orderedIDs.contains) ?? memberIDs.first
+            let firstID = firstAlternatingMemberID ?? implicitFirstID
+            guard let firstID, let index = orderedIDs.firstIndex(of: firstID) else {
+                throw HouseholdError.invalidAssignment
+            }
+            orderedIDs = Array(orderedIDs[index...] + orderedIDs[..<index])
+        }
         let revision = ChoreRevision(id: UUID(), householdID: household.id, choreID: choreID, weekday: weekday,
                                      effectiveDay: effective, title: title, notes: notes, category: category, mode: mode,
                                      memberIDs: mode == .all ? [] : orderedIDs, isArchived: false,
@@ -296,6 +306,7 @@ final class HouseholdStore {
         }
         let current = snapshot.configuration(choreID: choreID, on: day)
         let future = snapshot.configuration(choreID: choreID, on: tomorrow)
+        let currentOccurrence = dailyList().first { $0.id == choreID }
         guard current?.isArchived == false || future?.isArchived == false else {
             throw HouseholdError.invalidAssignment
         }
@@ -320,7 +331,10 @@ final class HouseholdStore {
         }
         tombstones.append(.choreDeletion(ChoreDeletion(
             choreID: choreID, day: day, recordedByMemberID: parent.id,
-            revisionID: current?.id
+            revisionID: current?.id,
+            eligibleMemberIDs: currentOccurrence?.eligibleMembers.map(\.id),
+            turnOwnerID: currentOccurrence?.turnOwnerID,
+            wasNotNeeded: currentOccurrence?.isNotNeeded
         )))
         try append(tombstones)
     }
@@ -2218,6 +2232,13 @@ final class HouseholdStore {
               let transport else { throw HouseholdError.permission }
         guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
 
+        if session.pendingFamilyDeletion != true {
+            var updated = session
+            updated.pendingFamilyDeletion = true
+            try repository.commit(facts: [], session: updated)
+            session = updated
+        }
+
         // Delete the owner zone first. It contains the share, invitations, and all family facts.
         // Local state remains available for retry until the account membership is also released.
         try await transport.deleteFamilyData(at: location, expectedParticipantID: participant)
@@ -2329,7 +2350,8 @@ final class HouseholdStore {
         case .household, .member: return true
         case .chore(let value): return hasMembers(value.memberIDs)
         case .choreDeletion(let value):
-            return hasMembers([value.recordedByMemberID])
+            return hasMembers([value.recordedByMemberID] + (value.eligibleMemberIDs ?? [])
+                + [value.turnOwnerID].compactMap { $0 })
                 && available.revisions.contains {
                     $0.choreID == value.choreID && (value.revisionID == nil || $0.id == value.revisionID)
                 }
@@ -2381,6 +2403,7 @@ final class HouseholdStore {
                 guard value.householdID == householdID else { throw HouseholdError.malformedData }
             case .choreDeletion(let value):
                 guard fact.authorMemberID == value.recordedByMemberID,
+                      value.turnOwnerID.map({ value.eligibleMemberIDs?.contains($0) == true }) ?? true,
                       value.revisionID == nil || facts.contains(where: {
                           if case .chore(let revision) = $0.body {
                               return revision.id == value.revisionID && revision.choreID == value.choreID
