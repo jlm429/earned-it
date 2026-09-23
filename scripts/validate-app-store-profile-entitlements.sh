@@ -11,27 +11,32 @@ entitlement_allows() {
   local key="$1"
   local required_value="$2"
   local allow_wildcard="${3:-false}"
-  local output
-  local value
 
-  if ! output="$(
-    /usr/libexec/PlistBuddy \
-      -c "Print :Entitlements:${key}" \
-      "$profile_plist" 2>/dev/null
-  )"; then
-    return 1
-  fi
+  /usr/bin/python3 - "$profile_plist" "$key" "$required_value" "$allow_wildcard" <<'PY'
+import plistlib
+import sys
 
-  while IFS= read -r value; do
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    if [[ "$value" == "$required_value" ]] ||
-       [[ "$allow_wildcard" == "true" && "$value" == "*" ]]; then
-      return 0
-    fi
-  done <<< "$output"
+profile_path, key, required_value, allow_wildcard = sys.argv[1:]
 
-  return 1
+try:
+    with open(profile_path, "rb") as profile_file:
+        value = plistlib.load(profile_file)["Entitlements"][key]
+except (KeyError, OSError, plistlib.InvalidFileException):
+    sys.exit(1)
+
+if isinstance(value, str):
+    values = [value]
+elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+    values = value
+else:
+    sys.exit(1)
+
+authorized_values = {required_value}
+if allow_wildcard == "true":
+    authorized_values.add("*")
+
+sys.exit(0 if authorized_values.intersection(values) else 1)
+PY
 }
 
 if ! entitlement_allows \

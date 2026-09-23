@@ -98,4 +98,63 @@ create_profile "$no_one_time_links_profile"
   "$no_one_time_links_profile"
 expect_rejection "$no_one_time_links_profile" "CloudKit one-time-link authorization"
 
+nested_environment_profile="$temporary_directory/nested-environment.plist"
+create_profile "$nested_environment_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Delete :Entitlements:com.apple.developer.icloud-container-environment' \
+  "$nested_environment_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-container-environment array' \
+  "$nested_environment_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-container-environment:0 array' \
+  "$nested_environment_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-container-environment:0:0 string Production' \
+  "$nested_environment_profile"
+expect_rejection "$nested_environment_profile" "a flat Production iCloud allowlist"
+
+dictionary_container_profile="$temporary_directory/dictionary-container.plist"
+create_profile "$dictionary_container_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Delete :Entitlements:com.apple.developer.icloud-container-identifiers' \
+  "$dictionary_container_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-container-identifiers dict' \
+  "$dictionary_container_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-container-identifiers:container string iCloud.com.jlm429.EarnedIt' \
+  "$dictionary_container_profile"
+expect_rejection "$dictionary_container_profile" "a typed iCloud container allowlist"
+
+boolean_service_profile="$temporary_directory/boolean-service.plist"
+create_profile "$boolean_service_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Delete :Entitlements:com.apple.developer.icloud-services' \
+  "$boolean_service_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-services bool true' \
+  "$boolean_service_profile"
+expect_rejection "$boolean_service_profile" "a typed CloudKit service allowlist"
+
+numeric_share_access_profile="$temporary_directory/numeric-share-access.plist"
+create_profile "$numeric_share_access_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Delete :Entitlements:com.apple.developer.icloud-extended-share-access' \
+  "$numeric_share_access_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-extended-share-access integer 1' \
+  "$numeric_share_access_profile"
+expect_rejection "$numeric_share_access_profile" "a typed one-time-link allowlist"
+
+wildcard_environment_profile="$temporary_directory/wildcard-environment.plist"
+create_profile "$wildcard_environment_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Delete :Entitlements:com.apple.developer.icloud-container-environment' \
+  "$wildcard_environment_profile"
+/usr/libexec/PlistBuddy \
+  -c 'Add :Entitlements:com.apple.developer.icloud-container-environment string *' \
+  "$wildcard_environment_profile"
+expect_rejection "$wildcard_environment_profile" "explicit Production iCloud authorization"
+
 echo "App Store profile entitlement semantics passed."
