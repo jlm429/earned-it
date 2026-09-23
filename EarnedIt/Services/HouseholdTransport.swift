@@ -13,17 +13,25 @@ enum AccountMembershipLockState: String, Codable, Equatable {
     case released
 }
 
+enum FamilyLifecycleState: String, Equatable {
+    case active
+    case deleting
+    case deleted
+}
+
 struct AccountMembershipLock: Codable, Equatable {
     let householdID: UUID
     let attemptID: UUID
     var state: AccountMembershipLockState
     var expiresAt: Date
     var claimBinding: String?
+    var ownerAuthorityBinding: String? = nil
 }
 
 /// Production uses the same boundary exercised by the in-memory server in tests.
 @MainActor
 protocol HouseholdTransport {
+    var familyTransitionDiagnostics: FamilyTransitionDiagnostics { get }
     func accountDidChange()
     func participantID() async throws -> String
     func accountMembershipLock() async throws -> AccountMembershipLock?
@@ -31,8 +39,18 @@ protocol HouseholdTransport {
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,
                                       leaseDuration: TimeInterval, clientTime: Date) async throws
         -> AccountMembershipLock
+    func replaceActiveRevokedAccountMembershipLock(
+        householdID: UUID,
+        revokedAttemptID: UUID,
+        revokedClaimBinding: String,
+        replacementAttemptID: UUID,
+        expectedParticipantID: String,
+        leaseDuration: TimeInterval,
+        validatedAt: Date
+    ) async throws -> AccountMembershipLock
     func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
-                                       claimBinding: String, now: Date) async throws -> AccountMembershipLock
+                                       claimBinding: String, ownerAuthorityBinding: String,
+                                       now: Date) async throws -> AccountMembershipLock
     func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
                                       now: Date) async throws -> Bool
     func membershipLocation(householdID: UUID) async throws -> CloudLocation?
@@ -47,6 +65,12 @@ protocol HouseholdTransport {
     func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws
     func leave(_ location: CloudLocation, expectedParticipantID: String) async throws
     func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws
+    func ensureFamilyLifecycleAuthority(householdID: UUID, expectedParticipantID: String) async throws
+        -> FamilyLifecycleState
+    func beginFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws
+    func finalizeFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws
+    func familyLifecycleState(householdID: UUID, ownerAuthorityBinding: String,
+                              expectedParticipantID: String) async throws -> FamilyLifecycleState?
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact]
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws
     func share(for location: CloudLocation, title: String) async throws -> CKShare
@@ -56,4 +80,9 @@ protocol HouseholdTransport {
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact]
     func canWrite(to location: CloudLocation) async throws -> Bool
+    func ownerTransitionPreflight(targetHouseholdID: UUID, localSession: DeviceSession,
+                                  localFacts: [HouseholdFact], localPendingFactCount: Int) async
+        -> OwnerTransitionPreflightSnapshot
+    func childRecoveryPreflight(localSession: DeviceSession, localFacts: [HouseholdFact]) async
+        -> ChildRecoveryPreflightSnapshot
 }

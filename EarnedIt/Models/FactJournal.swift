@@ -137,6 +137,11 @@ struct LastJoinReceipt: Codable, Equatable {
     var refusalReason: JoinRefusalReason?
 }
 
+enum FamilyDeletionNoticeState: String, Codable, Equatable {
+    case pending
+    case acknowledged
+}
+
 struct DeviceSession: Codable, Equatable {
     var deviceID = UUID()
     var householdID: UUID?
@@ -155,4 +160,5 @@ struct DeviceSession: Codable, Equatable {
     var lastJoinReceipt: LastJoinReceipt?
     var familyAccessLost: Bool?
     var pendingFamilyDeletion: Bool?
+    var familyDeletionNoticeState: FamilyDeletionNoticeState?
 }

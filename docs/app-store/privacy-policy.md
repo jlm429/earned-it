@@ -45,9 +45,9 @@ Family history is retained so the app can preserve past assignments, progress, a
 
 On a family that has never enabled sharing, a parent can choose **Delete All Local Data** in Settings. This removes that family's local data from the device and cannot be undone.
 
-On a shared installation, a parent can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner controls the CloudKit share and can revoke invited access. Removing the app from a device removes its local app data according to iOS behavior.
+On a shared installation, a parent can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner can revoke invited access. The creating parent can instead choose **Delete Family and Cloud Data** after two confirmations to permanently remove the shared family's facts, invitations, and share from iCloud and remove that family from connected installations. Removing the app from a device removes its local app data according to iOS behavior but does not perform this permanent family deletion.
 
-Earned It does not currently provide a developer-operated account or server-side deletion portal. The CloudKit family owner manages the shared family and its participants. Apple also provides controls for iCloud data through the person's Apple account and services.
+Earned It does not provide a developer-operated account or server-side deletion portal. The CloudKit family owner manages the shared family and its participants in the app. Apple also provides controls for iCloud data through the person's Apple account and services.
 
 ## Children's privacy
 

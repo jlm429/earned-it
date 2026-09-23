@@ -16,18 +16,7 @@ The first valid deletion in deterministic fact order owns the deletion-time snap
 
 ## Permanent family deletion
 
-The destructive action appears only when the selected profile is the original creating parent and the current CloudKit location is owner-controlled. CloudKit performs the final ownership check against the creator's private database.
-
-After two explicit confirmations, deletion follows this order:
-
-1. Revalidate the current iCloud participant.
-2. Delete the creator-owned household record zone, including its family facts, invitations, and zone-wide share.
-3. Conditionally release the creator account's exact membership lock.
-4. Clear local family data only after both cloud operations succeed.
-
-A missing zone is a successful idempotent retry. Network, account, or membership cleanup failures remain visible and keep local state for retry. The deletion task revalidates its original device session, household, participant, and membership-lock attempt after each cloud operation and before local cleanup, so it cannot clear a replacement family created while an older task was suspended. Relaunch can resume after the zone was deleted but before lock release; the creator also has a Finish Deleting Family action if a later sync observes lost cloud access. Invited devices that later fetch the missing family suspend writes, release their own exact lock when possible, and show a disconnected cleanup state. A fresh installation cannot recover the deleted family, and its old invitation is invalid. Startup retains an otherwise inaccessible account membership because missing local state alone cannot distinguish permanent deletion from ordinary participant revocation. When that account accepts a new family's invitation, the join path confirms that the old family is inaccessible, conditionally releases the exact old membership, and claims the new family. Network failures preserve the membership and retry path. An offline stale device cannot recreate the family because synchronization fetches the zone before uploading. Disconnect This Device, Remove Local Data, app deletion, and reinstall recovery do not call permanent cloud deletion.
-
-These behaviors are covered with the transport double. They do not prove signed, two-account Production CloudKit behavior, and Production data was not used destructively.
+The permanent-deletion contract has since gained owner-authenticated lifecycle authority and terminal child cleanup. Its authoritative behavior is maintained in [Shared household architecture](shared-household-architecture.md), with the CloudKit record and schema contract in [Family lifecycle authority](family-lifecycle-authority.md).
 
 ## Shipping device support and adaptive layout
 

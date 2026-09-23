@@ -67,6 +67,14 @@ enum AccountMembershipBinding {
         digest("legacy-shared|\(householdID.uuidString)|\(participantID)")
     }
 
+    static func ownerAuthority(participantID: String) -> String {
+        digest("owner-authority|\(participantID)")
+    }
+
+    static func lifecycleRecordName(householdID: UUID) -> String {
+        digest("family-lifecycle|\(householdID.uuidString)")
+    }
+
     private static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }

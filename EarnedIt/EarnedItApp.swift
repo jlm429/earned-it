@@ -10,7 +10,10 @@ struct EarnedItApp: App {
         do {
             let url: URL
             #if DEBUG
-            let isUITest = ProcessInfo.processInfo.arguments.contains("--ui-test-store")
+            let arguments = ProcessInfo.processInfo.arguments
+            let readOnlyPreflight = arguments.contains("--owner-transition-preflight")
+                || arguments.contains("--child-recovery-preflight")
+            let isUITest = arguments.contains("--ui-test-store")
             if isUITest {
                 url = URL.documentsDirectory.appending(path: "shared-household-ui-tests.store")
             } else {
@@ -21,10 +24,10 @@ struct EarnedItApp: App {
             #endif
             let repository = try HouseholdRepository(url: url)
             #if DEBUG
-            if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-reset") {
+            if !readOnlyPreflight && isUITest && arguments.contains("--ui-test-reset") {
                 try repository.clearLocalData()
             }
-            if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-pending-invitation") {
+            if !readOnlyPreflight && isUITest && arguments.contains("--ui-test-pending-invitation") {
                 var session = try repository.session()
                 session.pendingInvitationPackage = PendingInvitationPackage(
                     codeDigest: InvitationCode.digest("2345-6789-AB")!,
@@ -32,7 +35,7 @@ struct EarnedItApp: App {
                     cloudParticipantID: "synthetic-ui-test-account", needsAppleVerification: true)
                 try repository.commit(facts: [], session: session)
             }
-            if isUITest && ProcessInfo.processInfo.arguments.contains("--ui-test-last-join-receipt") {
+            if !readOnlyPreflight && isUITest && arguments.contains("--ui-test-last-join-receipt") {
                 var session = try repository.session()
                 session.lastJoinReceipt = LastJoinReceipt(
                     nativeAcceptance: .yes,
@@ -47,6 +50,11 @@ struct EarnedItApp: App {
                 )
                 try repository.commit(facts: [], session: session)
             }
+            if !readOnlyPreflight && isUITest && arguments.contains("--ui-test-family-deletion-notice") {
+                var session = try repository.session()
+                session.familyDeletionNoticeState = .pending
+                try repository.commit(facts: [], session: session)
+            }
             #endif
             let transport: (any HouseholdTransport)?
             #if targetEnvironment(simulator)
@@ -57,8 +65,9 @@ struct EarnedItApp: App {
             #endif
             #if DEBUG
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
-                clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now })
-            try WeeklyUITestFixture.prepare(initialStore)
+                clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
+                automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight)
+            if !readOnlyPreflight { try WeeklyUITestFixture.prepare(initialStore) }
             #else
             let initialStore = try HouseholdStore(repository: repository, transport: transport)
             #endif
