@@ -25,7 +25,7 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 
 A parent creates the family, adds children, and sets up chores. They can invite another parent or a child through iCloud, and each person sees the profile and controls intended for them.
 
-Children check their list and mark chores complete. Parents manage assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
+Children check their list and mark chores complete. Parents manage the family name and assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
 
 ## Privacy
 
