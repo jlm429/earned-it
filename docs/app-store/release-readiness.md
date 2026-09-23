@@ -51,7 +51,7 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 - [x] Production store creation does not seed sample data.
 - [x] Local deletion and shared-device disconnect require confirmation. Disconnect leaves other devices and iCloud data intact and blocks while ordinary changes are pending.
 - [x] No application logging calls were found that expose family names, chore content, invitation URLs, or invitation codes.
-- [x] App Store upload workflow uses temporary API-key material, cleans it on exit, and overrides the build number without committing signing credentials.
+- [x] App Store upload workflow manually signs with supplied distribution assets, validates the certificate and profile before archiving, reserves temporary API-key material for upload, cleans temporary release material on exit, and overrides the build number without committing signing credentials.
 - [x] Build products, Derived Data, Xcode user state, `.env` files, and local artifacts are ignored.
 - [x] Existing unit, service, UI, sharing, invitation, onboarding, scheduling, allowance, and business-rule tests are present.
 - [x] Attributed daily quotations were replaced with unattributed product microcopy. The remaining rights and attribution findings are documented in `quotes-and-attribution.md`.
