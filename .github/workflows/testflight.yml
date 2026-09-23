@@ -257,29 +257,7 @@ jobs:
             exit 1
           fi
 
-          if [[ "$(
-            /usr/libexec/PlistBuddy \
-              -c 'Print :Entitlements:com.apple.developer.icloud-container-environment' \
-              "$profile_plist_path"
-          )" != "Production" ]] ||
-             [[ "$(
-            /usr/libexec/PlistBuddy \
-              -c 'Print :Entitlements:com.apple.developer.icloud-container-identifiers:0' \
-              "$profile_plist_path"
-          )" != "iCloud.com.jlm429.EarnedIt" ]] ||
-             [[ "$(
-            /usr/libexec/PlistBuddy \
-              -c 'Print :Entitlements:com.apple.developer.icloud-services:0' \
-              "$profile_plist_path"
-          )" != "CloudKit" ]] ||
-             [[ "$(
-            /usr/libexec/PlistBuddy \
-              -c 'Print :Entitlements:com.apple.developer.icloud-extended-share-access:0' \
-              "$profile_plist_path"
-          )" != "InProcessOneTimeLinks" ]]; then
-            echo "::error::The App Store profile is missing required production iCloud and CloudKit entitlements."
-            exit 1
-          fi
+          ./scripts/validate-app-store-profile-entitlements.sh "$profile_plist_path"
 
           plutil -extract DeveloperCertificates.0 raw -o - "$profile_plist_path" |
             base64 --decode -o "$profile_certificate_path"

@@ -13,7 +13,7 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 - [ ] Complete a signed release-candidate pass on physical devices with two separate iCloud accounts. Cover owner creation, parent and child invitations, cold and warm acceptance, QR and link delivery, completion sync, relaunch, recovery, read-only behavior, and revocation.
 - [ ] Confirm the production CloudKit schema contains every record type and field used by `CloudKitHouseholdTransport.swift`. Existing reports say a production schema was deployed and used by TestFlight, but this repository audit cannot inspect the live container.
 - [ ] Create and verify the public `FamilyLifecycleAuthority` type in Development exactly as documented in [family-lifecycle-authority.md](../family-lifecycle-authority.md), complete signed two-account deletion safety checks, then have an authorized human promote that schema to Production. Do not distribute this change before the type and creator-only write rule are confirmed.
-- [ ] Confirm the distribution profile admits `InProcessOneTimeLinks` and that the archived app contains the expected iCloud and extended-share-access entitlements.
+- [ ] Confirm that the archived app contains the expected iCloud and extended-share-access entitlements.
 - [ ] Complete required App Store Connect values, agreements, tax and banking status where applicable, age rating, privacy responses, pricing set to Free, territories, export compliance, content rights, copyright, review contact, and release method.
 
 ## Should do before release
@@ -52,6 +52,7 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 - [x] Local deletion and shared-device disconnect require confirmation. Disconnect leaves other devices and iCloud data intact and blocks while ordinary changes are pending.
 - [x] No application logging calls were found that expose family names, chore content, invitation URLs, or invitation codes.
 - [x] App Store upload workflow manually signs with supplied distribution assets, validates the certificate and profile before archiving, reserves temporary API-key material for upload, cleans temporary release material on exit, and overrides the build number without committing signing credentials.
+- [x] App Store profile validation accepts scalar or flat string allowlists, recognizes the CloudKit service wildcard, and fails closed unless the profile authorizes Production iCloud, the Earned It container, CloudKit, and `InProcessOneTimeLinks`.
 - [x] Build products, Derived Data, Xcode user state, `.env` files, and local artifacts are ignored.
 - [x] Existing unit, service, UI, sharing, invitation, onboarding, scheduling, allowance, and business-rule tests are present.
 - [x] Attributed daily quotations were replaced with unattributed product microcopy. The remaining rights and attribution findings are documented in `quotes-and-attribution.md`.

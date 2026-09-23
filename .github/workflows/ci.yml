@@ -29,6 +29,9 @@ jobs:
       - name: Validate build-number semantics
         run: ./scripts/test-build-number.sh
 
+      - name: Validate provisioning-profile entitlement semantics
+        run: ./scripts/test-app-store-profile-entitlements.sh
+
       - name: Build and validate Release metadata
         run: |
           release_derived_data="$RUNNER_TEMP/EarnedItRelease"
