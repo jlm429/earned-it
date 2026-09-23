@@ -2139,6 +2139,53 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertEqual(replacement.household?.name, "New Family")
     }
 
+    func testReleasedOwnerLockCompletesInterruptedSelfReleaseRoutingCleanup() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let repository = try HouseholdRepository(inMemory: true)
+        var interruptedSession = try repository.session()
+        interruptedSession.cloudParticipantID = "owner"
+        interruptedSession.cloudCanWrite = true
+        interruptedSession.accountMembershipLockAttemptID = lock.attemptID
+        interruptedSession.accountMembershipClaimBinding = lock.claimBinding
+        interruptedSession.celebratedWeeks = ["2026-W38"]
+        try repository.commit(facts: [], session: interruptedSession)
+        let replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.session.cloudParticipantID)
+        XCTAssertNil(replacement.session.location)
+        XCTAssertNil(replacement.session.cloudCanWrite)
+        XCTAssertNil(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertNil(replacement.session.accountMembershipClaimBinding)
+        XCTAssertEqual(replacement.session.deviceID, interruptedSession.deviceID)
+        XCTAssertEqual(replacement.session.celebratedWeeks, interruptedSession.celebratedWeeks)
+        XCTAssertEqual(try repository.session(), replacement.session)
+    }
+
     func testOwnerSelfReleaseFailsClosedAfterAccountLockGenerationOrLocationChanges() async throws {
         for condition in 0..<4 {
             let server = TestCloudServer()

@@ -2192,6 +2192,13 @@ final class HouseholdStore {
                     requiresMembershipRecovery = false
                     return
                 }
+                if try await clearReleasedOwnerMembershipRouting(
+                    lock: lock,
+                    participant: participant,
+                    expectedSession: expectedSession
+                ) {
+                    syncMessage = "Ready to create or join a family"
+                }
                 requiresMembershipRecovery = false
                 return
             }
@@ -2397,17 +2404,45 @@ final class HouseholdStore {
         ) else { throw HouseholdError.accountMembershipConflict }
         guard try await transport.participantID() == participant,
               session == expectedSession else { throw HouseholdError.wrongAccount }
+        try persistSessionByClearingMembershipRouting(expectedSession)
+        requiresMembershipRecovery = false
+        errorMessage = nil
+        syncMessage = "Ready to create or join a family"
+    }
+
+    private func clearReleasedOwnerMembershipRouting(
+        lock: AccountMembershipLock,
+        participant: String,
+        expectedSession: DeviceSession
+    ) async throws -> Bool {
+        guard let transport,
+              lock.state == .released,
+              lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID),
+              lock.ownerAuthorityBinding == AccountMembershipBinding.ownerAuthority(participantID: participant),
+              expectedSession.cloudParticipantID == nil || expectedSession.cloudParticipantID == participant,
+              expectedSession.accountMembershipLockAttemptID == nil
+                || expectedSession.accountMembershipLockAttemptID == lock.attemptID,
+              expectedSession.accountMembershipClaimBinding == nil
+                || expectedSession.accountMembershipClaimBinding == lock.claimBinding,
+              expectedSession.location == nil || expectedSession.location?.householdID == lock.householdID,
+              try await transport.membershipLocation(householdID: lock.householdID) == nil,
+              try await transport.accountMembershipLock() == lock,
+              try await transport.participantID() == participant,
+              session == expectedSession else { return false }
+        try persistSessionByClearingMembershipRouting(expectedSession)
+        return true
+    }
+
+    private func persistSessionByClearingMembershipRouting(_ expectedSession: DeviceSession) throws {
         var releasedSession = expectedSession
         releasedSession.cloudParticipantID = nil
         releasedSession.location = nil
         releasedSession.cloudCanWrite = nil
         releasedSession.accountMembershipLockAttemptID = nil
         releasedSession.accountMembershipClaimBinding = nil
+        guard releasedSession != expectedSession else { return }
         try repository.commit(facts: [], session: releasedSession)
         session = releasedSession
-        requiresMembershipRecovery = false
-        errorMessage = nil
-        syncMessage = "Ready to create or join a family"
     }
 
     private func legacyRecoveryMember(in imported: HouseholdSnapshot, participant: String, now: Date) -> FamilyMember? {
