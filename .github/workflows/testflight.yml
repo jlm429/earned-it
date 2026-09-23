@@ -352,7 +352,7 @@ jobs:
           PLIST
 
           echo "Using $(xcodebuild -version | tr '\n' ' ')"
-          echo "Archiving Earned It 1.0.1 build ${build_number}."
+          echo "Archiving Earned It 1.0.2 build ${build_number}."
           xcodebuild archive \
             -project EarnedIt.xcodeproj \
             -scheme EarnedIt \
