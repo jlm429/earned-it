@@ -4,6 +4,224 @@ import XCTest
 
 @MainActor
 final class InvitationTests: XCTestCase {
+    private func connectedOwnerFixture(account: String = "owner") async throws -> (
+        server: TestCloudServer,
+        transport: TestTransport,
+        store: HouseholdStore,
+        householdID: UUID,
+        location: CloudLocation,
+        parent: FamilyMember,
+        child: FamilyMember,
+        lock: AccountMembershipLock
+    ) {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: account)
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let parent = try XCTUnwrap(store.selectedMember)
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+        return (
+            server,
+            transport,
+            store,
+            try XCTUnwrap(store.household?.id),
+            try XCTUnwrap(store.session.location),
+            parent,
+            child,
+            try XCTUnwrap(server.accountMembershipLocks[account])
+        )
+    }
+
+    func testCleanFirstChildInvitationCreatesAndRetainsOwnerMembership() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+
+        let invitation = try await store.createChildInvitation(memberID: child.id)
+        let householdID = try XCTUnwrap(store.household?.id)
+        let ownerLock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+
+        XCTAssertEqual(ownerLock.householdID, householdID)
+        XCTAssertEqual(ownerLock.state, .active)
+        XCTAssertEqual(ownerLock.claimBinding, AccountMembershipBinding.owner(householdID: householdID))
+        XCTAssertEqual(
+            ownerLock.ownerAuthorityBinding,
+            AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        XCTAssertEqual(store.session.accountMembershipLockAttemptID, ownerLock.attemptID)
+        XCTAssertEqual(invitation.invitation.memberID, child.id)
+        XCTAssertEqual(invitation.invitation.role, .child)
+    }
+
+    func testActiveOwnerMembershipCanIssueFirstExactChildInvitation() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let server = fixture.server
+        let transport = fixture.transport
+        let store = fixture.store
+        let ownerLock = fixture.lock
+        let retainedOwnerLock = AccountMembershipLock(
+            householdID: ownerLock.householdID,
+            attemptID: UUID(),
+            state: ownerLock.state,
+            expiresAt: ownerLock.expiresAt,
+            claimBinding: ownerLock.claimBinding,
+            ownerAuthorityBinding: ownerLock.ownerAuthorityBinding
+        )
+        server.accountMembershipLocks["owner"] = retainedOwnerLock
+        let acquireCount = transport.accountLockAcquireMutationEnqueues
+        let activationCount = transport.accountLockActivationMutationEnqueues
+        var observedStates: [AccountMembershipLockState] = []
+        transport.beforeAccountLockActivationSubmission = {
+            if let current = server.accountMembershipLocks["owner"] {
+                observedStates.append(current.state)
+            }
+        }
+
+        let invitation = try await store.createChildInvitation(memberID: fixture.child.id)
+
+        XCTAssertEqual(invitation.invitation.householdID, fixture.householdID)
+        XCTAssertEqual(invitation.invitation.memberID, fixture.child.id)
+        XCTAssertEqual(invitation.invitation.role, .child)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], retainedOwnerLock)
+        XCTAssertEqual(store.session.accountMembershipLockAttemptID, retainedOwnerLock.attemptID)
+        XCTAssertEqual(transport.accountLockAcquireMutationEnqueues, acquireCount)
+        XCTAssertEqual(transport.accountLockActivationMutationEnqueues, activationCount + 2)
+        XCTAssertEqual(observedStates, [.active, .active])
+
+        let childStore = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: "child"),
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        try await childStore.redeemInvitation(invitation.qrPayload)
+        XCTAssertEqual(childStore.selectedMember?.id, fixture.child.id)
+        XCTAssertEqual(childStore.profiles.map(\.id), [fixture.child.id])
+        XCTAssertThrowsError(try childStore.selectProfile(fixture.parent.id)) {
+            XCTAssertEqual($0 as? HouseholdError, .permission)
+        }
+        XCTAssertEqual(server.accountMembershipLocks["owner"], retainedOwnerLock)
+    }
+
+    func testActiveMembershipForDifferentHouseholdStillBlocksOwnerInvitation() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let differentHouseholdID = UUID()
+        let conflictingLock = AccountMembershipLock(
+            householdID: differentHouseholdID,
+            attemptID: UUID(),
+            state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: differentHouseholdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        fixture.server.accountMembershipLocks["owner"] = conflictingLock
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.store.createChildInvitation(memberID: fixture.child.id),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(fixture.server.accountMembershipLocks["owner"], conflictingLock)
+        XCTAssertEqual(fixture.transport.invitationAccessCreationCalls, 0)
+        XCTAssertFalse(try XCTUnwrap(fixture.server.zones[fixture.location.zoneName]).shareExists)
+        XCTAssertTrue(fixture.store.familyInvitations.isEmpty)
+    }
+
+    func testSameHouseholdOwnerMembershipRejectsChangedAccountGeneration() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let retainedOwnerLock = AccountMembershipLock(
+            householdID: fixture.lock.householdID,
+            attemptID: UUID(),
+            state: fixture.lock.state,
+            expiresAt: fixture.lock.expiresAt,
+            claimBinding: fixture.lock.claimBinding,
+            ownerAuthorityBinding: fixture.lock.ownerAuthorityBinding
+        )
+        fixture.server.accountMembershipLocks["owner"] = retainedOwnerLock
+        fixture.transport.afterAccountMembershipLockRead = {
+            fixture.transport.afterAccountMembershipLockRead = nil
+            fixture.store.cloudAccountDidChange()
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.store.createChildInvitation(memberID: fixture.child.id),
+            expected: .wrongAccount
+        )
+
+        XCTAssertEqual(fixture.transport.accountGeneration, 1)
+        XCTAssertEqual(fixture.server.accountMembershipLocks["owner"], retainedOwnerLock)
+        XCTAssertEqual(fixture.transport.invitationAccessCreationCalls, 0)
+        XCTAssertFalse(try XCTUnwrap(fixture.server.zones[fixture.location.zoneName]).shareExists)
+    }
+
+    func testSameHouseholdOwnerReuseRequiresExactClaimAndOwnerAuthority() async throws {
+        for mismatchedField in ["claim", "owner-authority"] {
+            let account = "owner-\(mismatchedField)"
+            let fixture = try await connectedOwnerFixture(account: account)
+            let blockedLock = AccountMembershipLock(
+                householdID: fixture.householdID,
+                attemptID: fixture.lock.attemptID,
+                state: .active,
+                expiresAt: .distantFuture,
+                claimBinding: mismatchedField == "claim" ? "wrong-claim" : fixture.lock.claimBinding,
+                ownerAuthorityBinding: mismatchedField == "owner-authority"
+                    ? AccountMembershipBinding.ownerAuthority(participantID: "different-account")
+                    : fixture.lock.ownerAuthorityBinding
+            )
+            fixture.server.accountMembershipLocks[account] = blockedLock
+
+            await XCTAssertThrowsErrorAsync(
+                try await fixture.store.createChildInvitation(memberID: fixture.child.id),
+                expected: .accountMembershipConflict
+            )
+
+            XCTAssertEqual(fixture.server.accountMembershipLocks[account], blockedLock)
+            XCTAssertEqual(fixture.transport.invitationAccessCreationCalls, 0)
+            XCTAssertFalse(try XCTUnwrap(fixture.server.zones[fixture.location.zoneName]).shareExists)
+        }
+    }
+
+    func testReleasedOrStaleOwnerMembershipCannotRegainInvitationAuthority() async throws {
+        for state in [AccountMembershipLockState.released, .provisional] {
+            let fixture = try await connectedOwnerFixture(account: "owner-\(state.rawValue)")
+            let blockedLock = AccountMembershipLock(
+                householdID: fixture.householdID,
+                attemptID: state == .released ? fixture.lock.attemptID : UUID(),
+                state: state,
+                expiresAt: TestClock().now.addingTimeInterval(-1),
+                claimBinding: state == .released ? fixture.lock.claimBinding : nil,
+                ownerAuthorityBinding: state == .released ? fixture.lock.ownerAuthorityBinding : nil
+            )
+            fixture.server.accountMembershipLocks[fixture.transport.account] = blockedLock
+
+            await XCTAssertThrowsErrorAsync(
+                try await fixture.store.createChildInvitation(memberID: fixture.child.id),
+                expected: .accountMembershipConflict
+            )
+
+            XCTAssertEqual(fixture.server.accountMembershipLocks[fixture.transport.account], blockedLock)
+            XCTAssertEqual(fixture.transport.invitationAccessCreationCalls, 0)
+            XCTAssertFalse(try XCTUnwrap(fixture.server.zones[fixture.location.zoneName]).shareExists)
+        }
+    }
+
     func testInvitationCredentialNormalizesManualCodesAndRejectsMalformedPackages() throws {
         XCTAssertEqual(InvitationCredential(text: " 2345 6789 ab ")?.code, "2345-6789-AB")
         let share = "https%3A%2F%2Ficloud.com%2Fshare"

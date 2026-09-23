@@ -2584,6 +2584,9 @@ final class HouseholdStore {
     private func reconcileAccountMembershipLock(imported: HouseholdSnapshot, location: CloudLocation,
                                                 participant: String) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        let accountGeneration = transport.accountGeneration
+        guard try await transport.participantID() == participant,
+              transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
         if location.isOwner {
             let lifecycleState = try await transport.ensureFamilyLifecycleAuthority(
                 householdID: location.householdID,
@@ -2592,24 +2595,55 @@ final class HouseholdStore {
             guard lifecycleState == .active else { throw HouseholdError.accountMembershipConflict }
         }
         do {
-            if let localAttemptID = session.accountMembershipLockAttemptID {
-                if let currentLock = try await transport.accountMembershipLock() {
-                    guard currentLock.householdID == location.householdID,
-                          currentLock.attemptID == localAttemptID,
-                          currentLock.state != .released else {
-                        throw HouseholdError.accountMembershipConflict
-                    }
-                }
-            }
+            guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+            let currentLock = try await transport.accountMembershipLock()
+            guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
             guard let binding = try membershipBinding(
                 in: imported,
                 location: location,
                 participant: participant
             ) else {
+                try validateRetainedMembershipAttempt(currentLock, location: location)
                 return
             }
             if let localBinding = session.accountMembershipClaimBinding, localBinding != binding {
                 throw HouseholdError.accountMembershipConflict
+            }
+            if let currentLock {
+                if canReuseActiveOwnerMembership(
+                    currentLock,
+                    binding: binding,
+                    imported: imported,
+                    location: location,
+                    participant: participant
+                ) {
+                    let active = try await transport.activateAccountMembershipLock(
+                        householdID: location.householdID,
+                        attemptID: currentLock.attemptID,
+                        claimBinding: binding,
+                        ownerAuthorityBinding: ownerAuthorityBinding(for: location, participant: participant),
+                        now: clock()
+                    )
+                    guard transport.accountGeneration == accountGeneration,
+                          try await transport.participantID() == participant,
+                          transport.accountGeneration == accountGeneration,
+                          session.householdID == location.householdID,
+                          session.location == location,
+                          session.cloudParticipantID == participant else {
+                        throw HouseholdError.wrongAccount
+                    }
+                    guard active == currentLock else { throw HouseholdError.accountMembershipConflict }
+                    if session.accountMembershipLockAttemptID != active.attemptID
+                        || session.accountMembershipClaimBinding != binding {
+                        var updated = session
+                        updated.accountMembershipLockAttemptID = active.attemptID
+                        updated.accountMembershipClaimBinding = binding
+                        try repository.commit(facts: [], session: updated)
+                        session = updated
+                    }
+                    return
+                }
+                try validateRetainedMembershipAttempt(currentLock, location: location)
             }
             let lock = try await acquireAccountMembershipLock(
                 householdID: location.householdID,
@@ -2639,6 +2673,43 @@ final class HouseholdStore {
             cloudIsReadOnly = true
             throw HouseholdError.accountMembershipConflict
         }
+    }
+
+    private func validateRetainedMembershipAttempt(
+        _ lock: AccountMembershipLock?,
+        location: CloudLocation
+    ) throws {
+        guard let localAttemptID = session.accountMembershipLockAttemptID,
+              let lock else { return }
+        guard lock.householdID == location.householdID,
+              lock.attemptID == localAttemptID,
+              lock.state != .released else {
+            throw HouseholdError.accountMembershipConflict
+        }
+    }
+
+    private func canReuseActiveOwnerMembership(
+        _ lock: AccountMembershipLock,
+        binding: String,
+        imported: HouseholdSnapshot,
+        location: CloudLocation,
+        participant: String
+    ) -> Bool {
+        guard location.isOwner,
+              session.householdID == location.householdID,
+              session.location == location,
+              session.cloudParticipantID == participant,
+              let parent = selectedMember,
+              parent.role == .parent,
+              imported.member(parent.id)?.role == .parent,
+              binding == AccountMembershipBinding.owner(householdID: location.householdID),
+              lock.householdID == location.householdID,
+              lock.state == .active,
+              lock.claimBinding == binding,
+              lock.ownerAuthorityBinding == AccountMembershipBinding.ownerAuthority(participantID: participant) else {
+            return false
+        }
+        return true
     }
 
     private func accessibleFacts(at location: CloudLocation) async throws -> [HouseholdFact]? {
