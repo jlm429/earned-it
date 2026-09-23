@@ -835,11 +835,27 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
 
         var lock: AccountMembershipLock?
+        var lockReadCompleted = false
         do {
             lock = try await accountMembershipLock()
+            lockReadCompleted = true
             result.furthestStage = .membershipLock
         } catch {
             result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+        }
+        guard lockReadCompleted else {
+            result.result = .membershipLockUnavailable
+            if let participant {
+                do {
+                    let finalParticipant = try await participantID()
+                    result.accountGenerationStable = accountGeneration == startingGeneration
+                        && finalParticipant == participant
+                } catch {
+                    result.accountGenerationStable = false
+                    result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+                }
+            }
+            return result
         }
         guard let lock else {
             result.result = .lockMissing
@@ -880,10 +896,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
         let expectedZoneName = zonePrefix + lock.householdID.uuidString
         var location: CloudLocation?
+        var sharedZoneReadCompleted = false
         do {
             let zone = try await container.sharedCloudDatabase.allRecordZones().first {
                 $0.zoneID.zoneName == expectedZoneName
             }
+            sharedZoneReadCompleted = true
             result.sharedZoneExists = zone != nil
             result.furthestStage = .sharedZone
             if let zone {
@@ -893,6 +911,20 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
         } catch {
             result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+        }
+        guard sharedZoneReadCompleted else {
+            result.result = .sharedZoneUnavailable
+            if let participant {
+                do {
+                    let finalParticipant = try await participantID()
+                    result.accountGenerationStable = accountGeneration == startingGeneration
+                        && finalParticipant == participant
+                } catch {
+                    result.accountGenerationStable = false
+                    result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+                }
+            }
+            return result
         }
         guard let location else {
             result.result = lock.state == .released ? .lockReleased : .sharedZoneMissing

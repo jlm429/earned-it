@@ -30,13 +30,13 @@ A child releases an active lock only when all of these conditions hold:
 
 1. Household, attempt, current participant, and account generation still match.
 2. The lock contains the exact owner-authority binding, or an installed exact location supplies it for legacy backfill.
-3. The creator-bound lifecycle state is `deleting` or `deleted`.
+3. The creator-bound lifecycle state is `deleted`.
 4. The exact shared zone is absent.
 5. The private lock is unchanged immediately before conditional release.
 
 An active marker plus revoked access does not release. Offline, permission, wrong-account, malformed-authority, wrong-owner, stale-household, and ambiguous-location results retain the lock and local read-only data. Released locks preserve the opaque claim and owner-authority evidence but cannot authorize recovery.
 
-After an installed participant confirms both creator-authenticated deletion authority and exact zone absence, it conditionally releases only the matching lock, purges only that household's local journal and session cache, and returns to normal onboarding. A local identifier-free pending or acknowledged notice state makes `Family data was deleted` one-shot across relaunches. This small local UX receipt is required for the explicit terminal message; it carries no household, account, participant, or CloudKit value and is reset to pending only by another confirmed deletion. Revocation, permission loss, and offline failures never set it.
+After an installed participant confirms both creator-authenticated `deleted` authority and exact zone absence, it conditionally releases only the matching lock, purges only that household's local journal and session cache, and returns to normal onboarding. A local identifier-free pending or acknowledged notice state makes `Family data was deleted` one-shot across relaunches. This small local UX receipt is required for the explicit terminal message; it carries no household, account, participant, or CloudKit value and is reset to pending only by another confirmed deletion. Revocation, permission loss, and offline failures never set it.
 
 ## CloudKit schema and security
 

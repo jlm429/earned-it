@@ -113,6 +113,8 @@ final class TestTransport: HouseholdTransport {
     var lifecycleBeginFailures = 0
     var lifecycleFinalizeFailures = 0
     var lifecycleStateError: Error?
+    var preflightAccountLockReadError: Error?
+    var preflightSharedZoneReadError: Error?
     var claimError: Error?
     var leaveError: Error?
     var acceptErrorAfterHook: Error?
@@ -757,6 +759,12 @@ final class TestTransport: HouseholdTransport {
         var result = ChildRecoveryPreflightSnapshot()
         result.localFactCount = localFacts.count
         result.accountMatchesLocalParticipant = localSession.cloudParticipantID.map { $0 == account }
+        if let error = preflightAccountLockReadError {
+            result.result = .membershipLockUnavailable
+            result.cloudErrors = FamilyTransitionDiagnostics.cloudErrors(from: error)
+            result.accountGenerationStable = accountGeneration == startingGeneration
+            return result
+        }
         guard let lock = server.accountMembershipLocks[account] else {
             result.result = .lockMissing
             result.accountGenerationStable = true
@@ -780,6 +788,12 @@ final class TestTransport: HouseholdTransport {
             } else {
                 result.localLocationState = location.isOwner ? .ownerForTarget : .sharedForTarget
             }
+        }
+        if let error = preflightSharedZoneReadError {
+            result.result = .sharedZoneUnavailable
+            result.cloudErrors = FamilyTransitionDiagnostics.cloudErrors(from: error)
+            result.accountGenerationStable = accountGeneration == startingGeneration
+            return result
         }
         guard let zone = server.zones.values.first(where: {
             $0.householdID == lock.householdID && $0.owner != account && $0.participants.contains(account)

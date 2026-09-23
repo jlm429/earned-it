@@ -96,8 +96,10 @@ enum ChildRecoveryReadOnlyStage: String, Equatable {
 
 enum ChildRecoveryReadOnlyResult: String, Equatable {
     case accountUnavailable
+    case membershipLockUnavailable
     case lockMissing
     case lockReleased
+    case sharedZoneUnavailable
     case sharedZoneMissing
     case journalUnavailable
     case malformedOrAmbiguousMembership

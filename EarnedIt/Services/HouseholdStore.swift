@@ -1554,7 +1554,7 @@ final class HouseholdStore {
                 ownerAuthorityBinding: ownerAuthorityBinding,
                 expectedParticipantID: participant
               ),
-              state == .deleting || state == .deleted,
+              state == .deleted,
               try await transport.membershipLocation(householdID: lock.householdID) == nil,
               try await transport.accountMembershipLock() == lock else { return false }
         if lock.state == .released { return true }
