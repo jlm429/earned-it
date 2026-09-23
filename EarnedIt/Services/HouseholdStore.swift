@@ -2397,6 +2397,14 @@ final class HouseholdStore {
         ) else { throw HouseholdError.accountMembershipConflict }
         guard try await transport.participantID() == participant,
               session == expectedSession else { throw HouseholdError.wrongAccount }
+        var releasedSession = expectedSession
+        releasedSession.cloudParticipantID = nil
+        releasedSession.location = nil
+        releasedSession.cloudCanWrite = nil
+        releasedSession.accountMembershipLockAttemptID = nil
+        releasedSession.accountMembershipClaimBinding = nil
+        try repository.commit(facts: [], session: releasedSession)
+        session = releasedSession
         requiresMembershipRecovery = false
         errorMessage = nil
         syncMessage = "Ready to create or join a family"

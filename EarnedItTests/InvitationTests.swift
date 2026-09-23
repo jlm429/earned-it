@@ -2072,7 +2072,21 @@ final class MembershipRecoveryTests: XCTestCase {
             ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
         )
         server.accountMembershipLocks["owner"] = lock
-        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: TestClock())
+        let repository = try HouseholdRepository(inMemory: true)
+        var staleSession = try repository.session()
+        staleSession.cloudParticipantID = "owner"
+        staleSession.cloudCanWrite = true
+        staleSession.accountMembershipLockAttemptID = lock.attemptID
+        staleSession.accountMembershipClaimBinding = lock.claimBinding
+        staleSession.celebratedWeeks = ["2026-W38"]
+        try repository.commit(facts: [], session: staleSession)
+        let clock = TestClock()
+        var replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { clock.now },
+            automaticSync: false
+        )
 
         do {
             try await replacement.reconcileAccountMembershipLock()
@@ -2102,6 +2116,25 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
         XCTAssertFalse(replacement.hasFamilyDeletionNotice)
         XCTAssertNil(replacement.household)
+        XCTAssertNil(replacement.session.cloudParticipantID)
+        XCTAssertNil(replacement.session.location)
+        XCTAssertNil(replacement.session.cloudCanWrite)
+        XCTAssertNil(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertNil(replacement.session.accountMembershipClaimBinding)
+        XCTAssertEqual(replacement.session.deviceID, staleSession.deviceID)
+        XCTAssertEqual(replacement.session.celebratedWeeks, staleSession.celebratedWeeks)
+
+        replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { clock.now },
+            automaticSync: false
+        )
+        XCTAssertNil(replacement.session.cloudParticipantID)
+        XCTAssertNil(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertNil(replacement.session.accountMembershipClaimBinding)
+        XCTAssertEqual(replacement.session.deviceID, staleSession.deviceID)
+        XCTAssertEqual(replacement.session.celebratedWeeks, staleSession.celebratedWeeks)
         try replacement.createFamily(name: "New Family", parentName: "Owner")
         XCTAssertEqual(replacement.household?.name, "New Family")
     }
