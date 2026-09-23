@@ -28,6 +28,12 @@ struct AccountMembershipLock: Codable, Equatable {
     var ownerAuthorityBinding: String? = nil
 }
 
+enum AccountMembershipLockReleaseReason {
+    case expiredProvisional
+    case confirmedFamilyDeletion
+    case ownerSelfRelease
+}
+
 /// Production uses the same boundary exercised by the in-memory server in tests.
 @MainActor
 protocol HouseholdTransport {
@@ -53,6 +59,9 @@ protocol HouseholdTransport {
                                        now: Date) async throws -> AccountMembershipLock
     func releaseAccountMembershipLock(householdID: UUID, attemptID: UUID, expectedParticipantID: String,
                                       now: Date) async throws -> Bool
+    func releaseAccountMembershipLock(expectedLock: AccountMembershipLock, expectedParticipantID: String,
+                                      reason: AccountMembershipLockReleaseReason,
+                                      clientTime: Date) async throws -> Bool
     func membershipLocation(householdID: UUID) async throws -> CloudLocation?
     func createZone(for household: Household) async throws -> CloudLocation
     func discoverFamilies() async throws -> [CloudFamily]

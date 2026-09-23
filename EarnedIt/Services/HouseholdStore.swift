@@ -6,6 +6,11 @@ import UIKit
 @MainActor
 @Observable
 final class HouseholdStore {
+    private struct StaleOwnerMembershipReleaseCandidate {
+        let lock: AccountMembershipLock
+        let participantID: String
+    }
+
     private static let pendingInvitationCleanupRetryDelay: TimeInterval = 30
     private let repository: HouseholdRepository
     private let transport: (any HouseholdTransport)?
@@ -23,6 +28,7 @@ final class HouseholdStore {
     private(set) var isCheckingAccountMembership = false
     private(set) var isJoiningInvitation = false
     private(set) var requiresMembershipRecovery = false
+    private(set) var canReleaseStaleOwnerMembership = false
     private(set) var rejectedChanges: [UUID: String] = [:]
     var errorMessage: String?
     private var syncTask: Task<Void, Never>?
@@ -30,6 +36,7 @@ final class HouseholdStore {
     private var invitationCleanupTail: Task<Void, Never>?
     private var syncAgain = false
     private var facts: [HouseholdFact] = []
+    private var staleOwnerMembershipReleaseCandidate: StaleOwnerMembershipReleaseCandidate?
 
     init(repository: HouseholdRepository, transport: (any HouseholdTransport)? = nil,
          clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
@@ -85,8 +92,19 @@ final class HouseholdStore {
     }
 
     func cloudAccountDidChange() {
+        canReleaseStaleOwnerMembership = false
+        staleOwnerMembershipReleaseCandidate = nil
         transport?.accountDidChange()
     }
+
+    #if DEBUG
+    func prepareStaleOwnerMembershipRecoveryUITest() {
+        guard session.householdID == nil, session.pendingInvitationAcceptance == nil else { return }
+        isCheckingAccountMembership = false
+        requiresMembershipRecovery = true
+        canReleaseStaleOwnerMembership = true
+    }
+    #endif
 
     func dailyList(on date: Date? = nil) -> [DailyChore] {
         ChoreRules.dailyList(snapshot: snapshot, day: CivilDay(date ?? today, calendar: calendar), today: day)
@@ -1544,7 +1562,15 @@ final class HouseholdStore {
         participant: String
     ) async throws -> Bool {
         guard let transport, lock.state == .active || lock.state == .released else { return false }
-        let ownerAuthorityBinding = lock.ownerAuthorityBinding ?? location.flatMap { candidate in
+        let hasExactOwnerClaim = lock.claimBinding == AccountMembershipBinding.owner(
+            householdID: lock.householdID
+        )
+        let exactOwnerAuthorityBinding = exactOwnerAuthorityBinding(for: lock, participant: participant)
+        if hasExactOwnerClaim, lock.state == .active,
+           exactOwnerAuthorityBinding == nil { return false }
+        if hasExactOwnerClaim, lock.state == .released,
+           lock.ownerAuthorityBinding == nil { return false }
+        let ownerAuthorityBinding = lock.ownerAuthorityBinding ?? exactOwnerAuthorityBinding ?? location.flatMap { candidate in
             guard candidate.householdID == lock.householdID else { return nil }
             return self.ownerAuthorityBinding(for: candidate, participant: participant)
         }
@@ -1559,11 +1585,19 @@ final class HouseholdStore {
               try await transport.accountMembershipLock() == lock else { return false }
         if lock.state == .released { return true }
         return try await transport.releaseAccountMembershipLock(
-            householdID: lock.householdID,
-            attemptID: lock.attemptID,
+            expectedLock: lock,
             expectedParticipantID: participant,
-            now: clock()
+            reason: .confirmedFamilyDeletion,
+            clientTime: clock()
         )
+    }
+
+    private func exactOwnerAuthorityBinding(for lock: AccountMembershipLock, participant: String) -> String? {
+        guard lock.state == .active,
+              lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID) else { return nil }
+        let expected = AccountMembershipBinding.ownerAuthority(participantID: participant)
+        guard lock.ownerAuthorityBinding == nil || lock.ownerAuthorityBinding == expected else { return nil }
+        return expected
     }
 
     private func transitionToOnboardingIfFamilyDeleted(
@@ -2139,6 +2173,9 @@ final class HouseholdStore {
         isCheckingAccountMembership = true
         defer { isCheckingAccountMembership = false }
         let deviceID = session.deviceID
+        let expectedSession = session
+        canReleaseStaleOwnerMembership = false
+        staleOwnerMembershipReleaseCandidate = nil
         do {
             let participant = try await transport.participantID()
             guard let lock = try await recoveryMembershipLock(participant: participant) else {
@@ -2159,8 +2196,71 @@ final class HouseholdStore {
                 return
             }
             requiresMembershipRecovery = true
-            guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
-                let expectedSession = session
+            var location: CloudLocation?
+            if lock.state == .provisional {
+                guard lock.claimBinding == nil else {
+                    throw HouseholdError.accountMembershipConflict
+                }
+                if try await transport.releaseAccountMembershipLock(
+                    expectedLock: lock,
+                    expectedParticipantID: participant,
+                    reason: .expiredProvisional,
+                    clientTime: clock()
+                ) {
+                    guard try await transport.participantID() == participant,
+                          session == expectedSession else { throw HouseholdError.wrongAccount }
+                    requiresMembershipRecovery = false
+                    syncMessage = "Ready to create or join a family"
+                    return
+                }
+                location = try await transport.membershipLocation(householdID: lock.householdID)
+                if location == nil {
+                    try await validateRecovery(deviceID: deviceID, participant: participant, lock: lock)
+                }
+            } else {
+                location = try await transport.membershipLocation(householdID: lock.householdID)
+            }
+            guard let location else {
+                let hasExactOwnerClaim = lock.state == .active
+                    && lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID)
+                if hasExactOwnerClaim {
+                    guard let ownerAuthorityBinding = exactOwnerAuthorityBinding(
+                        for: lock,
+                        participant: participant
+                    ) else { throw HouseholdError.accountMembershipConflict }
+                    let lifecycleState: FamilyLifecycleState?
+                    do {
+                        lifecycleState = try await transport.familyLifecycleState(
+                            householdID: lock.householdID,
+                            ownerAuthorityBinding: ownerAuthorityBinding,
+                            expectedParticipantID: participant
+                        )
+                    } catch HouseholdError.accountMembershipConflict {
+                        throw HouseholdError.accountMembershipConflict
+                    } catch HouseholdError.wrongAccount {
+                        throw HouseholdError.wrongAccount
+                    } catch {
+                        try await validateRecovery(deviceID: deviceID, participant: participant, lock: lock)
+                        staleOwnerMembershipReleaseCandidate = .init(lock: lock, participantID: participant)
+                        canReleaseStaleOwnerMembership = true
+                        throw error
+                    }
+                    if lifecycleState == .deleted {
+                        if try await transitionToOnboardingIfFamilyDeleted(
+                            lock: lock,
+                            participant: participant,
+                            expectedSession: expectedSession
+                        ) {
+                            requiresMembershipRecovery = false
+                            return
+                        }
+                        throw HouseholdError.accountMembershipConflict
+                    }
+                    try await validateRecovery(deviceID: deviceID, participant: participant, lock: lock)
+                    staleOwnerMembershipReleaseCandidate = .init(lock: lock, participantID: participant)
+                    canReleaseStaleOwnerMembership = true
+                    throw HouseholdError.ownerMembershipUnavailable
+                }
                 if try await transitionToOnboardingIfFamilyDeleted(
                     lock: lock,
                     participant: participant,
@@ -2270,6 +2370,36 @@ final class HouseholdStore {
             requiresMembershipRecovery = true
             throw error
         }
+    }
+
+    func releaseStaleOwnerMembership() async throws {
+        guard canReleaseStaleOwnerMembership, requiresMembershipRecovery,
+              session.householdID == nil, session.pendingInvitationAcceptance == nil,
+              let candidate = staleOwnerMembershipReleaseCandidate,
+              let transport else { throw HouseholdError.accountMembershipConflict }
+        canReleaseStaleOwnerMembership = false
+        staleOwnerMembershipReleaseCandidate = nil
+        let expectedSession = session
+        let participant = try await transport.participantID()
+        guard participant == candidate.participantID else { throw HouseholdError.wrongAccount }
+        guard let lock = try await transport.accountMembershipLock(),
+              lock == candidate.lock,
+              exactOwnerAuthorityBinding(for: lock, participant: participant) != nil,
+              try await transport.membershipLocation(householdID: lock.householdID) == nil else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        try await validateRecovery(deviceID: expectedSession.deviceID, participant: participant, lock: lock)
+        guard try await transport.releaseAccountMembershipLock(
+            expectedLock: lock,
+            expectedParticipantID: participant,
+            reason: .ownerSelfRelease,
+            clientTime: clock()
+        ) else { throw HouseholdError.accountMembershipConflict }
+        guard try await transport.participantID() == participant,
+              session == expectedSession else { throw HouseholdError.wrongAccount }
+        requiresMembershipRecovery = false
+        errorMessage = nil
+        syncMessage = "Ready to create or join a family"
     }
 
     private func legacyRecoveryMember(in imported: HouseholdSnapshot, participant: String, now: Date) -> FamilyMember? {

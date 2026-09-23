@@ -38,6 +38,10 @@ An active marker plus revoked access does not release. Offline, permission, wron
 
 After an installed participant confirms both creator-authenticated `deleted` authority and exact zone absence, it conditionally releases only the matching lock, purges only that household's local journal and session cache, and returns to normal onboarding. A local identifier-free pending or acknowledged notice state makes `Family data was deleted` one-shot across relaunches. This small local UX receipt is required for the explicit terminal message; it carries no household, account, participant, or CloudKit value and is reset to pending only by another confirmed deletion. Revocation, permission loss, and offline failures never set it.
 
+An empty-session active lock with the exact deterministic owner claim is classified separately from invited and legacy-shared memberships. If that owner lock predates `ownerAuthorityBinding`, the app derives a candidate authority only from the stable current CloudKit participant and the exact owner claim. Terminal cleanup still requires the lifecycle record creator and last modifier to match that candidate, the state to be `deleted`, exact no-location evidence, and the complete lock to remain unchanged. This is not a general backfill or migration.
+
+If terminal deletion cannot be authenticated, a positively classified owner may explicitly release only that account's unchanged private lock after another exact no-location check. Owner self-release does not create or modify this lifecycle record and does not mean the family was deleted. It does not delete or recreate a zone, touch family facts, invitations, shares, or participants, release any other membership, grant recovery access, or produce the family-deleted notice. Invitation-bound, legacy-shared, revoked, archived, provisional, conflicting, wrong-account, changed-generation, and ambiguous-location states never receive this action.
+
 ## CloudKit schema and security
 
 This change requires a human-reviewed Development schema update and later human promotion to Production. Agent work must not deploy it or modify Production data.

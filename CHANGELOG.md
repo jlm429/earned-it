@@ -64,6 +64,7 @@ User-visible changes to Earned It.
 
 ### Fixed
 
+- Owning parents no longer get trapped in invitation recovery when an exact stale owner membership points to a missing family. Expired unfinished memberships are released only after authoritative validation, while positively identified owners can retry or explicitly release only their own unchanged private membership without deleting family data or showing a family-deleted notice.
 - Invitations with an exact code-and-link match can finish joining even when CloudKit's participant lookup is temporarily stale. A missing invitation record remains retryable, while a conflicting code or link is refused.
 - Chores with the same title now keep a deterministic order across devices.
 - Reinstalling or losing local app data now reconnects a surviving iCloud membership to its exact family member and role before offering family creation. Conflicting or temporarily unavailable recovery evidence blocks creation without deleting that membership.

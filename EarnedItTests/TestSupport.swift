@@ -113,6 +113,8 @@ final class TestTransport: HouseholdTransport {
     var lifecycleBeginFailures = 0
     var lifecycleFinalizeFailures = 0
     var lifecycleStateError: Error?
+    var accountMembershipValidationTimeError: Error?
+    var membershipLocationError: Error?
     var preflightAccountLockReadError: Error?
     var preflightSharedZoneReadError: Error?
     var claimError: Error?
@@ -139,6 +141,7 @@ final class TestTransport: HouseholdTransport {
     var beforeAccountLockRelease: (() async -> Void)?
     var beforeAccountLockReleaseSubmission: (() async -> Void)?
     var beforeAccountLockAcquireSubmission: (() async -> Void)?
+    var beforeAccountMembershipValidationTime: (() async -> Void)?
     var beforeAccountLockActivationSubmission: (() async -> Void)?
     var beforeAccountLockReplacementSubmission: (() async -> Void)?
     var afterAccountLockReplacementSubmission: (() async -> Void)?
@@ -147,6 +150,7 @@ final class TestTransport: HouseholdTransport {
     var beforeLifecycleFinalize: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
+    var beforeMembershipLocation: (() async -> Void)?
 
     init(server: TestCloudServer, account: String,
          familyTransitionDiagnostics: FamilyTransitionDiagnostics? = nil) {
@@ -161,6 +165,12 @@ final class TestTransport: HouseholdTransport {
     }
     func accountMembershipValidationTime(clientTime: Date) async throws -> Date {
         familyTransitionDiagnostics.record(stage: .membershipValidationTimeWrite, outcome: .started)
+        await beforeAccountMembershipValidationTime?()
+        if let accountMembershipValidationTimeError {
+            familyTransitionDiagnostics.record(stage: .membershipValidationTimeWrite, outcome: .failed,
+                                               error: accountMembershipValidationTimeError)
+            throw accountMembershipValidationTimeError
+        }
         familyTransitionDiagnostics.record(stage: .membershipValidationTimeWrite, outcome: .succeeded)
         return server.authoritativeTime ?? clientTime
     }
@@ -355,7 +365,56 @@ final class TestTransport: HouseholdTransport {
         server.accountMembershipLocks[account] = existing
         return true
     }
+    func releaseAccountMembershipLock(expectedLock: AccountMembershipLock, expectedParticipantID: String,
+                                      reason: AccountMembershipLockReleaseReason,
+                                      clientTime: Date) async throws -> Bool {
+        let expectedGeneration = accountGeneration
+        await beforeAccountLockRelease?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        let releaseTime: Date
+        switch reason {
+        case .expiredProvisional:
+            guard expectedLock.state == .provisional,
+                  expectedLock.claimBinding == nil else { return false }
+            releaseTime = try await accountMembershipValidationTime(clientTime: clientTime)
+            guard account == expectedParticipantID,
+                  accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+            guard releaseTime >= expectedLock.expiresAt else { return false }
+        case .confirmedFamilyDeletion:
+            guard expectedLock.state == .active else { return false }
+            releaseTime = clientTime
+        case .ownerSelfRelease:
+            let ownerAuthority = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
+            guard expectedLock.state == .active,
+                  expectedLock.claimBinding == AccountMembershipBinding.owner(
+                    householdID: expectedLock.householdID
+                  ),
+                  expectedLock.ownerAuthorityBinding == nil
+                    || expectedLock.ownerAuthorityBinding == ownerAuthority else { return false }
+            releaseTime = clientTime
+        }
+        guard try await membershipLocation(householdID: expectedLock.householdID) == nil else { return false }
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        await beforeAccountLockReleaseSubmission?()
+        try Task.checkCancellation()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        accountLockMutationEnqueues += 1
+        if accountLockReleaseFailures > 0 {
+            accountLockReleaseFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        guard var existing = server.accountMembershipLocks[account], existing == expectedLock else { return false }
+        existing.state = .released
+        existing.expiresAt = releaseTime
+        server.accountMembershipLocks[account] = existing
+        return true
+    }
     func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
+        await beforeMembershipLocation?()
+        if let membershipLocationError { throw membershipLocationError }
         let matches = server.zones.filter { $0.value.householdID == householdID
             && ($0.value.owner == account || $0.value.participants.contains(account)) }.map { name, zone in
                 CloudLocation(householdID: householdID, zoneName: name, ownerName: zone.owner,

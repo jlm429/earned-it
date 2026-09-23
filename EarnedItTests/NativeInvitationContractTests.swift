@@ -79,4 +79,21 @@ final class NativeInvitationContractTests: XCTestCase {
         let accounts = try XCTUnwrap(server.zones[location.zoneName]?.claimedInvitationAccounts)
         XCTAssertEqual(accounts[invitation.invitation.cloudShareParticipantID], "child")
     }
+
+    func testDeterministicRecordMissingClassifierAcceptsPerRecordUnknownItemOnly() {
+        let recordID = CKRecord.ID(recordName: String(repeating: "a", count: 64))
+        let otherRecordID = CKRecord.ID(recordName: String(repeating: "b", count: 64))
+        let missing = CKError(.partialFailure, userInfo: [
+            CKPartialErrorsByItemIDKey: [recordID: CKError(.unknownItem)]
+        ])
+        let unavailable = CKError(.partialFailure, userInfo: [
+            CKPartialErrorsByItemIDKey: [recordID: CKError(.networkFailure)]
+        ])
+
+        XCTAssertTrue(CloudKitHouseholdTransport.isRecordMissing(CKError(.unknownItem), recordID: recordID))
+        XCTAssertTrue(CloudKitHouseholdTransport.isRecordMissing(missing, recordID: recordID))
+        XCTAssertFalse(CloudKitHouseholdTransport.isRecordMissing(missing, recordID: otherRecordID))
+        XCTAssertFalse(CloudKitHouseholdTransport.isRecordMissing(unavailable, recordID: recordID))
+        XCTAssertFalse(CloudKitHouseholdTransport.isRecordMissing(CKError(.permissionFailure), recordID: recordID))
+    }
 }

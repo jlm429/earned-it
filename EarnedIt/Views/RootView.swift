@@ -9,6 +9,7 @@ struct RootView: View {
     @State private var cloudAccountRevision = 0
     @State private var diagnosticPreflightFinished = false
     @State private var diagnosticPreflightAvailable = false
+    @State private var confirmsStaleOwnerRelease = false
 
     var body: some View {
         @Bindable var store = store
@@ -50,6 +51,27 @@ struct RootView: View {
                 ProgressView("Reconnecting to your family…")
                     .accessibilityIdentifier("membership-recovery-progress")
                     .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
+            } else if store.requiresMembershipRecovery && store.canReleaseStaleOwnerMembership
+                && store.household == nil {
+                ContentUnavailableView {
+                    Label("Your Family Is Not Available", systemImage: "person.crop.circle.badge.exclamationmark")
+                } description: {
+                    Text("Earned It found this iCloud account's owning-parent membership, but its family could not be found. Try again in case iCloud access returns. If this membership is stale, you can release only this account's membership and return to Welcome.")
+                } actions: {
+                    Button("Try Again") {
+                        Task {
+                            do { try await store.reconcileAccountMembershipLock() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .accessibilityIdentifier("retry-owner-membership-recovery")
+                    Button("Release My Membership", role: .destructive) {
+                        confirmsStaleOwnerRelease = true
+                    }
+                    .accessibilityIdentifier("release-stale-owner-membership")
+                }
+                .accessibilityIdentifier("owner-membership-recovery-required")
+                .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.requiresMembershipRecovery && store.household == nil {
                 ContentUnavailableView {
                     Label("Reconnect to Your Family", systemImage: "icloud.and.arrow.down")
@@ -218,6 +240,18 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("This family was permanently deleted. You can create or join another family.")
+        }
+        .confirmationDialog("Release This Membership?", isPresented: $confirmsStaleOwnerRelease,
+                            titleVisibility: .visible) {
+            Button("Release My Membership", role: .destructive) {
+                Task {
+                    do { try await store.releaseStaleOwnerMembership() }
+                    catch { store.errorMessage = error.localizedDescription }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This releases only this iCloud account's stale Earned It membership. It does not delete family data or change anyone else's access.")
         }
     }
 

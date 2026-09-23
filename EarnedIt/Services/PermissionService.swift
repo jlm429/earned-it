@@ -5,7 +5,7 @@ enum HouseholdError: LocalizedError, Equatable {
     case permission, invalidName, duplicateName, missingChildren, invalidAssignment, unavailableDay
     case noHousehold, alreadyHasHousehold, cloudUnavailable, wrongAccount, invitation, readOnly
     case invitationNotFound, invitationExpired, invitationRevoked, invitationConsumed, invitationUnavailable
-    case invitationOwnerRequired, accountMembershipConflict
+    case invitationOwnerRequired, accountMembershipConflict, ownerMembershipUnavailable
     case missingProfile, lastParent, pendingChanges, malformedData, familyStillSyncing
 
     var errorDescription: String? {
@@ -30,6 +30,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .invitationUnavailable: "That invitation or family profile is no longer available. Ask a parent for a new invitation."
         case .invitationOwnerRequired: "This iCloud version only lets the family owner add another person. Ask the owner to create this invitation."
         case .accountMembershipConflict: "This iCloud account already belongs to an Earned It family member. Use that member, or ask the family owner to remove this account before joining again."
+        case .ownerMembershipUnavailable: "Your owning-parent membership is still reserved, but its family could not be found in iCloud. Try again, or release only this account's stale membership."
         case .readOnly: "This invitation permits viewing only. Ask the family owner for permission to make changes."
         case .missingProfile: "A parent needs to approve profiles for this installation."
         case .lastParent: "Keep at least one active parent. Switch profiles before archiving yourself."

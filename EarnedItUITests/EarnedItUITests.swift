@@ -141,6 +141,32 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.alerts["Family data was deleted"].exists)
     }
 
+    func testOwnerMembershipRecoveryShowsPreciseCopyAndConfirmation() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-stale-owner-membership",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("owner-membership-recovery-required").waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Your Family Is Not Available"].exists)
+        XCTAssertTrue(app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'owning-parent membership'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["retry-owner-membership-recovery"].exists)
+        XCTAssertTrue(app.buttons["release-stale-owner-membership"].exists)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'ask a parent'")).firstMatch.exists)
+        keepScreenshot("owner-membership-recovery-largest-text")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+
+        tap("release-stale-owner-membership")
+        XCTAssertTrue(app.staticTexts["Release This Membership?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'does not delete family data'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Release My Membership"].exists)
+        keepScreenshot("owner-membership-release-confirmation")
+    }
+
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {
         createFamily()
         addChild("Hanna")
