@@ -7,11 +7,26 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var invitations = ShareAcceptance.shared
     @State private var cloudAccountRevision = 0
+    @State private var diagnosticPreflightFinished = false
+    @State private var diagnosticPreflightAvailable = false
 
     var body: some View {
         @Bindable var store = store
         Group {
-            if store.hasPendingInvitationPackage {
+            if readOnlyPreflightMode {
+                ContentUnavailableView {
+                    Label(diagnosticPreflightFinished ? "Snapshot Captured" : "Capturing Before-State",
+                          systemImage: diagnosticPreflightFinished ? "checkmark.circle" : "waveform.path.ecg")
+                } description: {
+                    Text(diagnosticPreflightFinished
+                         ? diagnosticPreflightAvailable
+                            ? "The privacy-safe \(childRecoveryPreflightMode ? "child recovery" : "family transition") snapshot is available in the diagnostic log."
+                            : "No matching local family was available for this read-only snapshot."
+                         : "Earned It is reading \(childRecoveryPreflightMode ? "child recovery" : "family transition") state without synchronizing or changing iCloud data.")
+                }
+                .accessibilityIdentifier(childRecoveryPreflightMode
+                    ? "child-recovery-preflight" : "owner-transition-preflight")
+            } else if store.hasPendingInvitationPackage {
                 ContentUnavailableView {
                     Label("Finish Joining Your Family", systemImage: "person.crop.circle.badge.checkmark")
                 } description: {
@@ -97,6 +112,15 @@ struct RootView: View {
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
         .task(id: store.session.deviceID) {
+            if readOnlyPreflightMode {
+                if childRecoveryPreflightMode {
+                    diagnosticPreflightAvailable = await store.collectChildRecoveryPreflight() != nil
+                } else {
+                    diagnosticPreflightAvailable = await store.collectOwnerTransitionPreflight() != nil
+                }
+                diagnosticPreflightFinished = true
+                return
+            }
             store.refreshDate()
             if store.hasPendingInvitationPackage {
                 do { try await store.continuePendingInvitation() }
@@ -111,7 +135,8 @@ struct RootView: View {
             await acceptInvitation()
         }
         .task(id: "\(scenePhase)-\(store.pendingInvitationCleanupID ?? "none")-\(cloudAccountRevision)") {
-            guard scenePhase == .active, store.pendingInvitationCleanupID != nil else { return }
+            guard !readOnlyPreflightMode, scenePhase == .active,
+                  store.pendingInvitationCleanupID != nil else { return }
             do {
                 var retryDelay = try await store.retryScheduledInvitationCleanup()
                 while true {
@@ -132,13 +157,13 @@ struct RootView: View {
             }
         }
         .task(id: "\(scenePhase)-\(store.nextHouseholdMidnight.timeIntervalSince1970)-\(store.midnightTimerRevision)") {
-            guard scenePhase == .active else { return }
+            guard !readOnlyPreflightMode, scenePhase == .active else { return }
             let delay = max(0, store.nextHouseholdMidnight.timeIntervalSince(store.today))
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             store.refreshDate()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
+            if !readOnlyPreflightMode, phase == .active {
                 store.refreshDate()
                 Task {
                     await acceptInvitation()
@@ -150,23 +175,33 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
-            guard url.scheme == "earnedit-invitation" else { return }
+            guard !readOnlyPreflightMode, url.scheme == "earnedit-invitation" else { return }
             Task {
                 do { try await store.redeemInvitation(url.absoluteString) }
                 catch { store.errorMessage = error.localizedDescription }
             }
         }
-        .onChange(of: invitations.pending) { _, _ in Task { await acceptInvitation() } }
+        .onChange(of: invitations.pending) { _, _ in
+            guard !readOnlyPreflightMode else { return }
+            Task { await acceptInvitation() }
+        }
         .onChange(of: store.isJoiningInvitation) { _, joining in
-            if !joining { Task { await acceptInvitation() } }
+            if !readOnlyPreflightMode, !joining { Task { await acceptInvitation() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
+            guard !readOnlyPreflightMode else { return }
             store.cloudAccountDidChange()
             cloudAccountRevision &+= 1
             store.refreshDate()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in store.refreshDate() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in store.significantTimeChanged() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            guard !readOnlyPreflightMode else { return }
+            store.refreshDate()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            guard !readOnlyPreflightMode else { return }
+            store.significantTimeChanged()
+        }
         .alert("Unable to Update", isPresented: Binding(
             get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } }
         )) {
@@ -177,8 +212,29 @@ struct RootView: View {
     }
 
     private func acceptInvitation() async {
-        guard !store.isJoiningInvitation, let metadata = invitations.pending else { return }
+        guard !readOnlyPreflightMode, !store.isJoiningInvitation,
+              let metadata = invitations.pending else { return }
         invitations.pending = nil
         await store.accept(metadata: metadata)
+    }
+
+    private var ownerTransitionPreflightMode: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--owner-transition-preflight")
+        #else
+        false
+        #endif
+    }
+
+    private var childRecoveryPreflightMode: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--child-recovery-preflight")
+        #else
+        false
+        #endif
+    }
+
+    private var readOnlyPreflightMode: Bool {
+        ownerTransitionPreflightMode || childRecoveryPreflightMode
     }
 }

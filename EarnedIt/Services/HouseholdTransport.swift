@@ -24,6 +24,7 @@ struct AccountMembershipLock: Codable, Equatable {
 /// Production uses the same boundary exercised by the in-memory server in tests.
 @MainActor
 protocol HouseholdTransport {
+    var familyTransitionDiagnostics: FamilyTransitionDiagnostics { get }
     func accountDidChange()
     func participantID() async throws -> String
     func accountMembershipLock() async throws -> AccountMembershipLock?
@@ -56,4 +57,9 @@ protocol HouseholdTransport {
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact]
     func canWrite(to location: CloudLocation) async throws -> Bool
+    func ownerTransitionPreflight(targetHouseholdID: UUID, localSession: DeviceSession,
+                                  localFacts: [HouseholdFact], localPendingFactCount: Int) async
+        -> OwnerTransitionPreflightSnapshot
+    func childRecoveryPreflight(localSession: DeviceSession, localFacts: [HouseholdFact]) async
+        -> ChildRecoveryPreflightSnapshot
 }

@@ -32,7 +32,8 @@ final class HouseholdStore {
     private var facts: [HouseholdFact] = []
 
     init(repository: HouseholdRepository, transport: (any HouseholdTransport)? = nil,
-         clock: @escaping () -> Date = { .now }, automaticSync: Bool = true) throws {
+         clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
+         performLocalMigrations: Bool = true) throws {
         self.repository = repository
         self.transport = transport
         self.clock = clock
@@ -43,7 +44,7 @@ final class HouseholdStore {
             && session.pendingInvitationAcceptance == nil && session.pendingInvitationPackage == nil
         cloudIsReadOnly = session.location != nil && session.cloudCanWrite != true
         try reload()
-        try migrateLegacyProfileAccess()
+        if performLocalMigrations { try migrateLegacyProfileAccess() }
     }
 
     var household: Household? { snapshot.household }
@@ -512,55 +513,116 @@ final class HouseholdStore {
         try await synchronize()
     }
 
+    @discardableResult
+    func collectOwnerTransitionPreflight() async -> OwnerTransitionPreflightSnapshot? {
+        guard let household, let transport else { return nil }
+        let diagnostics = transport.familyTransitionDiagnostics
+        let ownsDiagnosticRun = !diagnostics.isActive
+        if ownsDiagnosticRun {
+            diagnostics.begin(targetHouseholdID: household.id,
+                              localAttemptID: session.accountMembershipLockAttemptID,
+                              localParticipantID: session.cloudParticipantID)
+        }
+        let localFacts = (try? repository.facts(householdID: household.id)) ?? []
+        let localPendingCount = (try? repository.pending(householdID: household.id,
+                                                         includingRejected: true).count) ?? 0
+        let result = await transport.ownerTransitionPreflight(
+            targetHouseholdID: household.id,
+            localSession: session,
+            localFacts: localFacts,
+            localPendingFactCount: localPendingCount
+        )
+        diagnostics.record(preflight: result)
+        if ownsDiagnosticRun { diagnostics.finish(outcome: .succeeded) }
+        return result
+    }
+
+    @discardableResult
+    func collectChildRecoveryPreflight() async -> ChildRecoveryPreflightSnapshot? {
+        guard let transport,
+              let householdID = session.location?.householdID ?? session.householdID else { return nil }
+        let diagnostics = transport.familyTransitionDiagnostics
+        diagnostics.begin(targetHouseholdID: householdID,
+                          localAttemptID: session.accountMembershipLockAttemptID,
+                          localParticipantID: session.cloudParticipantID)
+        let localFacts = (try? repository.facts(householdID: householdID)) ?? []
+        let result = await transport.childRecoveryPreflight(localSession: session, localFacts: localFacts)
+        diagnostics.record(childRecoveryPreflight: result)
+        diagnostics.finish(outcome: .succeeded)
+        return result
+    }
+
     private func issueInvitation(for member: FamilyMember, adding newMember: FamilyMember?) async throws
         -> IssuedFamilyInvitation {
         try requireParent()
         guard let household, member.householdID == household.id, member.role == .parent || newMember == nil else {
             throw HouseholdError.permission
         }
-        if session.location?.isOwner == true {
-            try await pruneUnavailableInvitationAccess()
-        }
-        let code = try InvitationCode.generate()
-        if session.location == nil { try await connect() }
-        try await synchronize()
-        guard let transport, let location = session.location, let parent = selectedMember else {
-            throw HouseholdError.cloudUnavailable
-        }
-        let now = try await transport.invitationValidationTime(in: location, clientTime: clock())
-        let issuedMember = newMember.map {
-            FamilyMember(id: $0.id, householdID: $0.householdID, displayName: $0.displayName,
-                         role: $0.role, avatar: $0.avatar,
-                         joinedDay: CivilDay(now, calendar: household.calendar), archivedFrom: $0.archivedFrom)
-        }
-        let access = try await transport.createInvitationAccess(for: location, title: household.name, role: member.role)
-        let invitation = FamilyInvitation(id: UUID(), householdID: household.id, claimFactID: UUID(),
-                                          memberID: member.id, role: member.role,
-                                          codeDigest: InvitationCode.digest(code)!, createdAt: now,
-                                          expiresAt: now.addingTimeInterval(InvitationCode.lifetime),
-                                          createdByMemberID: parent.id,
-                                          cloudShareParticipantID: access.participantID,
-                                          cloudShareURLDigest: InvitationCode.shareURLDigest(access.url))
+        guard let transport else { throw HouseholdError.cloudUnavailable }
+        let diagnostics = transport.familyTransitionDiagnostics
+        diagnostics.begin(targetHouseholdID: household.id,
+                          localAttemptID: session.accountMembershipLockAttemptID,
+                          localParticipantID: session.cloudParticipantID)
         do {
-            var bodies: [HouseholdFactBody] = []
-            if let issuedMember { bodies.append(.member(issuedMember)) }
-            bodies.append(.invitation(invitation))
-            try append(bodies)
-            try await synchronize()
-            return IssuedFamilyInvitation(invitation: invitation, code: code, shareURL: access.url)
-        } catch {
-            try? await transport.revokeInvitationAccess(participantID: access.participantID, from: location)
-            if snapshot.invitation(invitation.id) != nil {
-                var cleanup: [HouseholdFactBody] = [
-                    .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
-                                                               revokedByMemberID: parent.id))
-                ]
-                if var unsharedParent = issuedMember {
-                    unsharedParent.archivedFrom = day
-                    cleanup.append(.member(unsharedParent))
-                }
-                try? append(cleanup)
+            if session.location == nil { _ = await collectOwnerTransitionPreflight() }
+            if session.location?.isOwner == true {
+                try await pruneUnavailableInvitationAccess()
             }
+            let code = try InvitationCode.generate()
+            if session.location == nil { try await connect() }
+            try await synchronize()
+            guard let location = session.location, let parent = selectedMember else {
+                throw HouseholdError.cloudUnavailable
+            }
+            let now = try await transport.invitationValidationTime(in: location, clientTime: clock())
+            let issuedMember = newMember.map {
+                FamilyMember(id: $0.id, householdID: $0.householdID, displayName: $0.displayName,
+                             role: $0.role, avatar: $0.avatar,
+                             joinedDay: CivilDay(now, calendar: household.calendar), archivedFrom: $0.archivedFrom)
+            }
+            let access = try await transport.createInvitationAccess(for: location,
+                                                                    title: household.name, role: member.role)
+            let invitation = FamilyInvitation(id: UUID(), householdID: household.id, claimFactID: UUID(),
+                                              memberID: member.id, role: member.role,
+                                              codeDigest: InvitationCode.digest(code)!, createdAt: now,
+                                              expiresAt: now.addingTimeInterval(InvitationCode.lifetime),
+                                              createdByMemberID: parent.id,
+                                              cloudShareParticipantID: access.participantID,
+                                              cloudShareURLDigest: InvitationCode.shareURLDigest(access.url))
+            do {
+                var bodies: [HouseholdFactBody] = []
+                if let issuedMember { bodies.append(.member(issuedMember)) }
+                bodies.append(.invitation(invitation))
+                diagnostics.record(stage: .invitationAppend, outcome: .started, householdID: household.id,
+                                   factCount: bodies.count)
+                try append(bodies)
+                diagnostics.record(stage: .invitationAppend, outcome: .succeeded, householdID: household.id,
+                                   factCount: bodies.count)
+                try await synchronize()
+                diagnostics.finish(outcome: .succeeded)
+                return IssuedFamilyInvitation(invitation: invitation, code: code, shareURL: access.url)
+            } catch {
+                if snapshot.invitation(invitation.id) == nil {
+                    diagnostics.record(stage: .invitationAppend, outcome: .failed,
+                                       householdID: household.id, error: error)
+                }
+                diagnostics.finish(outcome: .failed, error: error)
+                try? await transport.revokeInvitationAccess(participantID: access.participantID, from: location)
+                if snapshot.invitation(invitation.id) != nil {
+                    var cleanup: [HouseholdFactBody] = [
+                        .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
+                                                                   revokedByMemberID: parent.id))
+                    ]
+                    if var unsharedParent = issuedMember {
+                        unsharedParent.archivedFrom = day
+                        cleanup.append(.member(unsharedParent))
+                    }
+                    try? append(cleanup)
+                }
+                throw error
+            }
+        } catch {
+            if diagnostics.isActive { diagnostics.finish(outcome: .failed, error: error) }
             throw error
         }
     }
@@ -574,7 +636,20 @@ final class HouseholdStore {
             return
         }
         let connectingSession = session
-        let participant = try await transport.participantID()
+        transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .started,
+                                                     householdID: household.id)
+        let participant: String
+        do {
+            participant = try await transport.participantID()
+            transport.familyTransitionDiagnostics.expect(participantID: participant)
+            transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .succeeded,
+                                                         householdID: household.id,
+                                                         participantID: participant)
+        } catch {
+            transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .failed,
+                                                         householdID: household.id, error: error)
+            throw error
+        }
         guard session.deviceID == connectingSession.deviceID,
               session.householdID == connectingSession.householdID, session.location == nil else {
             throw HouseholdError.noHousehold
@@ -583,6 +658,7 @@ final class HouseholdStore {
         let lock = try await acquireAccountMembershipLock(householdID: household.id,
                                                           attemptID: session.accountMembershipLockAttemptID,
                                                           matching: binding)
+        transport.familyTransitionDiagnostics.expect(attemptID: lock.attemptID)
         var provisional = session
         provisional.cloudParticipantID = participant
         provisional.accountMembershipLockAttemptID = lock.attemptID
@@ -1186,6 +1262,7 @@ final class HouseholdStore {
         -> AccountMembershipLock {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let candidate = attemptID ?? session.accountMembershipLockAttemptID ?? UUID()
+        transport.familyTransitionDiagnostics.expect(attemptID: candidate)
         var lock = try await transport.acquireAccountMembershipLock(
             householdID: householdID,
             attemptID: candidate,
