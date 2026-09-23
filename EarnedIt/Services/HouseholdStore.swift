@@ -2109,7 +2109,7 @@ final class HouseholdStore {
         let remote: [HouseholdFact]
         do {
             remote = try await transport.fetch(from: location)
-        } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
+        } catch let error as CKError where [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(error.code) {
             if let attemptID = expectedSession.accountMembershipLockAttemptID,
                let lock = try await transport.accountMembershipLock(),
                lock.householdID == location.householdID,
@@ -2521,7 +2521,7 @@ final class HouseholdStore {
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
                 familyAccessLost = [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
-                if [.zoneNotFound, .userDeletedZone].contains(cloudError.code),
+                if [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code),
                    let attemptID = session.accountMembershipLockAttemptID,
                    let expectedParticipantID = session.cloudParticipantID {
                     do {
@@ -2571,6 +2571,7 @@ final class HouseholdStore {
     func resetLocalData() throws {
         today = clock()
         guard !isSyncing else { throw HouseholdError.pendingChanges }
+        guard session.pendingFamilyDeletion != true else { throw HouseholdError.pendingChanges }
         if !profiles.isEmpty { try PermissionService.requireParent(selectedMember) }
         if session.location != nil && pendingCount > 0 { throw HouseholdError.pendingChanges }
         syncTask?.cancel()

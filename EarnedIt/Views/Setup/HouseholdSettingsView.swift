@@ -35,6 +35,7 @@ struct HouseholdSettingsView: View {
                 Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
                     confirmingReset = true
                 }
+                .disabled(deletingFamily || store.session.pendingFamilyDeletion == true)
                 .accessibilityIdentifier("clear-all-data")
             }
             if store.canDeleteFamily {

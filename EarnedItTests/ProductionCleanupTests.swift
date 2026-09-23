@@ -1545,6 +1545,7 @@ final class ProductionCleanupTests: XCTestCase {
         let transport = TestTransport(server: server, account: "owner")
         let family = try TestFamily(transport: transport)
         try await family.store.connect()
+        let deletedHouseholdID = try XCTUnwrap(family.store.household?.id)
         let suspended = expectation(description: "Family deletion suspended")
         var resume: CheckedContinuation<Void, Never>?
         transport.beforeDeleteFamilyData = {
@@ -1556,14 +1557,20 @@ final class ProductionCleanupTests: XCTestCase {
         let deletion = Task { try await family.store.deleteFamily() }
         await fulfillment(of: [suspended], timeout: 5)
 
-        try family.store.resetLocalData()
+        XCTAssertThrowsError(try family.store.resetLocalData()) { error in
+            XCTAssertEqual(error as? HouseholdError, .pendingChanges)
+        }
+        resume?.resume()
+        try await deletion.value
+
+        XCTAssertEqual(server.lifecycleAuthorities[deletedHouseholdID]?.state, .deleted)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+        XCTAssertNil(family.store.household)
+
         try family.store.createFamily(name: "Replacement Family", parentName: "Replacement Parent")
         let replacementSession = family.store.session
         let replacementFacts = family.store.snapshot
-        resume?.resume()
 
-        do { try await deletion.value; XCTFail("Stale deletion must not clear the replacement family") }
-        catch { XCTAssertEqual(error as? HouseholdError, .permission) }
         XCTAssertEqual(family.store.session, replacementSession)
         XCTAssertEqual(family.store.snapshot, replacementFacts)
         XCTAssertEqual(family.store.household?.name, "Replacement Family")
@@ -1840,6 +1847,7 @@ final class ProductionCleanupTests: XCTestCase {
         let householdID = location.householdID
         let guestLock = try XCTUnwrap(fixture.server.accountMembershipLocks["guest"])
         try await fixture.family.store.deleteFamily()
+        fixture.guestTransport.fetchError = CKError(.permissionFailure)
 
         try await fixture.guest.synchronize()
         XCTAssertNil(fixture.guest.household)
@@ -1870,6 +1878,20 @@ final class ProductionCleanupTests: XCTestCase {
         try fixture.guest.createFamily(name: "Guest New Family", parentName: "Guest Parent")
         XCTAssertEqual(fixture.guest.household?.name, "Guest New Family")
         XCTAssertNil(fixture.server.zones[location.zoneName])
+    }
+
+    func testReconciliationConfirmsDeletedFamilyAfterPermissionFailure() async throws {
+        let fixture = try await connectedParentInstallation()
+        let householdID = try XCTUnwrap(fixture.family.store.household?.id)
+        try await fixture.family.store.deleteFamily()
+        fixture.guestTransport.fetchError = CKError(.permissionFailure)
+
+        try await fixture.guest.reconcileAccountMembershipLock()
+
+        XCTAssertNil(fixture.guest.household)
+        XCTAssertTrue(fixture.guest.hasFamilyDeletionNotice)
+        XCTAssertTrue(try fixture.guestRepository.facts(householdID: householdID).isEmpty)
+        XCTAssertEqual(fixture.server.accountMembershipLocks["guest"]?.state, .released)
     }
 
     func testReinstalledChildCannotRecoverDeletedFamilyAndCanJoinNewInvitation() async throws {
