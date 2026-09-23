@@ -35,8 +35,8 @@ if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$info_plist" >/dev/null
 fi
 
 marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
-if [[ "$marketing_version" != "1.0.1" ]]; then
-  echo "Release application marketing version must be 1.0.1." >&2
+if [[ "$marketing_version" != "1.0.2" ]]; then
+  echo "Release application marketing version must be 1.0.2." >&2
   exit 1
 fi
 
