@@ -1185,7 +1185,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     familyTransitionDiagnostics.record(stage: stage, outcome: .succeeded,
                                                         householdID: householdID)
                     return savedState
-                } catch let error as CKError where Self.isRecordConflict(error, recordID: recordID) {
+                } catch let error as CKError
+                    where Self.shouldRetryLifecycleAuthorityBootstrap(error, recordID: recordID) {
                     continue
                 }
             }
@@ -1307,6 +1308,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         guard error.code == .partialFailure,
               let partial = error.partialErrorsByItemID?[recordID] as? CKError else { return false }
         return partial.code == CKError.Code.serverRecordChanged
+    }
+
+    nonisolated static func shouldRetryLifecycleAuthorityBootstrap(
+        _ error: CKError,
+        recordID: CKRecord.ID
+    ) -> Bool {
+        isRecordConflict(error, recordID: recordID) || isRecordMissing(error, recordID: recordID)
     }
 
     nonisolated static func isRecordMissing(_ error: CKError, recordID: CKRecord.ID) -> Bool {

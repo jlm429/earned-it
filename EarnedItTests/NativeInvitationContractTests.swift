@@ -96,4 +96,18 @@ final class NativeInvitationContractTests: XCTestCase {
         XCTAssertFalse(CloudKitHouseholdTransport.isRecordMissing(unavailable, recordID: recordID))
         XCTAssertFalse(CloudKitHouseholdTransport.isRecordMissing(CKError(.permissionFailure), recordID: recordID))
     }
+
+    func testLifecycleBootstrapRetriesObservedProductionUnknownItemAfterCreate() {
+        let recordID = CKRecord.ID(
+            recordName: "13015974c1c5f2947a398369546723450d8e94f9798cfb8af108934512b5acd3"
+        )
+        let error = CKError(.unknownItem, userInfo: [
+            NSLocalizedDescriptionKey:
+                "Error fetching record \(recordID) from server: Record not found"
+        ])
+
+        XCTAssertTrue(
+            CloudKitHouseholdTransport.shouldRetryLifecycleAuthorityBootstrap(error, recordID: recordID)
+        )
+    }
 }
