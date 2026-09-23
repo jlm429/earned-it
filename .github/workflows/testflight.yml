@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       team_id:
-        description: Apple Developer Team ID used for automatic signing
+        description: Apple Developer Team ID used for manual signing
         required: true
         type: string
 
@@ -28,14 +28,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Archive, export, and upload
+      - name: Archive and export with supplied signing assets
+        id: archive
         shell: bash
         env:
-          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          TESTFLIGHT_DISTRIBUTION_P12_BASE64: ${{ secrets.TESTFLIGHT_DISTRIBUTION_P12_BASE64 }}
+          TESTFLIGHT_DISTRIBUTION_P12_PASSWORD: ${{ secrets.TESTFLIGHT_DISTRIBUTION_P12_PASSWORD }}
+          TESTFLIGHT_APP_STORE_PROFILE_BASE64: ${{ secrets.TESTFLIGHT_APP_STORE_PROFILE_BASE64 }}
         run: |
           set -Eeuo pipefail
+          umask 077
 
           if [[ ! "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
             echo "::error::Enter the 10-character Apple Developer Team ID when dispatching this workflow."
@@ -43,26 +45,276 @@ jobs:
           fi
 
           for variable_name in \
-            APP_STORE_CONNECT_API_KEY_ID \
-            APP_STORE_CONNECT_ISSUER_ID \
-            APP_STORE_CONNECT_API_KEY; do
+            TESTFLIGHT_DISTRIBUTION_P12_BASE64 \
+            TESTFLIGHT_DISTRIBUTION_P12_PASSWORD \
+            TESTFLIGHT_APP_STORE_PROFILE_BASE64; do
             if [[ -z "${!variable_name}" ]]; then
               echo "::error::Required repository secret ${variable_name} is not configured."
               exit 1
             fi
           done
 
-          work_directory="$(mktemp -d "${RUNNER_TEMP}/earned-it-testflight.XXXXXX")"
-          cleanup() {
-            rm -f "${work_directory}/AuthKey.p8"
-            rm -rf "$work_directory"
-          }
-          trap cleanup EXIT
+          original_default_keychain="$(
+            security default-keychain -d user |
+              sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//'
+          )"
+          original_keychains=()
+          while IFS= read -r keychain_entry; do
+            keychain_entry="$(
+              printf '%s\n' "$keychain_entry" |
+                sed 's/^[[:space:]]*"//;s/"[[:space:]]*$//'
+            )"
+            original_keychains+=("$keychain_entry")
+          done < <(security list-keychains -d user)
 
-          umask 077
-          key_path="${work_directory}/AuthKey.p8"
-          printf '%s' "$APP_STORE_CONNECT_API_KEY" > "$key_path"
-          chmod 600 "$key_path"
+          if [[ -z "$original_default_keychain" ]] ||
+             (( ${#original_keychains[@]} == 0 )); then
+            echo "::error::Could not capture the original user keychain configuration."
+            exit 1
+          fi
+
+          work_directory="$(mktemp -d "${RUNNER_TEMP}/earned-it-testflight.XXXXXX")"
+          certificate_path="${work_directory}/distribution.p12"
+          profile_source_path="${work_directory}/app-store.mobileprovision"
+          profile_plist_path="${work_directory}/profile.plist"
+          profile_certificate_path="${work_directory}/profile-certificate.cer"
+          keychain_path="${work_directory}/testflight-signing.keychain-db"
+          profiles_directory="${HOME}/Library/MobileDevice/Provisioning Profiles"
+          installed_profile_path=""
+          signing_completed=0
+
+          cleanup_signing_material() {
+            local exit_status=$?
+            local cleanup_failed=0
+            trap - EXIT INT TERM
+            set +e
+
+            if ! security default-keychain -d user -s "$original_default_keychain"; then
+              echo "::error::Could not restore the original default keychain."
+              cleanup_failed=1
+            fi
+            if ! security list-keychains -d user -s "${original_keychains[@]}"; then
+              echo "::error::Could not restore the original user keychain list."
+              cleanup_failed=1
+            fi
+
+            if [[ -n "$installed_profile_path" ]]; then
+              if [[ "$installed_profile_path" == "$profiles_directory"/*.mobileprovision ]]; then
+                if ! rm -f "$installed_profile_path"; then
+                  echo "::error::Could not remove the installed provisioning profile."
+                  cleanup_failed=1
+                fi
+              else
+                echo "::error::Refusing to remove an unexpected provisioning profile path."
+                cleanup_failed=1
+              fi
+            fi
+
+            if [[ -e "$keychain_path" ]]; then
+              if ! security delete-keychain "$keychain_path"; then
+                echo "::error::Could not delete the temporary signing keychain."
+                cleanup_failed=1
+              fi
+            fi
+
+            if ! rm -f \
+              "$certificate_path" \
+              "$profile_source_path" \
+              "$profile_plist_path" \
+              "$profile_certificate_path" \
+              "$keychain_path"; then
+              echo "::error::Could not remove temporary signing material."
+              cleanup_failed=1
+            fi
+
+            if (( signing_completed == 0 )); then
+              if [[ "$(dirname "$work_directory")" == "$RUNNER_TEMP" ]] &&
+                 [[ "$(basename "$work_directory")" =~ ^earned-it-testflight\.[A-Za-z0-9]{6}$ ]] &&
+                 [[ -d "$work_directory" ]] &&
+                 [[ ! -L "$work_directory" ]]; then
+                if ! rm -rf "$work_directory"; then
+                  echo "::error::Could not remove the temporary TestFlight directory."
+                  cleanup_failed=1
+                fi
+              else
+                echo "::error::Refusing to remove an unexpected temporary directory."
+                cleanup_failed=1
+              fi
+            fi
+
+            unset keychain_password
+            if (( exit_status == 0 && cleanup_failed != 0 )); then
+              exit_status=1
+            fi
+            if (( cleanup_failed == 0 )); then
+              echo "Restored the original keychain state and removed temporary signing assets."
+            fi
+            exit "$exit_status"
+          }
+          trap cleanup_signing_material EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          echo "work-directory=${work_directory}" >> "$GITHUB_OUTPUT"
+
+          printf '%s' "$TESTFLIGHT_DISTRIBUTION_P12_BASE64" |
+            base64 --decode -o "$certificate_path"
+          printf '%s' "$TESTFLIGHT_APP_STORE_PROFILE_BASE64" |
+            base64 --decode -o "$profile_source_path"
+
+          keychain_password="$(openssl rand -hex 32)"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$TESTFLIGHT_DISTRIBUTION_P12_PASSWORD" \
+            -f pkcs12 \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            >/dev/null
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path" \
+            >/dev/null
+          security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
+          security default-keychain -d user -s "$keychain_path"
+
+          identity_output="$(security find-identity -v -p codesigning "$keychain_path")"
+          distribution_certificate_sha1="$(
+            printf '%s\n' "$identity_output" |
+              awk -v team="$APPLE_TEAM_ID" '
+                index($0, "\"Apple Distribution: John Mansfield (" team ")\"") {
+                  fingerprint=$2
+                  count++
+                }
+                END {
+                  if (count == 1) print fingerprint
+                  else exit 1
+                }
+              '
+          )"
+          distribution_certificate_sha1="$(
+            printf '%s' "$distribution_certificate_sha1" |
+              tr '[:lower:]' '[:upper:]'
+          )"
+          if [[ ! "$distribution_certificate_sha1" =~ ^[0-9A-F]{40}$ ]]; then
+            echo "::error::Expected exactly one matching John Mansfield Apple Distribution identity."
+            exit 1
+          fi
+
+          security cms -D -i "$profile_source_path" -o "$profile_plist_path"
+          profile_name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$profile_plist_path")"
+          profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$profile_plist_path")"
+          profile_team_id="$(
+            /usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist_path"
+          )"
+          profile_application_identifier="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:application-identifier' \
+              "$profile_plist_path"
+          )"
+          profile_bundle_identifier="${profile_application_identifier#*.}"
+          profile_entitlement_team_id="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.developer.team-identifier' \
+              "$profile_plist_path"
+          )"
+
+          if [[ "$profile_name" != "Earned It App Store CI" ]]; then
+            echo "::error::Expected the Earned It App Store CI provisioning profile."
+            exit 1
+          fi
+          if [[ ! "$profile_uuid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+            echo "::error::The App Store profile has an invalid UUID."
+            exit 1
+          fi
+          if [[ "$profile_team_id" != "$APPLE_TEAM_ID" ]] ||
+             [[ "$profile_entitlement_team_id" != "$APPLE_TEAM_ID" ]] ||
+             [[ "$profile_bundle_identifier" != "com.jlm429.EarnedIt" ]]; then
+            echo "::error::The App Store profile does not match the requested team and bundle ID."
+            exit 1
+          fi
+
+          if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' \
+               "$profile_plist_path" >/dev/null 2>&1 ||
+             /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' \
+               "$profile_plist_path" >/dev/null 2>&1; then
+            echo "::error::Expected an App Store Connect distribution profile."
+            exit 1
+          fi
+
+          profile_expiration="$(plutil -extract ExpirationDate raw -o - "$profile_plist_path")"
+          if ! profile_expiration_epoch="$(
+            date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$profile_expiration" '+%s' 2>/dev/null
+          )"; then
+            echo "::error::The App Store profile has an invalid expiration date."
+            exit 1
+          fi
+          if (( profile_expiration_epoch <= $(date -u '+%s') )); then
+            echo "::error::The App Store profile is expired."
+            exit 1
+          fi
+
+          if [[ "$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.developer.icloud-container-environment' \
+              "$profile_plist_path"
+          )" != "Production" ]] ||
+             [[ "$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.developer.icloud-container-identifiers:0' \
+              "$profile_plist_path"
+          )" != "iCloud.com.jlm429.EarnedIt" ]] ||
+             [[ "$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.developer.icloud-services:0' \
+              "$profile_plist_path"
+          )" != "CloudKit" ]] ||
+             [[ "$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.developer.icloud-extended-share-access:0' \
+              "$profile_plist_path"
+          )" != "InProcessOneTimeLinks" ]]; then
+            echo "::error::The App Store profile is missing required production iCloud and CloudKit entitlements."
+            exit 1
+          fi
+
+          plutil -extract DeveloperCertificates.0 raw -o - "$profile_plist_path" |
+            base64 --decode -o "$profile_certificate_path"
+          if ! openssl x509 -inform DER -in "$profile_certificate_path" \
+               -checkend 0 -noout; then
+            echo "::error::The distribution certificate is expired."
+            exit 1
+          fi
+          profile_certificate_sha1="$(
+            openssl x509 -inform DER -in "$profile_certificate_path" \
+              -noout -fingerprint -sha1 |
+              cut -d= -f2 |
+              tr -d ':' |
+              tr '[:lower:]' '[:upper:]'
+          )"
+          if [[ "$profile_certificate_sha1" != "$distribution_certificate_sha1" ]]; then
+            echo "::error::The App Store profile does not contain the imported distribution certificate."
+            exit 1
+          fi
+          echo "Validated distribution certificate ${distribution_certificate_sha1} with provisioning profile ${profile_uuid}."
+
+          mkdir -p "$profiles_directory"
+          profile_install_candidate="${profiles_directory}/${profile_uuid}.mobileprovision"
+          if [[ -e "$profile_install_candidate" ]]; then
+            echo "::error::Refusing to overwrite an existing installed provisioning profile."
+            exit 1
+          fi
+          installed_profile_path="$profile_install_candidate"
+          install -m 600 "$profile_source_path" "$installed_profile_path"
+
+          rm -f \
+            "$certificate_path" \
+            "$profile_source_path" \
+            "$profile_plist_path" \
+            "$profile_certificate_path"
 
           archive_path="${work_directory}/EarnedIt.xcarchive"
           export_path="${work_directory}/export"
@@ -81,9 +333,18 @@ jobs:
             <key>method</key>
             <string>app-store-connect</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>${distribution_certificate_sha1}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.jlm429.EarnedIt</key>
+              <string>${profile_uuid}</string>
+            </dict>
             <key>teamID</key>
             <string>${APPLE_TEAM_ID}</string>
+            <key>iCloudContainerEnvironment</key>
+            <string>Production</string>
             <key>uploadSymbols</key>
             <true/>
           </dict>
@@ -98,12 +359,11 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$archive_path" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$key_path" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             CURRENT_PROJECT_VERSION="$build_number" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$distribution_certificate_sha1" \
+            PROVISIONING_PROFILE_SPECIFIER="$profile_uuid" \
             -quiet \
             -showBuildTimingSummary
 
@@ -114,10 +374,6 @@ jobs:
             -archivePath "$archive_path" \
             -exportPath "$export_path" \
             -exportOptionsPlist "$export_options_path" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$key_path" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -quiet
 
           ipa_path="$(find "$export_path" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
@@ -125,6 +381,79 @@ jobs:
             echo "::error::Xcode export completed without producing an IPA."
             exit 1
           fi
+          echo "ipa-path=${ipa_path}" >> "$GITHUB_OUTPUT"
+          signing_completed=1
+
+      - name: Upload IPA to App Store Connect
+        shell: bash
+        env:
+          WORK_DIRECTORY: ${{ steps.archive.outputs.work-directory }}
+          IPA_PATH: ${{ steps.archive.outputs.ipa-path }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+
+          work_directory="$WORK_DIRECTORY"
+          if [[ "$(dirname "$work_directory")" != "$RUNNER_TEMP" ]] ||
+             [[ ! "$(basename "$work_directory")" =~ ^earned-it-testflight\.[A-Za-z0-9]{6}$ ]] ||
+             [[ ! -d "$work_directory" ]] ||
+             [[ -L "$work_directory" ]]; then
+            echo "::error::Refusing to use an unexpected temporary TestFlight directory."
+            exit 1
+          fi
+
+          key_path="${work_directory}/AuthKey.p8"
+          cleanup_upload_material() {
+            local exit_status=$?
+            local cleanup_failed=0
+            trap - EXIT INT TERM
+            set +e
+
+            if ! rm -f "$key_path"; then
+              echo "::error::Could not remove the App Store Connect API key."
+              cleanup_failed=1
+            fi
+            if ! rm -rf "$work_directory"; then
+              echo "::error::Could not remove archive and export material."
+              cleanup_failed=1
+            fi
+
+            if (( exit_status == 0 && cleanup_failed != 0 )); then
+              exit_status=1
+            fi
+            if (( cleanup_failed == 0 )); then
+              echo "Removed the temporary API key, archive, and export material."
+            fi
+            exit "$exit_status"
+          }
+          trap cleanup_upload_material EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          for variable_name in \
+            APP_STORE_CONNECT_API_KEY_ID \
+            APP_STORE_CONNECT_ISSUER_ID \
+            APP_STORE_CONNECT_API_KEY; do
+            if [[ -z "${!variable_name}" ]]; then
+              echo "::error::Required repository secret ${variable_name} is not configured."
+              exit 1
+            fi
+          done
+
+          ipa_path="$IPA_PATH"
+          if [[ "$(dirname "$ipa_path")" != "${work_directory}/export" ]] ||
+             [[ "$(basename "$ipa_path")" != *.ipa ]] ||
+             [[ ! -f "$ipa_path" ]] ||
+             [[ -L "$ipa_path" ]]; then
+            echo "::error::Refusing to upload an unexpected IPA path."
+            exit 1
+          fi
+
+          printf '%s' "$APP_STORE_CONNECT_API_KEY" > "$key_path"
+          chmod 600 "$key_path"
 
           echo "Uploading the IPA to App Store Connect for TestFlight processing."
           xcrun altool --upload-app \
@@ -132,3 +461,23 @@ jobs:
             --api-key "$APP_STORE_CONNECT_API_KEY_ID" \
             --api-issuer "$APP_STORE_CONNECT_ISSUER_ID" \
             --p8-file-path "$key_path"
+
+      - name: Remove retained TestFlight material
+        if: ${{ always() }}
+        shell: bash
+        env:
+          WORK_DIRECTORY: ${{ steps.archive.outputs.work-directory }}
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "$WORK_DIRECTORY" ]]; then
+            exit 0
+          fi
+          if [[ "$(dirname "$WORK_DIRECTORY")" != "$RUNNER_TEMP" ]] ||
+             [[ ! "$(basename "$WORK_DIRECTORY")" =~ ^earned-it-testflight\.[A-Za-z0-9]{6}$ ]] ||
+             { [[ -e "$WORK_DIRECTORY" ]] && { [[ ! -d "$WORK_DIRECTORY" ]] || [[ -L "$WORK_DIRECTORY" ]]; }; }; then
+            echo "::error::Refusing to remove an unexpected temporary TestFlight directory."
+            exit 1
+          fi
+          rm -rf "$WORK_DIRECTORY"
+          echo "Removed retained TestFlight material."
