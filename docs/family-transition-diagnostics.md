@@ -2,11 +2,11 @@
 
 ## Scope
 
-The diagnostic trace covers an owner's first invitation after replacing a deleted family. It begins before `connect` and reports the read-only preflight, participant lookup, membership validation time, lock acquisition, zone creation, journal fetch and upload, lock activation, invitation validation time, share fetch or creation, participant creation, invitation append, and invitation fact upload.
+The diagnostic trace covers an owner's first invitation after replacing a deleted family. It begins before `connect` and reports the read-only preflight, participant lookup, membership validation time, lock acquisition, zone creation, lifecycle authority preparation, journal fetch and upload, lock activation, invitation validation time, share fetch or creation, participant creation, invitation append, and invitation fact upload.
 
 Every event contains only stage names, states, counts, equality results, CloudKit error codes, error source, and retry timing. It never logs family, member, device, participant, invitation, record, zone, or attempt identifiers. It never logs names, URLs, codes, digests, payloads, credentials, or secrets.
 
-The in-memory trace is bounded to 200 events and is also written to unified logging with subsystem `com.jlm429.EarnedIt` and category `FamilyTransition`. No diagnostic receipt is persisted in the family journal or device session. There is no CloudKit schema change.
+The in-memory trace is bounded to 200 events and is also written to unified logging with subsystem `com.jlm429.EarnedIt` and category `FamilyTransition`. No diagnostic receipt is persisted in the family journal or device session. The diagnostic path adds no schema. The deletion correctness fix separately requires the `FamilyLifecycleAuthority` type documented in `docs/family-lifecycle-authority.md`.
 
 ## Read-only preflight contract
 
@@ -14,15 +14,17 @@ The in-memory trace is bounded to 200 events and is also written to unified logg
 
 1. Current participant lookup.
 2. Current private account membership lock fetch.
-3. Private record-zone listing for the local Family B identity.
-4. Family B zone-change reads when that zone exists.
-5. Family B zone-wide share record fetch when that zone exists.
+3. Direct public lifecycle authority fetch by an opaque deterministic record name.
+4. Private record-zone listing for the local Family B identity.
+5. Family B zone-change reads when that zone exists.
+6. Family B zone-wide share record fetch when that zone exists.
 
 It does not synchronize or import facts. It does not write validation-time records, retry a failed operation, create or revoke an invitation, create or delete a zone or share, upload facts, clean up access, or acquire, activate, release, or otherwise transition membership.
 
 The snapshot reports:
 
-- Lock state, whether it matches Family B or another household, whether its attempt matches local state, and whether its binding matches Family B's owner binding.
+- Lock state, whether it matches Family B or another household, whether its attempt matches local state, whether its claim matches Family B, and whether its owner-authority binding matches the current owner.
+- Lifecycle state when a valid creator-bound record exists.
 - Whether Family B's local location is absent, owner-controlled, shared, or for another household.
 - Whether the current participant equals the locally recorded participant and whether the account generation stayed stable during collection.
 - Local and CloudKit fact counts, household root and member fact counts, and Family B zone existence.

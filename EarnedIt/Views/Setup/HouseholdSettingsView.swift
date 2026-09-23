@@ -6,9 +6,22 @@ struct HouseholdSettingsView: View {
     @State private var confirmingFamilyDeletion = false
     @State private var confirmingPermanentDeletion = false
     @State private var deletingFamily = false
+    @State private var familyName = ""
 
     var body: some View {
         Form {
+            if store.selectedMember?.role == .parent {
+                Section("Family") {
+                    TextField("Family name", text: $familyName)
+                        .textContentType(.organizationName)
+                        .accessibilityIdentifier("family-name")
+                    Button("Save Family Name") { renameFamily() }
+                        .disabled(familyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || familyName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                == store.household?.name)
+                        .accessibilityIdentifier("save-family-name")
+                }
+            }
             Section("Family dates") {
                 LabeledContent("Time zone", value: store.household?.timeZoneID ?? "Not set")
                 Text("Lists and history always use this family timezone, even when a device travels.")
@@ -43,6 +56,10 @@ struct HouseholdSettingsView: View {
                 LegalLinksView()
             }
         }
+        .onAppear { familyName = store.household?.name ?? "" }
+        .onChange(of: store.household?.name) { _, name in
+            if let name { familyName = name }
+        }
         .refreshable { await refreshFamily() }
         .navigationTitle("Settings")
         .alert("Remove local family data?", isPresented: $confirmingReset) {
@@ -71,6 +88,11 @@ struct HouseholdSettingsView: View {
     private func refreshFamily() async {
         do { try await store.synchronize() }
         catch { store.errorMessage = error.localizedDescription }
+    }
+
+    private func renameFamily() {
+        store.perform { try store.renameFamily(familyName) }
+        familyName = store.household?.name ?? familyName
     }
 
     private func deleteFamily() {

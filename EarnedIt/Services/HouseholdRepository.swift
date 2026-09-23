@@ -96,6 +96,23 @@ final class HouseholdRepository {
         }
     }
 
+    func purgeHouseholdData(householdID: UUID, replacementSession: DeviceSession) throws {
+        do {
+            for stored in try context.fetch(FetchDescriptor<StoredFact>()) where stored.householdID == householdID {
+                context.delete(stored)
+            }
+            if let stored = try context.fetch(FetchDescriptor<StoredSession>()).first {
+                stored.payload = try JSONEncoder().encode(replacementSession)
+            } else {
+                context.insert(try StoredSession(replacementSession))
+            }
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
     func discardFacts(householdID: UUID, retaining retainedFactIDs: Set<UUID>, updating session: DeviceSession) throws {
         do {
             for stored in try context.fetch(FetchDescriptor<StoredFact>())

@@ -209,6 +209,16 @@ struct RootView: View {
         } message: {
             Text(store.errorMessage ?? "Please try again.")
         }
+        .alert("Family data was deleted", isPresented: Binding(
+            get: { store.hasFamilyDeletionNotice },
+            set: { presented in
+                if !presented { store.perform { try store.dismissFamilyDeletionNotice() } }
+            }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This family was permanently deleted. You can create or join another family.")
+        }
     }
 
     private func acceptInvitation() async {

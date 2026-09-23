@@ -124,6 +124,43 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(screen("parent-dashboard").exists)
     }
 
+    func testFamilyDeletionNoticeAppearsOnceOverNormalOnboarding() {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-family-deletion-notice"]
+        app.launch()
+
+        let notice = app.alerts["Family data was deleted"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 8))
+        XCTAssertTrue(notice.staticTexts["This family was permanently deleted. You can create or join another family."].exists)
+        keepScreenshot("family-deletion-notice")
+        tap("OK")
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
+
+        relaunch()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.alerts["Family data was deleted"].exists)
+    }
+
+    func testParentRenamesFamilyFromSettingsAndPersistsIt() {
+        createFamily()
+        addChild("Hanna")
+        tap("finish-setup")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        tap("family-management")
+        tap("household-settings")
+
+        replaceText("family-name", with: "Renamed Family")
+        tap("save-family-name")
+        XCTAssertEqual(app.textFields["family-name"].value as? String, "Renamed Family")
+        keepScreenshot("renamed-family-settings")
+
+        relaunch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("family-management")
+        tap("household-settings")
+        XCTAssertEqual(app.textFields["family-name"].value as? String, "Renamed Family")
+    }
+
     func testPrivacyAndSupportLinksRemainAvailableFromFirstRunThroughParentUse() {
         let setupPrivacy = screen("privacy-policy-link")
         let setupSupport = screen("support-link")
@@ -652,6 +689,15 @@ final class EarnedItUITests: XCTestCase {
         reveal(field)
         field.tap()
         field.typeText(text)
+        if app.keyboards.buttons["Return"].exists { app.keyboards.buttons["Return"].tap() }
+    }
+
+    private func replaceText(_ identifier: String, with text: String) {
+        let field = app.textFields[identifier]
+        reveal(field)
+        field.tap()
+        let current = field.value as? String ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + text)
         if app.keyboards.buttons["Return"].exists { app.keyboards.buttons["Return"].tap() }
     }
 

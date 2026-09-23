@@ -4,6 +4,42 @@ import CloudKit
 
 @MainActor
 final class SharingTests: XCTestCase {
+    func testParentOnlyFamilyRenameUsesJournalAndConvergesWithoutShareMutation() async throws {
+        let server = TestCloudServer()
+        let ownerTransport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: ownerTransport)
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let child = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                       transport: TestTransport(server: server, account: "child"),
+                                       clock: { family.clock.now }, automaticSync: false)
+        try await child.redeemInvitation(invitation.qrPayload)
+        let location = try XCTUnwrap(family.store.session.location)
+        let originalAccessCallCount = ownerTransport.invitationAccessCreationCalls
+
+        XCTAssertThrowsError(try family.store.renameFamily("   ")) { error in
+            XCTAssertEqual(error as? HouseholdError, .invalidName)
+        }
+        XCTAssertThrowsError(try family.store.renameFamily(String(repeating: "A", count: 51))) { error in
+            XCTAssertEqual(error as? HouseholdError, .invalidName)
+        }
+        try child.selectProfile(family.hanna.id)
+        XCTAssertThrowsError(try child.renameFamily("Child Rename")) { error in
+            XCTAssertEqual(error as? HouseholdError, .permission)
+        }
+
+        try family.store.renameFamily("  Renamed Family  ")
+        XCTAssertEqual(family.store.household?.name, "Renamed Family")
+        XCTAssertEqual(ownerTransport.invitationAccessCreationCalls, originalAccessCallCount)
+        XCTAssertEqual(server.zones[location.zoneName]?.name, "Test Family")
+        try await family.store.synchronize()
+        try await child.synchronize()
+
+        XCTAssertEqual(child.household?.name, "Renamed Family")
+        XCTAssertEqual(family.store.snapshot, child.snapshot)
+        XCTAssertEqual(ownerTransport.invitationAccessCreationCalls, originalAccessCallCount)
+        XCTAssertEqual(server.zones[location.zoneName]?.name, "Test Family")
+    }
+
     func testNewChildAndOfflineCompletionReconcileWithoutBackdatingOrReplacingContributions() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

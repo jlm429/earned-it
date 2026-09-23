@@ -50,6 +50,11 @@ struct EarnedItApp: App {
                 )
                 try repository.commit(facts: [], session: session)
             }
+            if !readOnlyPreflight && isUITest && arguments.contains("--ui-test-family-deletion-notice") {
+                var session = try repository.session()
+                session.familyDeletionNoticeState = .pending
+                try repository.commit(facts: [], session: session)
+            }
             #endif
             let transport: (any HouseholdTransport)?
             #if targetEnvironment(simulator)

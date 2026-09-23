@@ -9,10 +9,14 @@ enum FamilyTransitionDiagnosticStage: String, Equatable {
     case participantLookup
     case membershipValidationTimeWrite
     case membershipLockAcquire
+    case membershipLockReplace
     case zoneCreate
     case journalFetch
     case journalUpload
     case membershipLockActivate
+    case lifecycleAuthorityPrepare
+    case lifecycleDeletionPublish
+    case lifecycleDeletionCheck
     case validationTimeWrite
     case shareFetch
     case shareCreate
@@ -55,6 +59,8 @@ struct OwnerTransitionPreflightSnapshot: Equatable {
     var lockMatchesOtherHousehold: Bool?
     var lockAttemptMatchesLocal: Bool?
     var lockBindingMatchesTargetOwner: Bool?
+    var lockOwnerAuthorityMatchesTargetOwner: Bool?
+    var lifecycleState: FamilyLifecycleState?
     var localLocationState: FamilyTransitionLocationState = .absent
     var cloudTargetZoneExists: Bool?
     var accountMatchesLocalParticipant: Bool?
@@ -107,6 +113,8 @@ struct ChildRecoveryPreflightSnapshot: Equatable {
     var lockMatchesLocalHousehold: Bool?
     var lockAttemptMatchesLocal: Bool?
     var lockBindingMatchesLocal: Bool?
+    var lockHasOwnerAuthorityBinding: Bool?
+    var lifecycleState: FamilyLifecycleState?
     var localLocationState: FamilyTransitionLocationState = .absent
     var accountMatchesLocalParticipant: Bool?
     var accountGenerationStable: Bool?
@@ -322,6 +330,8 @@ final class FamilyTransitionDiagnostics {
             fields += [
                 "lockMatchesOtherHousehold=\(value(snapshot.lockMatchesOtherHousehold))",
                 "lockBindingMatchesTargetOwner=\(value(snapshot.lockBindingMatchesTargetOwner))",
+                "lockOwnerAuthorityMatchesTargetOwner=\(value(snapshot.lockOwnerAuthorityMatchesTargetOwner))",
+                "lifecycleState=\(snapshot.lifecycleState?.rawValue ?? "unknown")",
                 "localLocationState=\(snapshot.localLocationState.rawValue)",
                 "cloudTargetZoneExists=\(value(snapshot.cloudTargetZoneExists))",
                 "localFactCount=\(snapshot.localFactCount)",
@@ -347,6 +357,8 @@ final class FamilyTransitionDiagnostics {
                 "furthestStage=\(snapshot.furthestStage.rawValue)",
                 "readOnlyResult=\(snapshot.result.rawValue)",
                 "lockBindingMatchesLocal=\(value(snapshot.lockBindingMatchesLocal))",
+                "lockHasOwnerAuthorityBinding=\(value(snapshot.lockHasOwnerAuthorityBinding))",
+                "lifecycleState=\(snapshot.lifecycleState?.rawValue ?? "unknown")",
                 "localLocationState=\(snapshot.localLocationState.rawValue)",
                 "sharedZoneExists=\(value(snapshot.sharedZoneExists))",
                 "shareExists=\(value(snapshot.shareExists))",

@@ -10,6 +10,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     private let recordType = "HouseholdFact"
     private let accountMembershipRecordType = "AccountMembershipLock"
     private let accountMembershipRecordName = "current-membership"
+    private let familyLifecycleRecordType = "FamilyLifecycleAuthority"
     private var accountGeneration: UInt64 = 0
     let familyTransitionDiagnostics: FamilyTransitionDiagnostics
 
@@ -60,7 +61,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                                       leaseDuration: TimeInterval, clientTime: Date) async throws
         -> AccountMembershipLock {
         let startingGeneration = accountGeneration
-        let observedParticipantID = try? await participantID()
+        let observedParticipantID = try await participantID()
         familyTransitionDiagnostics.record(
             stage: .membershipLockAcquire, outcome: .started, householdID: householdID,
             attemptID: attemptID, participantID: observedParticipantID,
@@ -69,7 +70,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         do {
             let now = try await accountMembershipValidationTime(clientTime: clientTime)
             let boundedDuration = min(max(leaseDuration, 0), InvitationCode.lifetime)
-            let lock = try await updateAccountMembershipLock { existing in
+            let lock = try await updateAccountMembershipLock(
+                expectedParticipantID: observedParticipantID,
+                expectedGeneration: startingGeneration
+            ) { existing in
                 if let existing, existing.state == .active {
                     return existing
                 }
@@ -94,24 +98,95 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
-    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
-                                       claimBinding: String, now: Date) async throws -> AccountMembershipLock {
+    func replaceActiveRevokedAccountMembershipLock(
+        householdID: UUID,
+        revokedAttemptID: UUID,
+        revokedClaimBinding: String,
+        replacementAttemptID: UUID,
+        expectedParticipantID: String,
+        leaseDuration: TimeInterval,
+        validatedAt: Date
+    ) async throws -> AccountMembershipLock {
         let startingGeneration = accountGeneration
-        let observedParticipantID = try? await participantID()
+        guard revokedAttemptID != replacementAttemptID,
+              !revokedClaimBinding.isEmpty else { throw HouseholdError.accountMembershipConflict }
+        try await requireAccount(expectedParticipantID, generation: startingGeneration)
+        familyTransitionDiagnostics.record(
+            stage: .membershipLockReplace,
+            outcome: .started,
+            householdID: householdID,
+            attemptID: replacementAttemptID,
+            participantID: expectedParticipantID,
+            accountGenerationStable: true
+        )
+        do {
+            let boundedDuration = min(max(leaseDuration, 0), InvitationCode.lifetime)
+            let replacement = try await updateAccountMembershipLock(
+                expectedParticipantID: expectedParticipantID,
+                expectedGeneration: startingGeneration
+            ) { existing in
+                guard let existing,
+                      existing.householdID == householdID,
+                      existing.attemptID == revokedAttemptID,
+                      existing.state == .active,
+                      existing.claimBinding == revokedClaimBinding else {
+                    throw HouseholdError.accountMembershipConflict
+                }
+                return AccountMembershipLock(
+                    householdID: householdID,
+                    attemptID: replacementAttemptID,
+                    state: .provisional,
+                    expiresAt: validatedAt.addingTimeInterval(boundedDuration),
+                    claimBinding: nil
+                )
+            }
+            familyTransitionDiagnostics.record(
+                stage: .membershipLockReplace,
+                outcome: .succeeded,
+                lock: replacement,
+                participantID: expectedParticipantID,
+                accountGenerationStable: accountGeneration == startingGeneration
+            )
+            return replacement
+        } catch {
+            familyTransitionDiagnostics.record(
+                stage: .membershipLockReplace,
+                outcome: .failed,
+                householdID: householdID,
+                attemptID: replacementAttemptID,
+                participantID: expectedParticipantID,
+                accountGenerationStable: accountGeneration == startingGeneration,
+                error: error
+            )
+            throw error
+        }
+    }
+
+    func activateAccountMembershipLock(householdID: UUID, attemptID: UUID,
+                                       claimBinding: String, ownerAuthorityBinding: String,
+                                       now: Date) async throws -> AccountMembershipLock {
+        let startingGeneration = accountGeneration
+        let observedParticipantID = try await participantID()
         familyTransitionDiagnostics.record(
             stage: .membershipLockActivate, outcome: .started, householdID: householdID,
             attemptID: attemptID, participantID: observedParticipantID,
             accountGenerationStable: accountGeneration == startingGeneration
         )
         do {
-            let lock = try await updateAccountMembershipLock { existing in
+            let lock = try await updateAccountMembershipLock(
+                expectedParticipantID: observedParticipantID,
+                expectedGeneration: startingGeneration
+            ) { existing in
                 guard var existing, existing.householdID == householdID else {
                     throw HouseholdError.accountMembershipConflict
                 }
                 if existing.state == .active {
-                    guard existing.claimBinding == claimBinding else {
+                    guard existing.claimBinding == claimBinding,
+                          existing.ownerAuthorityBinding == nil
+                            || existing.ownerAuthorityBinding == ownerAuthorityBinding else {
                         throw HouseholdError.accountMembershipConflict
                     }
+                    existing.ownerAuthorityBinding = ownerAuthorityBinding
                     return existing
                 }
                 guard existing.state == .provisional,
@@ -119,6 +194,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 existing.state = .active
                 existing.expiresAt = .distantFuture
                 existing.claimBinding = claimBinding
+                existing.ownerAuthorityBinding = ownerAuthorityBinding
                 return existing
             }
             familyTransitionDiagnostics.record(
@@ -153,7 +229,6 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             guard existing.householdID == householdID, existing.attemptID == attemptID else { return existing }
             existing.state = .released
             existing.expiresAt = now
-            existing.claimBinding = nil
             return existing
         }
         return result.householdID == householdID && result.attemptID == attemptID && result.state == .released
@@ -313,6 +388,68 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         try Task.checkCancellation()
         guard accountGeneration == expectedGeneration,
               try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+    }
+
+    func ensureFamilyLifecycleAuthority(householdID: UUID, expectedParticipantID: String) async throws
+        -> FamilyLifecycleState {
+        try await updateFamilyLifecycleAuthority(
+            householdID: householdID,
+            expectedParticipantID: expectedParticipantID,
+            stage: .lifecycleAuthorityPrepare
+        ) { existing in
+            existing ?? .active
+        }
+    }
+
+    func beginFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws {
+        _ = try await updateFamilyLifecycleAuthority(
+            householdID: householdID,
+            expectedParticipantID: expectedParticipantID,
+            stage: .lifecycleDeletionPublish
+        ) { existing in
+            switch existing {
+            case .active: return .deleting
+            case .deleting: return .deleting
+            case .deleted: return .deleted
+            case nil: throw HouseholdError.accountMembershipConflict
+            }
+        }
+    }
+
+    func finalizeFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws {
+        _ = try await updateFamilyLifecycleAuthority(
+            householdID: householdID,
+            expectedParticipantID: expectedParticipantID,
+            stage: .lifecycleDeletionPublish
+        ) { existing in
+            switch existing {
+            case .deleting, .deleted: return .deleted
+            case .active, nil: throw HouseholdError.accountMembershipConflict
+            }
+        }
+    }
+
+    func familyLifecycleState(householdID: UUID, ownerAuthorityBinding: String,
+                              expectedParticipantID: String) async throws -> FamilyLifecycleState? {
+        let expectedGeneration = accountGeneration
+        familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck, outcome: .started,
+                                            householdID: householdID)
+        do {
+            try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+            let state = try await readFamilyLifecycleAuthority(
+                householdID: householdID,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+            try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+            familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck,
+                                                outcome: state == nil ? .absent : .succeeded,
+                                                householdID: householdID)
+            return state
+        } catch {
+            familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck, outcome: .failed,
+                                                householdID: householdID, error: error)
+            throw error
+        }
     }
 
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
@@ -564,9 +701,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
         }
 
+        var participant: String?
         do {
-            let participant = try await participantID()
-            snapshot.accountMatchesLocalParticipant = localSession.cloudParticipantID.map { $0 == participant }
+            let observedParticipant = try await participantID()
+            participant = observedParticipant
+            snapshot.accountMatchesLocalParticipant = localSession.cloudParticipantID.map {
+                $0 == observedParticipant
+            }
         } catch {
             snapshot.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
         }
@@ -582,12 +723,27 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 snapshot.lockBindingMatchesTargetOwner = lock.claimBinding.map {
                     $0 == AccountMembershipBinding.owner(householdID: targetHouseholdID)
                 }
+                snapshot.lockOwnerAuthorityMatchesTargetOwner = lock.ownerAuthorityBinding.map { binding in
+                    participant.map { binding == AccountMembershipBinding.ownerAuthority(participantID: $0) }
+                        ?? false
+                }
             } else {
                 snapshot.lockMatchesTargetHousehold = false
                 snapshot.lockMatchesOtherHousehold = false
             }
         } catch {
             snapshot.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+        }
+
+        if let participant {
+            do {
+                snapshot.lifecycleState = try await readFamilyLifecycleAuthority(
+                    householdID: targetHouseholdID,
+                    ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: participant)
+                )
+            } catch {
+                snapshot.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+            }
         }
 
         var targetLocation: CloudLocation?
@@ -652,7 +808,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             snapshot.childGrantReferenceCount = 0
             snapshot.exactChildRecoveryBindingCount = 0
         }
-        snapshot.accountGenerationStable = accountGeneration == startingGeneration
+        if let participant {
+            do {
+                let finalParticipant = try await participantID()
+                snapshot.accountGenerationStable = accountGeneration == startingGeneration
+                    && finalParticipant == participant
+            } catch {
+                snapshot.accountGenerationStable = false
+                snapshot.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+            }
+        }
         return snapshot
     }
 
@@ -678,13 +843,33 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
         guard let lock else {
             result.result = .lockMissing
-            result.accountGenerationStable = accountGeneration == startingGeneration
+            if let participant {
+                do {
+                    let finalParticipant = try await participantID()
+                    result.accountGenerationStable = accountGeneration == startingGeneration
+                        && finalParticipant == participant
+                } catch {
+                    result.accountGenerationStable = false
+                    result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+                }
+            }
             return result
         }
         result.lockState = lock.state
         result.lockMatchesLocalHousehold = localSession.householdID.map { $0 == lock.householdID }
         result.lockAttemptMatchesLocal = localSession.accountMembershipLockAttemptID.map { $0 == lock.attemptID }
         result.lockBindingMatchesLocal = localSession.accountMembershipClaimBinding.map { $0 == lock.claimBinding }
+        result.lockHasOwnerAuthorityBinding = lock.ownerAuthorityBinding != nil
+        if participant != nil, let ownerAuthorityBinding = lock.ownerAuthorityBinding {
+            do {
+                result.lifecycleState = try await readFamilyLifecycleAuthority(
+                    householdID: lock.householdID,
+                    ownerAuthorityBinding: ownerAuthorityBinding
+                )
+            } catch {
+                result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+            }
+        }
         if let location = localSession.location {
             if location.householdID != lock.householdID {
                 result.localLocationState = .otherHousehold
@@ -711,7 +896,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
         guard let location else {
             result.result = lock.state == .released ? .lockReleased : .sharedZoneMissing
-            result.accountGenerationStable = accountGeneration == startingGeneration
+            if let participant {
+                do {
+                    let finalParticipant = try await participantID()
+                    result.accountGenerationStable = accountGeneration == startingGeneration
+                        && finalParticipant == participant
+                } catch {
+                    result.accountGenerationStable = false
+                    result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+                }
+            }
             return result
         }
 
@@ -780,7 +974,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
         }
         if result.accountMatchesLocalParticipant == false { result.result = .accountUnavailable }
-        result.accountGenerationStable = accountGeneration == startingGeneration
+        if let participant {
+            do {
+                let finalParticipant = try await participantID()
+                result.accountGenerationStable = accountGeneration == startingGeneration
+                    && finalParticipant == participant
+            } catch {
+                result.accountGenerationStable = false
+                result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
+            }
+        }
         return result
     }
 
@@ -851,6 +1054,114 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         return share.perform(selector, with: participantID)?.takeUnretainedValue() as? URL
     }
 
+    private func updateFamilyLifecycleAuthority(
+        householdID: UUID,
+        expectedParticipantID: String,
+        stage: FamilyTransitionDiagnosticStage,
+        transition: (FamilyLifecycleState?) throws -> FamilyLifecycleState
+    ) async throws -> FamilyLifecycleState {
+        let expectedGeneration = accountGeneration
+        let ownerAuthorityBinding = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
+        let recordID = familyLifecycleRecordID(householdID: householdID)
+        let database = container.publicCloudDatabase
+        familyTransitionDiagnostics.record(stage: stage, outcome: .started, householdID: householdID)
+        do {
+            for _ in 0..<4 {
+                try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                let existingRecord: CKRecord?
+                let existingState: FamilyLifecycleState?
+                do {
+                    let record = try await database.record(for: recordID)
+                    existingState = try decodeFamilyLifecycleAuthority(
+                        record,
+                        ownerAuthorityBinding: ownerAuthorityBinding
+                    )
+                    existingRecord = record
+                } catch let error as CKError where error.code == .unknownItem {
+                    existingRecord = nil
+                    existingState = nil
+                }
+                let next = try transition(existingState)
+                if next == existingState {
+                    try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                    familyTransitionDiagnostics.record(stage: stage, outcome: .succeeded,
+                                                        householdID: householdID)
+                    return next
+                }
+                let record = existingRecord
+                    ?? CKRecord(recordType: familyLifecycleRecordType, recordID: recordID)
+                record["formatVersion"] = 1 as CKRecordValue
+                record["state"] = next.rawValue as CKRecordValue
+                do {
+                    try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                    try await enqueueModifyRecords(saving: [record], deleting: [], in: database)
+                    try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                    let saved = try await database.record(for: recordID)
+                    let savedState = try decodeFamilyLifecycleAuthority(
+                        saved,
+                        ownerAuthorityBinding: ownerAuthorityBinding
+                    )
+                    guard savedState == next else { throw HouseholdError.accountMembershipConflict }
+                    try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                    familyTransitionDiagnostics.record(stage: stage, outcome: .succeeded,
+                                                        householdID: householdID)
+                    return savedState
+                } catch let error as CKError where Self.isRecordConflict(error, recordID: recordID) {
+                    continue
+                }
+            }
+            throw HouseholdError.accountMembershipConflict
+        } catch {
+            familyTransitionDiagnostics.record(stage: stage, outcome: .failed,
+                                                householdID: householdID, error: error)
+            throw error
+        }
+    }
+
+    private func decodeFamilyLifecycleAuthority(
+        _ record: CKRecord,
+        ownerAuthorityBinding: String
+    ) throws -> FamilyLifecycleState {
+        let formatVersion = (record["formatVersion"] as? NSNumber)?.intValue
+            ?? record["formatVersion"] as? Int
+        guard record.recordType == familyLifecycleRecordType,
+              formatVersion == 1,
+              let rawState = record["state"] as? String,
+              let state = FamilyLifecycleState(rawValue: rawState),
+              let creator = record.creatorUserRecordID?.recordName,
+              let modifier = record.lastModifiedUserRecordID?.recordName,
+              AccountMembershipBinding.ownerAuthority(participantID: creator) == ownerAuthorityBinding,
+              AccountMembershipBinding.ownerAuthority(participantID: modifier) == ownerAuthorityBinding else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        return state
+    }
+
+    private func readFamilyLifecycleAuthority(
+        householdID: UUID,
+        ownerAuthorityBinding: String
+    ) async throws -> FamilyLifecycleState? {
+        do {
+            let record = try await container.publicCloudDatabase.record(
+                for: familyLifecycleRecordID(householdID: householdID)
+            )
+            return try decodeFamilyLifecycleAuthority(record, ownerAuthorityBinding: ownerAuthorityBinding)
+        } catch let error as CKError where error.code == .unknownItem {
+            return nil
+        }
+    }
+
+    private func familyLifecycleRecordID(householdID: UUID) -> CKRecord.ID {
+        CKRecord.ID(recordName: AccountMembershipBinding.lifecycleRecordName(householdID: householdID))
+    }
+
+    private func requireAccount(_ expectedParticipantID: String, generation: UInt64) async throws {
+        try Task.checkCancellation()
+        guard accountGeneration == generation,
+              try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        try Task.checkCancellation()
+    }
+
     private func updateAccountMembershipLock(
         expectedParticipantID: String? = nil,
         expectedGeneration: UInt64? = nil,
@@ -906,6 +1217,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     nonisolated static func isAccountMembershipRecordConflict(_ error: CKError,
                                                                recordID: CKRecord.ID) -> Bool {
+        isRecordConflict(error, recordID: recordID)
+    }
+
+    nonisolated static func isRecordConflict(_ error: CKError, recordID: CKRecord.ID) -> Bool {
         if error.code == .serverRecordChanged { return true }
         guard error.code == .partialFailure,
               let partial = error.partialErrorsByItemID?[recordID] as? CKError else { return false }
