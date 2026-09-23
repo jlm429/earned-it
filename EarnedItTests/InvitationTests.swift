@@ -2042,6 +2042,852 @@ final class MembershipRecoveryTests: XCTestCase {
         _ = try replacement.saveMember(name: "Recovered Child", role: .child, avatar: .flower)
     }
 
+    func testLegacyOwnerRecoveryRecreatesOnlyMissingLifecycleMarker() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        try await family.store.connect()
+        let householdID = try XCTUnwrap(family.store.household?.id)
+        server.accountMembershipLocks.removeValue(forKey: "owner")
+        server.lifecycleAuthorities.removeValue(forKey: householdID)
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: family.clock)
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(replacement.household?.id, householdID)
+        XCTAssertEqual(replacement.selectedMember?.id, family.parent.id)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .active)
+        XCTAssertEqual(server.lifecycleAuthorities[householdID]?.state, .active)
+        XCTAssertEqual(server.zones.count, 1)
+    }
+
+    func testFreshExactOwnerLockWithoutLocationOffersExplicitOwnerSelfRelease() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        let repository = try HouseholdRepository(inMemory: true)
+        var staleSession = try repository.session()
+        staleSession.cloudParticipantID = "owner"
+        staleSession.cloudCanWrite = true
+        staleSession.accountMembershipLockAttemptID = lock.attemptID
+        staleSession.accountMembershipClaimBinding = lock.claimBinding
+        staleSession.celebratedWeeks = ["2026-W38"]
+        try repository.commit(facts: [], session: staleSession)
+        let clock = TestClock()
+        var replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { clock.now },
+            automaticSync: false
+        )
+
+        do {
+            try await replacement.reconcileAccountMembershipLock()
+            XCTFail("A missing owner location must require an explicit owner recovery choice")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .ownerMembershipUnavailable)
+        }
+
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertTrue(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+
+        let otherLock = AccountMembershipLock(
+            householdID: UUID(), attemptID: UUID(), state: .active, expiresAt: .distantFuture,
+            claimBinding: "other-account-claim", ownerAuthorityBinding: "other-owner-authority"
+        )
+        server.accountMembershipLocks["other"] = otherLock
+        try await replacement.releaseStaleOwnerMembership()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.claimBinding, lock.claimBinding)
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.ownerAuthorityBinding, lock.ownerAuthorityBinding)
+        XCTAssertEqual(server.accountMembershipLocks["other"], otherLock)
+        XCTAssertTrue(server.lifecycleAuthorities.isEmpty)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.household)
+        XCTAssertNil(replacement.session.cloudParticipantID)
+        XCTAssertNil(replacement.session.location)
+        XCTAssertNil(replacement.session.cloudCanWrite)
+        XCTAssertNil(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertNil(replacement.session.accountMembershipClaimBinding)
+        XCTAssertEqual(replacement.session.deviceID, staleSession.deviceID)
+        XCTAssertEqual(replacement.session.celebratedWeeks, staleSession.celebratedWeeks)
+
+        replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { clock.now },
+            automaticSync: false
+        )
+        XCTAssertNil(replacement.session.cloudParticipantID)
+        XCTAssertNil(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertNil(replacement.session.accountMembershipClaimBinding)
+        XCTAssertEqual(replacement.session.deviceID, staleSession.deviceID)
+        XCTAssertEqual(replacement.session.celebratedWeeks, staleSession.celebratedWeeks)
+        try replacement.createFamily(name: "New Family", parentName: "Owner")
+        XCTAssertEqual(replacement.household?.name, "New Family")
+    }
+
+    func testReleasedLegacyOwnerLockCompletesInterruptedSelfReleaseRoutingCleanup() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let repository = try HouseholdRepository(inMemory: true)
+        var interruptedSession = try repository.session()
+        interruptedSession.cloudParticipantID = "owner"
+        interruptedSession.cloudCanWrite = true
+        interruptedSession.accountMembershipLockAttemptID = lock.attemptID
+        interruptedSession.accountMembershipClaimBinding = lock.claimBinding
+        interruptedSession.celebratedWeeks = ["2026-W38"]
+        try repository.commit(facts: [], session: interruptedSession)
+        let replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.session.cloudParticipantID)
+        XCTAssertNil(replacement.session.location)
+        XCTAssertNil(replacement.session.cloudCanWrite)
+        XCTAssertNil(replacement.session.accountMembershipLockAttemptID)
+        XCTAssertNil(replacement.session.accountMembershipClaimBinding)
+        XCTAssertEqual(replacement.session.deviceID, interruptedSession.deviceID)
+        XCTAssertEqual(replacement.session.celebratedWeeks, interruptedSession.celebratedWeeks)
+        XCTAssertEqual(try repository.session(), replacement.session)
+    }
+
+    func testInterruptedSelfReleaseCleanupRejectsGenerationChange() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let repository = try HouseholdRepository(inMemory: true)
+        var interruptedSession = try repository.session()
+        interruptedSession.cloudParticipantID = "owner"
+        interruptedSession.cloudCanWrite = true
+        interruptedSession.accountMembershipLockAttemptID = lock.attemptID
+        interruptedSession.accountMembershipClaimBinding = lock.claimBinding
+        try repository.commit(facts: [], session: interruptedSession)
+        let transport = TestTransport(server: server, account: "owner")
+        let replacement = try HouseholdStore(
+            repository: repository,
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        transport.beforeMembershipLocation = { replacement.cloudAccountDidChange() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertEqual(replacement.session, interruptedSession)
+        XCTAssertEqual(try repository.session(), interruptedSession)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
+    func testOwnerSelfReleaseFailsClosedAfterAccountLockGenerationOrLocationChanges() async throws {
+        for condition in 0..<4 {
+            let server = TestCloudServer()
+            let householdID = UUID()
+            let lock = AccountMembershipLock(
+                householdID: householdID, attemptID: UUID(), state: .active,
+                expiresAt: .distantFuture,
+                claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+                ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+            )
+            server.accountMembershipLocks["owner"] = lock
+            let transport = TestTransport(server: server, account: "owner")
+            let replacement = try fresh(transport, clock: TestClock())
+            await XCTAssertThrowsErrorAsync(
+                try await replacement.reconcileAccountMembershipLock(),
+                expected: .ownerMembershipUnavailable
+            )
+            XCTAssertTrue(replacement.canReleaseStaleOwnerMembership)
+
+            switch condition {
+            case 0:
+                let otherHouseholdID = UUID()
+                server.accountMembershipLocks["other"] = AccountMembershipLock(
+                    householdID: otherHouseholdID, attemptID: UUID(), state: .active,
+                    expiresAt: .distantFuture,
+                    claimBinding: AccountMembershipBinding.owner(householdID: otherHouseholdID)
+                )
+                transport.account = "other"
+            case 1:
+                server.accountMembershipLocks["owner"] = AccountMembershipLock(
+                    householdID: lock.householdID, attemptID: UUID(), state: lock.state,
+                    expiresAt: lock.expiresAt, claimBinding: lock.claimBinding,
+                    ownerAuthorityBinding: lock.ownerAuthorityBinding
+                )
+            case 2:
+                server.zones["first"] = .init(householdID: householdID, name: "First", owner: "owner")
+                server.zones["second"] = .init(householdID: householdID, name: "Second", owner: "owner")
+            default:
+                replacement.cloudAccountDidChange()
+            }
+
+            do {
+                try await replacement.releaseStaleOwnerMembership()
+                XCTFail("Changed recovery evidence must prevent owner self-release")
+            } catch {
+                XCTAssertEqual(
+                    error as? HouseholdError,
+                    condition == 0 ? .wrongAccount : .accountMembershipConflict
+                )
+            }
+            XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+            XCTAssertNotEqual(server.accountMembershipLocks["owner"]?.state, .released)
+            XCTAssertNotEqual(server.accountMembershipLocks["other"]?.state, .released)
+        }
+    }
+
+    func testOwnerSelfReleaseRejectsGenerationChangeDuringRevalidation() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        let transport = TestTransport(server: server, account: "owner")
+        let replacement = try fresh(transport, clock: TestClock())
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .ownerMembershipUnavailable
+        )
+        transport.beforeMembershipLocation = { replacement.cloudAccountDidChange() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.releaseStaleOwnerMembership(),
+            expected: .wrongAccount
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+    }
+
+    func testExpiredUnclaimedProvisionalWithoutLocationReleasesAndReturnsToOnboarding() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        server.authoritativeTime = clock.now
+        let lock = AccountMembershipLock(
+            householdID: UUID(), attemptID: UUID(), state: .provisional,
+            expiresAt: clock.now.addingTimeInterval(-1), claimBinding: nil
+        )
+        server.accountMembershipLocks["joining"] = lock
+        let replacement = try fresh(TestTransport(server: server, account: "joining"), clock: clock)
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["joining"]?.state, .released)
+        XCTAssertEqual(server.accountMembershipLocks["joining"]?.attemptID, lock.attemptID)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.household)
+        try replacement.createFamily(name: "Available Again", parentName: "Parent")
+        XCTAssertEqual(replacement.household?.name, "Available Again")
+    }
+
+    func testUnexpiredProvisionalWithoutLocationRemainsHeld() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        server.authoritativeTime = clock.now
+        let lock = AccountMembershipLock(
+            householdID: UUID(), attemptID: UUID(), state: .provisional,
+            expiresAt: clock.now.addingTimeInterval(60), claimBinding: nil
+        )
+        server.accountMembershipLocks["joining"] = lock
+        let transport = TestTransport(server: server, account: "joining")
+        let replacement = try fresh(transport, clock: clock)
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .invitationUnavailable
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["joining"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
+    func testExpiredProvisionalValidationLocationAndAccountFailuresRemainHeld() async throws {
+        let clock = TestClock()
+        for failure in 0..<3 {
+            let server = TestCloudServer()
+            server.authoritativeTime = clock.now
+            let account = "joining-\(failure)"
+            let lock = AccountMembershipLock(
+                householdID: UUID(), attemptID: UUID(), state: .provisional,
+                expiresAt: clock.now.addingTimeInterval(-1), claimBinding: nil
+            )
+            server.accountMembershipLocks[account] = lock
+            let transport = TestTransport(server: server, account: account)
+            switch failure {
+            case 0:
+                transport.accountMembershipValidationTimeError = CKError(.networkFailure)
+            case 1:
+                transport.membershipLocationError = CKError(.serviceUnavailable)
+            default:
+                transport.beforeMembershipLocation = { transport.account = "other-account" }
+            }
+            let replacement = try fresh(transport, clock: clock)
+
+            do {
+                try await replacement.reconcileAccountMembershipLock()
+                XCTFail("Uncertain expiry recovery must fail closed")
+            } catch {
+                if failure == 2 {
+                    XCTAssertEqual(error as? HouseholdError, .wrongAccount)
+                } else {
+                    XCTAssertNotNil(error as? CKError)
+                }
+            }
+
+            XCTAssertEqual(server.accountMembershipLocks[account], lock)
+            XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+            XCTAssertTrue(replacement.requiresMembershipRecovery)
+            XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+            XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+        }
+    }
+
+    func testFullLockReleaseRejectsEveryConcurrentLockChangeAndAccountGenerationChange() async throws {
+        let clock = TestClock()
+        let householdID = UUID()
+        let original = AccountMembershipLock(
+            householdID: householdID, attemptID: UUID(), state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "account")
+        )
+        let changedLocks: [AccountMembershipLock] = [
+            AccountMembershipLock(householdID: UUID(), attemptID: original.attemptID, state: original.state,
+                                  expiresAt: original.expiresAt, claimBinding: original.claimBinding),
+            AccountMembershipLock(householdID: original.householdID, attemptID: UUID(), state: original.state,
+                                  expiresAt: original.expiresAt, claimBinding: original.claimBinding),
+            AccountMembershipLock(householdID: original.householdID, attemptID: original.attemptID, state: .active,
+                                  expiresAt: .distantFuture, claimBinding: "concurrent-activation",
+                                  ownerAuthorityBinding: "concurrent-owner"),
+            AccountMembershipLock(householdID: original.householdID, attemptID: original.attemptID,
+                                  state: original.state, expiresAt: original.expiresAt.addingTimeInterval(1),
+                                  claimBinding: original.claimBinding),
+            AccountMembershipLock(householdID: original.householdID, attemptID: original.attemptID,
+                                  state: original.state, expiresAt: original.expiresAt,
+                                  claimBinding: original.claimBinding, ownerAuthorityBinding: "changed-authority")
+        ]
+
+        for changed in changedLocks {
+            let server = TestCloudServer()
+            server.accountMembershipLocks["account"] = original
+            let transport = TestTransport(server: server, account: "account")
+            transport.beforeAccountLockReleaseSubmission = {
+                server.accountMembershipLocks["account"] = changed
+            }
+
+            let released = try await transport.releaseAccountMembershipLock(
+                expectedLock: original,
+                expectedParticipantID: "account",
+                reason: .ownerSelfRelease,
+                clientTime: clock.now,
+                expectedAccountGeneration: transport.accountGeneration
+            )
+            XCTAssertFalse(released)
+            XCTAssertEqual(server.accountMembershipLocks["account"], changed)
+        }
+
+        let server = TestCloudServer()
+        server.accountMembershipLocks["account"] = original
+        let transport = TestTransport(server: server, account: "account")
+        transport.beforeAccountLockReleaseSubmission = { transport.accountDidChange() }
+        await XCTAssertThrowsErrorAsync(
+            try await transport.releaseAccountMembershipLock(
+                expectedLock: original,
+                expectedParticipantID: "account",
+                reason: .ownerSelfRelease,
+                clientTime: clock.now,
+                expectedAccountGeneration: transport.accountGeneration
+            ),
+            expected: .wrongAccount
+        )
+        XCTAssertEqual(server.accountMembershipLocks["account"], original)
+    }
+
+    func testExpiredProvisionalConcurrentActivationPreventsRecoveryRelease() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        server.authoritativeTime = clock.now
+        let lock = AccountMembershipLock(
+            householdID: UUID(), attemptID: UUID(), state: .provisional,
+            expiresAt: clock.now.addingTimeInterval(-1), claimBinding: nil
+        )
+        server.accountMembershipLocks["joining"] = lock
+        let transport = TestTransport(server: server, account: "joining")
+        var activated = lock
+        activated.state = .active
+        activated.expiresAt = .distantFuture
+        activated.claimBinding = "concurrent-invitation"
+        activated.ownerAuthorityBinding = "concurrent-owner"
+        transport.beforeAccountLockReleaseSubmission = {
+            server.accountMembershipLocks["joining"] = activated
+        }
+        let replacement = try fresh(transport, clock: clock)
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["joining"], activated)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+    }
+
+    func testExpiredProvisionalRecoveryRejectsClassificationGenerationChange() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        server.authoritativeTime = clock.now
+        let lock = AccountMembershipLock(
+            householdID: UUID(),
+            attemptID: UUID(),
+            state: .provisional,
+            expiresAt: clock.now.addingTimeInterval(-1),
+            claimBinding: nil
+        )
+        server.accountMembershipLocks["joining"] = lock
+        let transport = TestTransport(server: server, account: "joining")
+        let replacement = try fresh(transport, clock: clock)
+        transport.afterAccountMembershipLockRead = { replacement.cloudAccountDidChange() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .wrongAccount
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["joining"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+    }
+
+    func testExpiredProvisionalConnectCannotReleaseConcurrentActivation() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        server.authoritativeTime = family.clock.now
+        let householdID = try XCTUnwrap(family.store.household?.id)
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .provisional,
+            expiresAt: family.clock.now.addingTimeInterval(-1),
+            claimBinding: nil
+        )
+        var activated = lock
+        activated.state = .active
+        activated.expiresAt = .distantFuture
+        activated.claimBinding = "concurrent-invitation"
+        activated.ownerAuthorityBinding = "concurrent-owner"
+        server.accountMembershipLocks["owner"] = lock
+        transport.beforeAccountLockReleaseSubmission = {
+            server.accountMembershipLocks["owner"] = activated
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await family.store.connect(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], activated)
+        XCTAssertEqual(server.createCalls, 0)
+    }
+
+    func testNonOwnerClaimsNeverReceiveOwnerSelfRelease() async throws {
+        let clock = TestClock()
+        let householdID = UUID()
+        let claims = [
+            "invitation-bound-claim",
+            AccountMembershipBinding.legacyShared(householdID: householdID, participantID: "account")
+        ]
+        for (index, claim) in claims.enumerated() {
+            let server = TestCloudServer()
+            let lock = AccountMembershipLock(
+                householdID: householdID, attemptID: UUID(), state: .active,
+                expiresAt: .distantFuture, claimBinding: claim
+            )
+            let account = "account-\(index)"
+            server.accountMembershipLocks[account] = lock
+            let replacement = try fresh(TestTransport(server: server, account: account), clock: clock)
+
+            await XCTAssertThrowsErrorAsync(
+                try await replacement.reconcileAccountMembershipLock(),
+                expected: .invitationUnavailable
+            )
+
+            XCTAssertEqual(server.accountMembershipLocks[account], lock)
+            XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+            XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+        }
+    }
+
+    func testLegacyExactOwnerTerminalDeletionUsesAuthenticatedLifecycleCleanup() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID, attemptID: UUID(), state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = TestCloudServer.LifecycleAuthority(
+            state: .deleted, creator: "owner", lastModifier: "owner"
+        )
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: clock)
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertTrue(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.household)
+    }
+
+    func testReleasedOwnerLockRetainsAuthenticatedTerminalDeletionCleanup() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID, attemptID: UUID(), state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted, creator: "owner", lastModifier: "owner"
+        )
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: TestClock())
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertTrue(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.household)
+    }
+
+    func testReleasedLegacyOwnerLockRetainsAuthenticatedTerminalDeletionCleanup() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: TestClock())
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertTrue(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.household)
+    }
+
+    func testTerminalDeletionCleanupRejectsClassificationGenerationChange() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let transport = TestTransport(server: server, account: "owner")
+        let replacement = try fresh(transport, clock: TestClock())
+        var lockReads = 0
+        transport.afterAccountMembershipLockRead = {
+            lockReads += 1
+            if lockReads == 2 { replacement.cloudAccountDidChange() }
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
+    func testReleasedOwnerLockWithConflictingAuthorityCannotClaimDeletion() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let attackerAuthority = AccountMembershipBinding.ownerAuthority(participantID: "attacker")
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: attackerAuthority
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted,
+            creator: "attacker",
+            lastModifier: "attacker"
+        )
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: TestClock())
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
+    func testReleasedOwnerLockWithConflictingRoutingRemainsBlocked() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let repository = try HouseholdRepository(inMemory: true)
+        var session = try repository.session()
+        session.cloudParticipantID = "different-account"
+        session.accountMembershipLockAttemptID = lock.attemptID
+        session.accountMembershipClaimBinding = lock.claimBinding
+        try repository.commit(facts: [], session: session)
+        let replacement = try HouseholdStore(
+            repository: repository,
+            transport: TestTransport(server: server, account: "owner"),
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertEqual(replacement.session, session)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
+    func testAuthenticatedOwnerDeletionReleaseFailureRetriesTerminalCleanup() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID, attemptID: UUID(), state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted, creator: "owner", lastModifier: "owner"
+        )
+        let transport = TestTransport(server: server, account: "owner")
+        transport.accountLockReleaseFailures = 1
+        let replacement = try fresh(transport, clock: TestClock())
+
+        do {
+            try await replacement.reconcileAccountMembershipLock()
+            XCTFail("A failed terminal release must remain retryable")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertTrue(replacement.hasFamilyDeletionNotice)
+    }
+
+    func testOwnerLifecycleNonterminalUnavailableAndForgedStatesNeverBecomeDeletion() async throws {
+        let clock = TestClock()
+        for condition in 0..<8 {
+            let server = TestCloudServer()
+            let householdID = UUID()
+            let lock = AccountMembershipLock(
+                householdID: householdID, attemptID: UUID(), state: .active,
+                expiresAt: .distantFuture,
+                claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+                ownerAuthorityBinding: condition == 7 ? "conflicting-authority" : nil
+            )
+            server.accountMembershipLocks["owner"] = lock
+            switch condition {
+            case 0:
+                server.lifecycleAuthorities[householdID] = .init(
+                    state: .active, creator: "owner", lastModifier: "owner"
+                )
+            case 1:
+                server.lifecycleAuthorities[householdID] = .init(
+                    state: .deleting, creator: "owner", lastModifier: "owner"
+                )
+            case 2:
+                break
+            case 3:
+                server.lifecycleAuthorities[householdID] = .init(
+                    state: .deleted, creator: "attacker", lastModifier: "owner"
+                )
+            case 4:
+                server.lifecycleAuthorities[householdID] = .init(
+                    state: .deleted, creator: "owner", lastModifier: "attacker"
+                )
+            case 5, 6:
+                break
+            default:
+                server.lifecycleAuthorities[householdID] = .init(
+                    state: .deleted, creator: "owner", lastModifier: "owner"
+                )
+            }
+            let transport = TestTransport(server: server, account: "owner")
+            if condition == 5 { transport.lifecycleStateError = HouseholdError.malformedData }
+            if condition == 6 { transport.lifecycleStateError = CKError(.networkFailure) }
+            let replacement = try fresh(transport, clock: clock)
+
+            do {
+                try await replacement.reconcileAccountMembershipLock()
+                XCTFail("Only authenticated terminal deletion may complete cleanup")
+            } catch {
+                if condition == 3 || condition == 4 || condition == 7 {
+                    XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
+                }
+            }
+
+            XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+            XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+            XCTAssertEqual(replacement.canReleaseStaleOwnerMembership, [0, 1, 2, 5, 6].contains(condition))
+        }
+    }
+
+    func testIncompleteOwnerBootstrapZoneDoesNotInventProfilesOrDeleteData() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let zoneName = "EarnedIt-\(householdID.uuidString)"
+        server.zones[zoneName] = TestCloudServer.Zone(
+            householdID: householdID, name: "Incomplete", owner: "owner"
+        )
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active, creator: "owner", lastModifier: "owner"
+        )
+        let lock = AccountMembershipLock(
+            householdID: householdID, attemptID: UUID(), state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: clock)
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .familyStillSyncing
+        )
+
+        XCTAssertNotNil(server.zones[zoneName])
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.profiles.isEmpty)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
     func testFreshJoinedParentAndChildRecoverOnlyTheirExactCommittedProfile() async throws {
         for role in [UserRole.parent, .child] {
             let server = TestCloudServer()
@@ -2118,6 +2964,7 @@ final class MembershipRecoveryTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await replacement.reconcileAccountMembershipLock(), expected: .invitationUnavailable)
         XCTAssertNil(replacement.household)
         XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
         XCTAssertTrue(replacement.profiles.isEmpty)
         XCTAssertEqual(server.accountMembershipLocks["child"], lock)
         XCTAssertEqual(transport.accountLockMutationEnqueues, 0)

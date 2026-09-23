@@ -11,7 +11,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     private let accountMembershipRecordType = "AccountMembershipLock"
     private let accountMembershipRecordName = "current-membership"
     private let familyLifecycleRecordType = "FamilyLifecycleAuthority"
-    private var accountGeneration: UInt64 = 0
+    private(set) var accountGeneration: UInt64 = 0
     let familyTransitionDiagnostics: FamilyTransitionDiagnostics
 
     init(container: CKContainer = CKContainer(identifier: containerIdentifier),
@@ -34,7 +34,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         do {
             let record = try await container.privateCloudDatabase.record(for: recordID)
             return try decodeAccountMembershipLock(record)
-        } catch let error as CKError where error.code == .unknownItem {
+        } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
             return nil
         }
     }
@@ -232,6 +232,53 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             return existing
         }
         return result.householdID == householdID && result.attemptID == attemptID && result.state == .released
+    }
+
+    func releaseAccountMembershipLock(expectedLock: AccountMembershipLock, expectedParticipantID: String,
+                                      reason: AccountMembershipLockReleaseReason,
+                                      clientTime: Date, expectedAccountGeneration: UInt64) async throws -> Bool {
+        let expectedGeneration = expectedAccountGeneration
+        guard accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
+        try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+        let releaseTime: Date
+        switch reason {
+        case .expiredProvisional:
+            guard expectedLock.state == .provisional,
+                  expectedLock.claimBinding == nil else { return false }
+            releaseTime = try await accountMembershipValidationTime(clientTime: clientTime)
+            try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+            guard releaseTime >= expectedLock.expiresAt else { return false }
+        case .confirmedFamilyDeletion:
+            guard expectedLock.state == .active else { return false }
+            releaseTime = clientTime
+        case .ownerSelfRelease:
+            let ownerAuthority = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
+            guard expectedLock.state == .active,
+                  expectedLock.claimBinding == AccountMembershipBinding.owner(
+                    householdID: expectedLock.householdID
+                  ),
+                  expectedLock.ownerAuthorityBinding == nil
+                    || expectedLock.ownerAuthorityBinding == ownerAuthority else { return false }
+            releaseTime = clientTime
+        }
+        guard try await membershipLocation(householdID: expectedLock.householdID) == nil else { return false }
+        try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+        do {
+            let result = try await updateAccountMembershipLock(
+                expectedParticipantID: expectedParticipantID,
+                expectedGeneration: expectedGeneration
+            ) { existing in
+                guard var existing, existing == expectedLock else {
+                    throw AccountMembershipLockUpdateError.expectedLockMismatch
+                }
+                existing.state = .released
+                existing.expiresAt = releaseTime
+                return existing
+            }
+            return result.state == .released
+        } catch AccountMembershipLockUpdateError.expectedLockMismatch {
+            return false
+        }
     }
 
     func createZone(for household: Household) async throws -> CloudLocation {
@@ -1109,7 +1156,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                         ownerAuthorityBinding: ownerAuthorityBinding
                     )
                     existingRecord = record
-                } catch let error as CKError where error.code == .unknownItem {
+                } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
                     existingRecord = nil
                     existingState = nil
                 }
@@ -1173,12 +1220,11 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         householdID: UUID,
         ownerAuthorityBinding: String
     ) async throws -> FamilyLifecycleState? {
+        let recordID = familyLifecycleRecordID(householdID: householdID)
         do {
-            let record = try await container.publicCloudDatabase.record(
-                for: familyLifecycleRecordID(householdID: householdID)
-            )
+            let record = try await container.publicCloudDatabase.record(for: recordID)
             return try decodeFamilyLifecycleAuthority(record, ownerAuthorityBinding: ownerAuthorityBinding)
-        } catch let error as CKError where error.code == .unknownItem {
+        } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
             return nil
         }
     }
@@ -1207,7 +1253,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             do {
                 record = try await database.record(for: recordID)
                 existing = try decodeAccountMembershipLock(record)
-            } catch let error as CKError where error.code == .unknownItem {
+            } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
                 record = CKRecord(recordType: accountMembershipRecordType, recordID: recordID)
                 existing = nil
             }
@@ -1236,6 +1282,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         throw HouseholdError.accountMembershipConflict
     }
 
+    private enum AccountMembershipLockUpdateError: Error {
+        case expectedLockMismatch
+    }
+
     private func enqueueModifyRecords(saving records: [CKRecord], deleting recordIDs: [CKRecord.ID],
                                       in database: CKDatabase) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -1257,6 +1307,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         guard error.code == .partialFailure,
               let partial = error.partialErrorsByItemID?[recordID] as? CKError else { return false }
         return partial.code == CKError.Code.serverRecordChanged
+    }
+
+    nonisolated static func isRecordMissing(_ error: CKError, recordID: CKRecord.ID) -> Bool {
+        if error.code == .unknownItem { return true }
+        guard error.code == .partialFailure,
+              let partial = error.partialErrorsByItemID?[recordID] as? CKError else { return false }
+        return partial.code == .unknownItem
     }
 
     nonisolated static func isInvitationClaimConflict(_ error: CKError,

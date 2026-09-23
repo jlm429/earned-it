@@ -68,6 +68,10 @@ struct EarnedItApp: App {
                 clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
                 automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight)
             if !readOnlyPreflight { try WeeklyUITestFixture.prepare(initialStore) }
+            if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-stale-owner-membership") {
+                initialStore.prepareStaleOwnerMembershipRecoveryUITest()
+            }
             #else
             let initialStore = try HouseholdStore(repository: repository, transport: transport)
             #endif
