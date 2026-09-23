@@ -2186,6 +2186,51 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertEqual(try repository.session(), replacement.session)
     }
 
+    func testInterruptedSelfReleaseCleanupRejectsGenerationChange() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let repository = try HouseholdRepository(inMemory: true)
+        var interruptedSession = try repository.session()
+        interruptedSession.cloudParticipantID = "owner"
+        interruptedSession.cloudCanWrite = true
+        interruptedSession.accountMembershipLockAttemptID = lock.attemptID
+        interruptedSession.accountMembershipClaimBinding = lock.claimBinding
+        try repository.commit(facts: [], session: interruptedSession)
+        let transport = TestTransport(server: server, account: "owner")
+        let replacement = try HouseholdStore(
+            repository: repository,
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        transport.beforeMembershipLocation = { replacement.cloudAccountDidChange() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertEqual(replacement.session, interruptedSession)
+        XCTAssertEqual(try repository.session(), interruptedSession)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
+    }
+
     func testOwnerSelfReleaseFailsClosedAfterAccountLockGenerationOrLocationChanges() async throws {
         for condition in 0..<4 {
             let server = TestCloudServer()
@@ -2609,6 +2654,42 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertFalse(replacement.requiresMembershipRecovery)
         XCTAssertTrue(replacement.hasFamilyDeletionNotice)
         XCTAssertNil(replacement.household)
+    }
+
+    func testTerminalDeletionCleanupRejectsClassificationGenerationChange() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted,
+            creator: "owner",
+            lastModifier: "owner"
+        )
+        let transport = TestTransport(server: server, account: "owner")
+        let replacement = try fresh(transport, clock: TestClock())
+        var lockReads = 0
+        transport.afterAccountMembershipLockRead = {
+            lockReads += 1
+            if lockReads == 2 { replacement.cloudAccountDidChange() }
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
+        XCTAssertFalse(replacement.hasFamilyDeletionNotice)
     }
 
     func testReleasedOwnerLockWithConflictingAuthorityCannotClaimDeletion() async throws {

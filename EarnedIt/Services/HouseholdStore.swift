@@ -1485,11 +1485,14 @@ final class HouseholdStore {
 
     private func reconcileInactiveAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        let accountGeneration = transport.accountGeneration
         let participant = try await transport.participantID()
+        guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
         guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
             guard try await releaseAccountMembershipLockIfFamilyDeleted(
                 lock,
-                participant: participant
+                participant: participant,
+                expectedAccountGeneration: accountGeneration
             ) else { throw HouseholdError.accountMembershipConflict }
             return
         }
@@ -1566,9 +1569,12 @@ final class HouseholdStore {
     private func releaseAccountMembershipLockIfFamilyDeleted(
         _ lock: AccountMembershipLock,
         location: CloudLocation? = nil,
-        participant: String
+        participant: String,
+        expectedAccountGeneration: UInt64
     ) async throws -> Bool {
-        guard let transport, lock.state == .active || lock.state == .released else { return false }
+        guard let transport,
+              transport.accountGeneration == expectedAccountGeneration,
+              lock.state == .active || lock.state == .released else { return false }
         let hasExactOwnerClaim = lock.claimBinding == AccountMembershipBinding.owner(
             householdID: lock.householdID
         )
@@ -1585,16 +1591,18 @@ final class HouseholdStore {
                 expectedParticipantID: participant
               ),
               state == .deleted,
+              transport.accountGeneration == expectedAccountGeneration,
               try await transport.membershipLocation(householdID: lock.householdID) == nil,
-              try await transport.accountMembershipLock() == lock else { return false }
+              transport.accountGeneration == expectedAccountGeneration,
+              try await transport.accountMembershipLock() == lock,
+              transport.accountGeneration == expectedAccountGeneration else { return false }
         if lock.state == .released { return true }
-        let accountGeneration = transport.accountGeneration
         return try await transport.releaseAccountMembershipLock(
             expectedLock: lock,
             expectedParticipantID: participant,
             reason: .confirmedFamilyDeletion,
             clientTime: clock(),
-            expectedAccountGeneration: accountGeneration
+            expectedAccountGeneration: expectedAccountGeneration
         )
     }
 
@@ -1610,15 +1618,18 @@ final class HouseholdStore {
         lock: AccountMembershipLock,
         location: CloudLocation? = nil,
         participant: String,
-        expectedSession: DeviceSession
+        expectedSession: DeviceSession,
+        expectedAccountGeneration: UInt64
     ) async throws -> Bool {
         guard try await releaseAccountMembershipLockIfFamilyDeleted(
             lock,
             location: location,
-            participant: participant
+            participant: participant,
+            expectedAccountGeneration: expectedAccountGeneration
         ) else { return false }
         guard let transport,
               try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration,
               session == expectedSession else { throw HouseholdError.wrongAccount }
         try purgeDeletedFamily(householdID: lock.householdID)
         return true
@@ -2145,7 +2156,9 @@ final class HouseholdStore {
               let participant = session.cloudParticipantID,
               let transport else { return }
         let expectedSession = session
-        guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+        let accountGeneration = transport.accountGeneration
+        guard try await transport.participantID() == participant,
+              transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
         let remote: [HouseholdFact]
         do {
             remote = try await transport.fetch(from: location)
@@ -2158,7 +2171,8 @@ final class HouseholdStore {
                    lock: lock,
                    location: location,
                    participant: participant,
-                   expectedSession: expectedSession
+                   expectedSession: expectedSession,
+                   expectedAccountGeneration: accountGeneration
                ) {
                 return
             }
@@ -2198,7 +2212,8 @@ final class HouseholdStore {
                 if try await transitionToOnboardingIfFamilyDeleted(
                     lock: lock,
                     participant: participant,
-                    expectedSession: expectedSession
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: accountGeneration
                 ) {
                     requiresMembershipRecovery = false
                     return
@@ -2207,7 +2222,8 @@ final class HouseholdStore {
                     guard try await clearReleasedOwnerMembershipRouting(
                         lock: lock,
                         participant: participant,
-                        expectedSession: expectedSession
+                        expectedSession: expectedSession,
+                        expectedAccountGeneration: accountGeneration
                     ) else { throw HouseholdError.accountMembershipConflict }
                     syncMessage = "Ready to create or join a family"
                 }
@@ -2279,7 +2295,8 @@ final class HouseholdStore {
                         if try await transitionToOnboardingIfFamilyDeleted(
                             lock: lock,
                             participant: participant,
-                            expectedSession: expectedSession
+                            expectedSession: expectedSession,
+                            expectedAccountGeneration: accountGeneration
                         ) {
                             requiresMembershipRecovery = false
                             return
@@ -2303,7 +2320,8 @@ final class HouseholdStore {
                 if try await transitionToOnboardingIfFamilyDeleted(
                     lock: lock,
                     participant: participant,
-                    expectedSession: expectedSession
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: accountGeneration
                 ) {
                     requiresMembershipRecovery = false
                     return
@@ -2454,9 +2472,11 @@ final class HouseholdStore {
     private func clearReleasedOwnerMembershipRouting(
         lock: AccountMembershipLock,
         participant: String,
-        expectedSession: DeviceSession
+        expectedSession: DeviceSession,
+        expectedAccountGeneration: UInt64
     ) async throws -> Bool {
         guard let transport,
+              transport.accountGeneration == expectedAccountGeneration,
               lock.state == .released,
               lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID),
               exactOwnerAuthorityBinding(for: lock, participant: participant) != nil,
@@ -2465,10 +2485,15 @@ final class HouseholdStore {
                 || expectedSession.accountMembershipLockAttemptID == lock.attemptID,
               expectedSession.accountMembershipClaimBinding == nil
                 || expectedSession.accountMembershipClaimBinding == lock.claimBinding,
-              expectedSession.location == nil || expectedSession.location?.householdID == lock.householdID,
-              try await transport.membershipLocation(householdID: lock.householdID) == nil,
-              try await transport.accountMembershipLock() == lock,
-              try await transport.participantID() == participant,
+              expectedSession.location == nil || expectedSession.location?.householdID == lock.householdID else {
+            return false
+        }
+        guard try await transport.membershipLocation(householdID: lock.householdID) == nil,
+              transport.accountGeneration == expectedAccountGeneration else { return false }
+        guard try await transport.accountMembershipLock() == lock,
+              transport.accountGeneration == expectedAccountGeneration else { return false }
+        guard try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration,
               session == expectedSession else { return false }
         try persistSessionByClearingMembershipRouting(expectedSession)
         return true
@@ -2750,7 +2775,9 @@ final class HouseholdStore {
                    let attemptID = session.accountMembershipLockAttemptID,
                    let expectedParticipantID = session.cloudParticipantID {
                     do {
+                        let accountGeneration = transport.accountGeneration
                         if try await transport.participantID() == expectedParticipantID,
+                           transport.accountGeneration == accountGeneration,
                            let lock = try await transport.accountMembershipLock(),
                            lock.householdID == location.householdID,
                            lock.attemptID == attemptID {
@@ -2758,7 +2785,8 @@ final class HouseholdStore {
                                 lock: lock,
                                 location: location,
                                 participant: expectedParticipantID,
-                                expectedSession: expectedSession
+                                expectedSession: expectedSession,
+                                expectedAccountGeneration: accountGeneration
                             )
                         }
                     } catch {
