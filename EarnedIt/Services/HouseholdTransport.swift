@@ -38,6 +38,7 @@ enum AccountMembershipLockReleaseReason {
 @MainActor
 protocol HouseholdTransport {
     var familyTransitionDiagnostics: FamilyTransitionDiagnostics { get }
+    var accountGeneration: UInt64 { get }
     func accountDidChange()
     func participantID() async throws -> String
     func accountMembershipLock() async throws -> AccountMembershipLock?

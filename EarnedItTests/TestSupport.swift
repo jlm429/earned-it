@@ -96,7 +96,7 @@ final class TestTransport: HouseholdTransport {
             if account != oldValue { accountGeneration &+= 1 }
         }
     }
-    private var accountGeneration: UInt64 = 0
+    private(set) var accountGeneration: UInt64 = 0
     var fetchError: Error?
     var invitationLocationError: Error?
     var invitationAccessVisible = true

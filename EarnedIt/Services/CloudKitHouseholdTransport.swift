@@ -11,7 +11,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     private let accountMembershipRecordType = "AccountMembershipLock"
     private let accountMembershipRecordName = "current-membership"
     private let familyLifecycleRecordType = "FamilyLifecycleAuthority"
-    private var accountGeneration: UInt64 = 0
+    private(set) var accountGeneration: UInt64 = 0
     let familyTransitionDiagnostics: FamilyTransitionDiagnostics
 
     init(container: CKContainer = CKContainer(identifier: containerIdentifier),

@@ -2139,7 +2139,7 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertEqual(replacement.household?.name, "New Family")
     }
 
-    func testReleasedOwnerLockCompletesInterruptedSelfReleaseRoutingCleanup() async throws {
+    func testReleasedLegacyOwnerLockCompletesInterruptedSelfReleaseRoutingCleanup() async throws {
         let server = TestCloudServer()
         let householdID = UUID()
         let lock = AccountMembershipLock(
@@ -2148,7 +2148,7 @@ final class MembershipRecoveryTests: XCTestCase {
             state: .released,
             expiresAt: .distantPast,
             claimBinding: AccountMembershipBinding.owner(householdID: householdID),
-            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+            ownerAuthorityBinding: nil
         )
         server.accountMembershipLocks["owner"] = lock
         server.lifecycleAuthorities[householdID] = .init(
@@ -2240,6 +2240,35 @@ final class MembershipRecoveryTests: XCTestCase {
             XCTAssertNotEqual(server.accountMembershipLocks["owner"]?.state, .released)
             XCTAssertNotEqual(server.accountMembershipLocks["other"]?.state, .released)
         }
+    }
+
+    func testOwnerSelfReleaseRejectsGenerationChangeDuringRevalidation() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .active,
+            expiresAt: .distantFuture,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "owner")
+        )
+        server.accountMembershipLocks["owner"] = lock
+        let transport = TestTransport(server: server, account: "owner")
+        let replacement = try fresh(transport, clock: TestClock())
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .ownerMembershipUnavailable
+        )
+        transport.beforeMembershipLocation = { replacement.cloudAccountDidChange() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.releaseStaleOwnerMembership(),
+            expected: .wrongAccount
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
     }
 
     func testExpiredUnclaimedProvisionalWithoutLocationReleasesAndReturnsToOnboarding() async throws {
@@ -2484,6 +2513,33 @@ final class MembershipRecoveryTests: XCTestCase {
         server.accountMembershipLocks["owner"] = lock
         server.lifecycleAuthorities[householdID] = .init(
             state: .deleted, creator: "owner", lastModifier: "owner"
+        )
+        let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: TestClock())
+
+        try await replacement.reconcileAccountMembershipLock()
+
+        XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
+        XCTAssertFalse(replacement.requiresMembershipRecovery)
+        XCTAssertTrue(replacement.hasFamilyDeletionNotice)
+        XCTAssertNil(replacement.household)
+    }
+
+    func testReleasedLegacyOwnerLockRetainsAuthenticatedTerminalDeletionCleanup() async throws {
+        let server = TestCloudServer()
+        let householdID = UUID()
+        let lock = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .distantPast,
+            claimBinding: AccountMembershipBinding.owner(householdID: householdID),
+            ownerAuthorityBinding: nil
+        )
+        server.accountMembershipLocks["owner"] = lock
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .deleted,
+            creator: "owner",
+            lastModifier: "owner"
         )
         let replacement = try fresh(TestTransport(server: server, account: "owner"), clock: TestClock())
 

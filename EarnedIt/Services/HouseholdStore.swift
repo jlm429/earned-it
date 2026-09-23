@@ -9,6 +9,7 @@ final class HouseholdStore {
     private struct StaleOwnerMembershipReleaseCandidate {
         let lock: AccountMembershipLock
         let participantID: String
+        let accountGeneration: UInt64
     }
 
     private static let pendingInvitationCleanupRetryDelay: TimeInterval = 30
@@ -1568,8 +1569,6 @@ final class HouseholdStore {
         let exactOwnerAuthorityBinding = exactOwnerAuthorityBinding(for: lock, participant: participant)
         if hasExactOwnerClaim, lock.state == .active,
            exactOwnerAuthorityBinding == nil { return false }
-        if hasExactOwnerClaim, lock.state == .released,
-           lock.ownerAuthorityBinding == nil { return false }
         let ownerAuthorityBinding = lock.ownerAuthorityBinding ?? exactOwnerAuthorityBinding ?? location.flatMap { candidate in
             guard candidate.householdID == lock.householdID else { return nil }
             return self.ownerAuthorityBinding(for: candidate, participant: participant)
@@ -1593,7 +1592,7 @@ final class HouseholdStore {
     }
 
     private func exactOwnerAuthorityBinding(for lock: AccountMembershipLock, participant: String) -> String? {
-        guard lock.state == .active,
+        guard lock.state == .active || lock.state == .released,
               lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID) else { return nil }
         let expected = AccountMembershipBinding.ownerAuthority(participantID: participant)
         guard lock.ownerAuthorityBinding == nil || lock.ownerAuthorityBinding == expected else { return nil }
@@ -2177,7 +2176,9 @@ final class HouseholdStore {
         canReleaseStaleOwnerMembership = false
         staleOwnerMembershipReleaseCandidate = nil
         do {
+            let accountGeneration = transport.accountGeneration
             let participant = try await transport.participantID()
+            guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
             guard let lock = try await recoveryMembershipLock(participant: participant) else {
                 requiresMembershipRecovery = false
                 return
@@ -2247,8 +2248,17 @@ final class HouseholdStore {
                     } catch HouseholdError.wrongAccount {
                         throw HouseholdError.wrongAccount
                     } catch {
-                        try await validateRecovery(deviceID: deviceID, participant: participant, lock: lock)
-                        staleOwnerMembershipReleaseCandidate = .init(lock: lock, participantID: participant)
+                        try await validateRecovery(
+                            deviceID: deviceID,
+                            participant: participant,
+                            accountGeneration: accountGeneration,
+                            lock: lock
+                        )
+                        staleOwnerMembershipReleaseCandidate = .init(
+                            lock: lock,
+                            participantID: participant,
+                            accountGeneration: accountGeneration
+                        )
                         canReleaseStaleOwnerMembership = true
                         throw error
                     }
@@ -2263,8 +2273,17 @@ final class HouseholdStore {
                         }
                         throw HouseholdError.accountMembershipConflict
                     }
-                    try await validateRecovery(deviceID: deviceID, participant: participant, lock: lock)
-                    staleOwnerMembershipReleaseCandidate = .init(lock: lock, participantID: participant)
+                    try await validateRecovery(
+                        deviceID: deviceID,
+                        participant: participant,
+                        accountGeneration: accountGeneration,
+                        lock: lock
+                    )
+                    staleOwnerMembershipReleaseCandidate = .init(
+                        lock: lock,
+                        participantID: participant,
+                        accountGeneration: accountGeneration
+                    )
                     canReleaseStaleOwnerMembership = true
                     throw HouseholdError.ownerMembershipUnavailable
                 }
@@ -2388,14 +2407,21 @@ final class HouseholdStore {
         staleOwnerMembershipReleaseCandidate = nil
         let expectedSession = session
         let participant = try await transport.participantID()
-        guard participant == candidate.participantID else { throw HouseholdError.wrongAccount }
+        guard participant == candidate.participantID,
+              transport.accountGeneration == candidate.accountGeneration else { throw HouseholdError.wrongAccount }
         guard let lock = try await transport.accountMembershipLock(),
               lock == candidate.lock,
               exactOwnerAuthorityBinding(for: lock, participant: participant) != nil,
               try await transport.membershipLocation(householdID: lock.householdID) == nil else {
             throw HouseholdError.accountMembershipConflict
         }
-        try await validateRecovery(deviceID: expectedSession.deviceID, participant: participant, lock: lock)
+        try await validateRecovery(
+            deviceID: expectedSession.deviceID,
+            participant: participant,
+            accountGeneration: candidate.accountGeneration,
+            lock: lock
+        )
+        guard transport.accountGeneration == candidate.accountGeneration else { throw HouseholdError.wrongAccount }
         guard try await transport.releaseAccountMembershipLock(
             expectedLock: lock,
             expectedParticipantID: participant,
@@ -2403,6 +2429,7 @@ final class HouseholdStore {
             clientTime: clock()
         ) else { throw HouseholdError.accountMembershipConflict }
         guard try await transport.participantID() == participant,
+              transport.accountGeneration == candidate.accountGeneration,
               session == expectedSession else { throw HouseholdError.wrongAccount }
         try persistSessionByClearingMembershipRouting(expectedSession)
         requiresMembershipRecovery = false
@@ -2418,7 +2445,7 @@ final class HouseholdStore {
         guard let transport,
               lock.state == .released,
               lock.claimBinding == AccountMembershipBinding.owner(householdID: lock.householdID),
-              lock.ownerAuthorityBinding == AccountMembershipBinding.ownerAuthority(participantID: participant),
+              exactOwnerAuthorityBinding(for: lock, participant: participant) != nil,
               expectedSession.cloudParticipantID == nil || expectedSession.cloudParticipantID == participant,
               expectedSession.accountMembershipLockAttemptID == nil
                 || expectedSession.accountMembershipLockAttemptID == lock.attemptID,
@@ -2497,11 +2524,22 @@ final class HouseholdStore {
         return lock
     }
 
-    private func validateRecovery(deviceID: UUID, participant: String, lock: AccountMembershipLock) async throws {
+    private func validateRecovery(
+        deviceID: UUID,
+        participant: String,
+        accountGeneration: UInt64? = nil,
+        lock: AccountMembershipLock
+    ) async throws {
         guard let transport, session.deviceID == deviceID, session.householdID == nil,
               session.pendingInvitationAcceptance == nil,
-              try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+              try await transport.participantID() == participant,
+              accountGeneration == nil || transport.accountGeneration == accountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
         guard try await transport.accountMembershipLock() == lock else { throw HouseholdError.accountMembershipConflict }
+        guard accountGeneration == nil || transport.accountGeneration == accountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
     }
 
     private func reconcileAccountMembershipLock(imported: HouseholdSnapshot, location: CloudLocation,
