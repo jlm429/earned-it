@@ -236,8 +236,9 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func releaseAccountMembershipLock(expectedLock: AccountMembershipLock, expectedParticipantID: String,
                                       reason: AccountMembershipLockReleaseReason,
-                                      clientTime: Date) async throws -> Bool {
-        let expectedGeneration = accountGeneration
+                                      clientTime: Date, expectedAccountGeneration: UInt64) async throws -> Bool {
+        let expectedGeneration = expectedAccountGeneration
+        guard accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         try await requireAccount(expectedParticipantID, generation: expectedGeneration)
         let releaseTime: Date
         switch reason {

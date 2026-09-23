@@ -140,6 +140,7 @@ final class TestTransport: HouseholdTransport {
     var beforeLeaveSubmission: (() async -> Void)?
     var beforeAccountLockRelease: (() async -> Void)?
     var beforeAccountLockReleaseSubmission: (() async -> Void)?
+    var afterAccountMembershipLockRead: (() async -> Void)?
     var beforeAccountLockAcquireSubmission: (() async -> Void)?
     var beforeAccountMembershipValidationTime: (() async -> Void)?
     var beforeAccountLockActivationSubmission: (() async -> Void)?
@@ -161,7 +162,9 @@ final class TestTransport: HouseholdTransport {
     func accountDidChange() { accountGeneration &+= 1 }
     func participantID() async throws -> String { account }
     func accountMembershipLock() async throws -> AccountMembershipLock? {
-        server.accountMembershipLocks[account]
+        let lock = server.accountMembershipLocks[account]
+        await afterAccountMembershipLockRead?()
+        return lock
     }
     func accountMembershipValidationTime(clientTime: Date) async throws -> Date {
         familyTransitionDiagnostics.record(stage: .membershipValidationTimeWrite, outcome: .started)
@@ -367,11 +370,12 @@ final class TestTransport: HouseholdTransport {
     }
     func releaseAccountMembershipLock(expectedLock: AccountMembershipLock, expectedParticipantID: String,
                                       reason: AccountMembershipLockReleaseReason,
-                                      clientTime: Date) async throws -> Bool {
-        let expectedGeneration = accountGeneration
+                                      clientTime: Date, expectedAccountGeneration: UInt64) async throws -> Bool {
+        let expectedGeneration = expectedAccountGeneration
         await beforeAccountLockRelease?()
         try Task.checkCancellation()
-        guard account == expectedParticipantID else { throw HouseholdError.wrongAccount }
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         let releaseTime: Date
         switch reason {
         case .expiredProvisional:

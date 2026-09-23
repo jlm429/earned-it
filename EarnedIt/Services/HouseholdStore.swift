@@ -1512,7 +1512,8 @@ final class HouseholdStore {
                       expectedLock: lock,
                       expectedParticipantID: participant,
                       reason: .expiredProvisional,
-                      clientTime: clock()
+                      clientTime: clock(),
+                      expectedAccountGeneration: accountGeneration
                   ) else {
                 throw HouseholdError.accountMembershipConflict
             }
@@ -1587,11 +1588,13 @@ final class HouseholdStore {
               try await transport.membershipLocation(householdID: lock.householdID) == nil,
               try await transport.accountMembershipLock() == lock else { return false }
         if lock.state == .released { return true }
+        let accountGeneration = transport.accountGeneration
         return try await transport.releaseAccountMembershipLock(
             expectedLock: lock,
             expectedParticipantID: participant,
             reason: .confirmedFamilyDeletion,
-            clientTime: clock()
+            clientTime: clock(),
+            expectedAccountGeneration: accountGeneration
         )
     }
 
@@ -2221,9 +2224,11 @@ final class HouseholdStore {
                     expectedLock: lock,
                     expectedParticipantID: participant,
                     reason: .expiredProvisional,
-                    clientTime: clock()
+                    clientTime: clock(),
+                    expectedAccountGeneration: accountGeneration
                 ) {
                     guard try await transport.participantID() == participant,
+                          transport.accountGeneration == accountGeneration,
                           session == expectedSession else { throw HouseholdError.wrongAccount }
                     requiresMembershipRecovery = false
                     syncMessage = "Ready to create or join a family"
@@ -2434,7 +2439,8 @@ final class HouseholdStore {
             expectedLock: lock,
             expectedParticipantID: participant,
             reason: .ownerSelfRelease,
-            clientTime: clock()
+            clientTime: clock(),
+            expectedAccountGeneration: candidate.accountGeneration
         ) else { throw HouseholdError.accountMembershipConflict }
         guard try await transport.participantID() == participant,
               transport.accountGeneration == candidate.accountGeneration,

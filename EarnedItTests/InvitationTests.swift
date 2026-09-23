@@ -2396,7 +2396,8 @@ final class MembershipRecoveryTests: XCTestCase {
                 expectedLock: original,
                 expectedParticipantID: "account",
                 reason: .ownerSelfRelease,
-                clientTime: clock.now
+                clientTime: clock.now,
+                expectedAccountGeneration: transport.accountGeneration
             )
             XCTAssertFalse(released)
             XCTAssertEqual(server.accountMembershipLocks["account"], changed)
@@ -2411,7 +2412,8 @@ final class MembershipRecoveryTests: XCTestCase {
                 expectedLock: original,
                 expectedParticipantID: "account",
                 reason: .ownerSelfRelease,
-                clientTime: clock.now
+                clientTime: clock.now,
+                expectedAccountGeneration: transport.accountGeneration
             ),
             expected: .wrongAccount
         )
@@ -2446,6 +2448,32 @@ final class MembershipRecoveryTests: XCTestCase {
         XCTAssertEqual(server.accountMembershipLocks["joining"], activated)
         XCTAssertTrue(replacement.requiresMembershipRecovery)
         XCTAssertFalse(replacement.canReleaseStaleOwnerMembership)
+    }
+
+    func testExpiredProvisionalRecoveryRejectsClassificationGenerationChange() async throws {
+        let clock = TestClock()
+        let server = TestCloudServer()
+        server.authoritativeTime = clock.now
+        let lock = AccountMembershipLock(
+            householdID: UUID(),
+            attemptID: UUID(),
+            state: .provisional,
+            expiresAt: clock.now.addingTimeInterval(-1),
+            claimBinding: nil
+        )
+        server.accountMembershipLocks["joining"] = lock
+        let transport = TestTransport(server: server, account: "joining")
+        let replacement = try fresh(transport, clock: clock)
+        transport.afterAccountMembershipLockRead = { replacement.cloudAccountDidChange() }
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.reconcileAccountMembershipLock(),
+            expected: .wrongAccount
+        )
+
+        XCTAssertEqual(server.accountMembershipLocks["joining"], lock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, 0)
+        XCTAssertTrue(replacement.requiresMembershipRecovery)
     }
 
     func testExpiredProvisionalConnectCannotReleaseConcurrentActivation() async throws {

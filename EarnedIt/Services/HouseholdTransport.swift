@@ -62,7 +62,7 @@ protocol HouseholdTransport {
                                       now: Date) async throws -> Bool
     func releaseAccountMembershipLock(expectedLock: AccountMembershipLock, expectedParticipantID: String,
                                       reason: AccountMembershipLockReleaseReason,
-                                      clientTime: Date) async throws -> Bool
+                                      clientTime: Date, expectedAccountGeneration: UInt64) async throws -> Bool
     func membershipLocation(householdID: UUID) async throws -> CloudLocation?
     func createZone(for household: Household) async throws -> CloudLocation
     func discoverFamilies() async throws -> [CloudFamily]
