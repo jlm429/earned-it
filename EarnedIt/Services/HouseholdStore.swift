@@ -1503,12 +1503,17 @@ final class HouseholdStore {
 
     private func reconcileExpiredAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        let accountGeneration = transport.accountGeneration
         let participant = try await transport.participantID()
+        guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
         guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
-            guard try await transport.releaseAccountMembershipLock(householdID: lock.householdID,
-                                                                   attemptID: lock.attemptID,
-                                                                   expectedParticipantID: participant,
-                                                                   now: clock()) else {
+            guard transport.accountGeneration == accountGeneration,
+                  try await transport.releaseAccountMembershipLock(
+                      expectedLock: lock,
+                      expectedParticipantID: participant,
+                      reason: .expiredProvisional,
+                      clientTime: clock()
+                  ) else {
                 throw HouseholdError.accountMembershipConflict
             }
             return
@@ -1567,9 +1572,8 @@ final class HouseholdStore {
             householdID: lock.householdID
         )
         let exactOwnerAuthorityBinding = exactOwnerAuthorityBinding(for: lock, participant: participant)
-        if hasExactOwnerClaim, lock.state == .active,
-           exactOwnerAuthorityBinding == nil { return false }
-        let ownerAuthorityBinding = lock.ownerAuthorityBinding ?? exactOwnerAuthorityBinding ?? location.flatMap { candidate in
+        if hasExactOwnerClaim, exactOwnerAuthorityBinding == nil { return false }
+        let ownerAuthorityBinding = exactOwnerAuthorityBinding ?? lock.ownerAuthorityBinding ?? location.flatMap { candidate in
             guard candidate.householdID == lock.householdID else { return nil }
             return self.ownerAuthorityBinding(for: candidate, participant: participant)
         }
@@ -2185,6 +2189,9 @@ final class HouseholdStore {
             }
             guard lock.state != .released else {
                 let expectedSession = session
+                let hasExactOwnerClaim = lock.claimBinding == AccountMembershipBinding.owner(
+                    householdID: lock.householdID
+                )
                 if try await transitionToOnboardingIfFamilyDeleted(
                     lock: lock,
                     participant: participant,
@@ -2193,11 +2200,12 @@ final class HouseholdStore {
                     requiresMembershipRecovery = false
                     return
                 }
-                if try await clearReleasedOwnerMembershipRouting(
-                    lock: lock,
-                    participant: participant,
-                    expectedSession: expectedSession
-                ) {
+                if hasExactOwnerClaim {
+                    guard try await clearReleasedOwnerMembershipRouting(
+                        lock: lock,
+                        participant: participant,
+                        expectedSession: expectedSession
+                    ) else { throw HouseholdError.accountMembershipConflict }
                     syncMessage = "Ready to create or join a family"
                 }
                 requiresMembershipRecovery = false
