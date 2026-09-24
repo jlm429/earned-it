@@ -4,7 +4,11 @@ User-visible changes to Earned It.
 
 ## Unreleased
 
-### Earned It 1.0.1
+### Fixed
+
+- Family owners can create their first invitation when the same valid iCloud household membership is already active but the device retained a different setup attempt. Conflicting households, accounts, claims, and authority remain blocked.
+
+## Earned It 1.0.1
 
 - Alternating As Needed chores now show the next child before activation, assign an active occurrence only to that child, and advance only after that occurrence is accounted for. Switching between Scheduled and As Needed preserves the next child, while entering alternating mode starts with the parent's selected child.
 - Parents can skip the next child in the saved turn order. Inactive or archived children are bypassed without changing earlier assignments or completions.

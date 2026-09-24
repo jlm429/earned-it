@@ -4,7 +4,9 @@ Date: 2026-09-23. Implementation baseline: `origin/main` at `4f66e2b`. Uploaded 
 
 ## Finding and proof boundary
 
-Invitation bootstrap rejected an active owner membership when the private lock's acquisition `attemptID` differed from the attempt cached in the device session. The lock still had the same household, active state, deterministic owner claim binding, and exact owner-authority binding for the current CloudKit participant. `attemptID` protects provisional acquisition and replacement. It is not the identity of an already active owner membership.
+The authoritative membership-lock contract is in [Shared household architecture](../shared-household-architecture.md#identity-and-sharing). This report records the incident-specific diagnosis, correction, and evidence boundary.
+
+Invitation bootstrap rejected an active owner membership when the private lock's acquisition `attemptID` differed from the attempt cached in the device session. The lock still had the same household, active state, deterministic owner claim binding, and exact owner-authority binding for the current CloudKit participant. `attemptID` guards its acquisition generation and conditional transitions. It is not, by itself, the identity of an already active owner membership.
 
 The current implementation now accepts that one exact active-owner case, conditionally validates the unchanged active lock, adopts its retained attempt locally, and continues invitation creation. It does not release or replace the lock. Different households, changed accounts, provisional or released locks, non-owner claims, wrong owner authority, and conflicting local claim bindings remain rejected.
 
