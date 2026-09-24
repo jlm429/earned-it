@@ -8,6 +8,12 @@ import UIKit
 final class HouseholdStore {
     @TaskLocal private static var cloudMutationToken: UUID?
 
+    private enum MissingFamilyAccessOutcome: Equatable {
+        case notMissing
+        case familyDeleted
+        case accessLost
+    }
+
     private struct StaleOwnerMembershipReleaseCandidate {
         let lock: AccountMembershipLock
         let participantID: String
@@ -252,6 +258,24 @@ final class HouseholdStore {
         isCheckingAccountMembership = true
         requiresMembershipRecovery = false
         canReleaseStaleOwnerMembership = false
+    }
+
+    func prepareFamilyAccessLostUITest() throws {
+        guard let household else { return }
+        var updated = session
+        updated.location = CloudLocation(
+            householdID: household.id,
+            zoneName: "EarnedIt-\(household.id.uuidString)",
+            ownerName: "synthetic-owner",
+            isOwner: false
+        )
+        updated.cloudParticipantID = "synthetic-child"
+        updated.accountMembershipLockAttemptID = UUID()
+        updated.familyAccessLost = true
+        try repository.commit(facts: [], session: updated)
+        session = updated
+        cloudAccessBlocked = true
+        cloudIsReadOnly = true
     }
     #endif
 
@@ -975,6 +999,7 @@ final class HouseholdStore {
 
     func connect() async throws {
         try await withExclusiveCloudMutation {
+        guard !familyAccessLost else { throw HouseholdError.ownerMembershipUnavailable }
         try requireParent()
         guard let household, let transport else { throw HouseholdError.cloudUnavailable }
         if session.location != nil {
@@ -983,6 +1008,7 @@ final class HouseholdStore {
             return
         }
         let connectingSession = session
+        let accountGeneration = transport.accountGeneration
         transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .started,
                                                      householdID: household.id)
         let participant: String
@@ -1001,6 +1027,19 @@ final class HouseholdStore {
             transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .failed,
                                                          householdID: household.id, error: error)
             throw error
+        }
+        guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+        if connectingSession.accountMembershipLockAttemptID != nil {
+            let isAuthoritative = try await incompleteOwnerConnectionIsAuthoritative(
+                expectedSession: connectingSession,
+                householdID: household.id,
+                participant: participant,
+                expectedAccountGeneration: accountGeneration
+            )
+            if !isAuthoritative {
+                try markFamilyAccessLost(expectedSession: connectingSession)
+                throw HouseholdError.ownerMembershipUnavailable
+            }
         }
         transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .started,
                                                      householdID: household.id)
@@ -2009,6 +2048,87 @@ final class HouseholdStore {
         return true
     }
 
+    private func incompleteOwnerConnectionIsAuthoritative(
+        expectedSession: DeviceSession,
+        householdID: UUID,
+        participant: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> Bool {
+        guard let transport,
+              expectedSession.householdID == householdID,
+              expectedSession.location == nil,
+              expectedSession.accountMembershipClaimBinding == nil,
+              let attemptID = expectedSession.accountMembershipLockAttemptID else {
+            return false
+        }
+        guard expectedSession.cloudParticipantID == participant else {
+            throw HouseholdError.wrongAccount
+        }
+        guard transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        let lock = try await transport.accountMembershipLock()
+        guard transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        return lock?.householdID == householdID
+            && lock?.attemptID == attemptID
+            && lock?.state == .provisional
+            && lock?.claimBinding == nil
+    }
+
+    private func markFamilyAccessLost(expectedSession: DeviceSession) throws {
+        guard session == expectedSession else { throw HouseholdError.pendingChanges }
+        var updated = expectedSession
+        updated.cloudCanWrite = false
+        updated.familyAccessLost = true
+        try repository.commit(facts: [], session: updated)
+        session = updated
+        cloudAccessBlocked = true
+        cloudIsReadOnly = true
+        syncMessage = "Family access needs attention"
+    }
+
+    private func handleMissingFamilyAccess(
+        _ error: Error,
+        location: CloudLocation,
+        participant: String,
+        expectedSession: DeviceSession,
+        expectedAccountGeneration: UInt64
+    ) async throws -> MissingFamilyAccessOutcome {
+        guard let cloudError = error as? CKError,
+              [.unknownItem, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code) else {
+            return .notMissing
+        }
+        guard let transport,
+              transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        if let attemptID = expectedSession.accountMembershipLockAttemptID,
+           let lock = try? await transport.accountMembershipLock(),
+           lock.householdID == location.householdID,
+           lock.attemptID == attemptID {
+            do {
+                if try await transitionToOnboardingIfFamilyDeleted(
+                    lock: lock,
+                    location: location,
+                    participant: participant,
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: expectedAccountGeneration
+                ) {
+                    return .familyDeleted
+                }
+            } catch HouseholdError.wrongAccount {
+                throw HouseholdError.wrongAccount
+            } catch {}
+        }
+        guard transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        try markFamilyAccessLost(expectedSession: expectedSession)
+        return .accessLost
+    }
+
     private func ownerRecoveryMember(in imported: HouseholdSnapshot) -> FamilyMember? {
         guard imported.household != nil else { return nil }
         let invitedParentIDs = Set(imported.invitations.compactMap { invitation -> UUID? in
@@ -2530,6 +2650,26 @@ final class HouseholdStore {
             try await recoverExistingAccountMembership()
             return
         }
+        if session.pendingInvitationAcceptance == nil,
+           session.location == nil,
+           session.accountMembershipLockAttemptID != nil,
+           let householdID = session.householdID,
+           let transport {
+            let expectedSession = session
+            let accountGeneration = transport.accountGeneration
+            let participant = try await transport.participantID()
+            guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+            let isAuthoritative = try await incompleteOwnerConnectionIsAuthoritative(
+                expectedSession: expectedSession,
+                householdID: householdID,
+                participant: participant,
+                expectedAccountGeneration: accountGeneration
+            )
+            if !isAuthoritative {
+                try markFamilyAccessLost(expectedSession: expectedSession)
+            }
+            return
+        }
         guard session.pendingInvitationAcceptance == nil,
               let location = session.location,
               let participant = session.cloudParticipantID,
@@ -2538,30 +2678,27 @@ final class HouseholdStore {
         let accountGeneration = transport.accountGeneration
         guard try await transport.participantID() == participant,
               transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
-        let remote: [HouseholdFact]
         do {
-            remote = try await transport.fetch(from: location)
-        } catch let error as CKError where [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(error.code) {
-            if let attemptID = expectedSession.accountMembershipLockAttemptID,
-               let lock = try await transport.accountMembershipLock(),
-               lock.householdID == location.householdID,
-               lock.attemptID == attemptID,
-               try await transitionToOnboardingIfFamilyDeleted(
-                   lock: lock,
-                   location: location,
-                   participant: participant,
-                   expectedSession: expectedSession,
-                   expectedAccountGeneration: accountGeneration
-               ) {
+            let remote = try await transport.fetch(from: location)
+            try validate(remote, householdID: location.householdID)
+            let imported = HouseholdSnapshot(facts: remote)
+            try await reconcileAccountMembershipLock(imported: imported, location: location,
+                                                      participant: participant,
+                                                      expectedAccountGeneration: accountGeneration)
+        } catch {
+            switch try await handleMissingFamilyAccess(
+                error,
+                location: location,
+                participant: participant,
+                expectedSession: expectedSession,
+                expectedAccountGeneration: accountGeneration
+            ) {
+            case .familyDeleted, .accessLost:
                 return
+            case .notMissing:
+                throw error
             }
-            throw error
         }
-        try validate(remote, householdID: location.householdID)
-        let imported = HouseholdSnapshot(facts: remote)
-        try await reconcileAccountMembershipLock(imported: imported, location: location,
-                                                  participant: participant,
-                                                  expectedAccountGeneration: accountGeneration)
         }
     }
 
@@ -3259,6 +3396,7 @@ final class HouseholdStore {
         guard let location = session.location else { return }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let expectedSession = session
+        let expectedAccountGeneration = transport.accountGeneration
         isSyncing = true
         syncMessage = "Syncing…"
         defer {
@@ -3267,16 +3405,15 @@ final class HouseholdStore {
         }
         do {
             guard session.pendingFamilyDeletion != true else { throw HouseholdError.permission }
-            let accountGeneration = transport.accountGeneration
             let participant = try await transport.participantID()
             guard participant == session.cloudParticipantID,
-                  transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+                  transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
             let remote = try await transport.fetch(from: location)
             try validate(remote, householdID: location.householdID)
             let remoteSnapshot = HouseholdSnapshot(facts: remote)
             try await reconcileAccountMembershipLock(imported: remoteSnapshot, location: location,
                                                       participant: participant,
-                                                      expectedAccountGeneration: accountGeneration)
+                                                      expectedAccountGeneration: expectedAccountGeneration)
             cloudIsReadOnly = try await !transport.canWrite(to: location)
             var updated = session
             updated.cloudCanWrite = !cloudIsReadOnly
@@ -3314,41 +3451,31 @@ final class HouseholdStore {
             lastSyncedAt = clock()
             syncMessage = "Up to date"
         } catch {
-            var familyDeletionHandled = false
-            var familyAccessLost = false
+            let missingAccessOutcome: MissingFamilyAccessOutcome
+            if let participant = expectedSession.cloudParticipantID {
+                missingAccessOutcome = try await handleMissingFamilyAccess(
+                    error,
+                    location: location,
+                    participant: participant,
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: expectedAccountGeneration
+                )
+            } else {
+                missingAccessOutcome = .notMissing
+            }
+            if missingAccessOutcome == .familyDeleted { return }
+            if missingAccessOutcome == .accessLost {
+                syncMessage = "Sync needs attention. Changes are kept."
+                throw error
+            }
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
-                familyAccessLost = [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
-                if [.permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code),
-                   let attemptID = session.accountMembershipLockAttemptID,
-                   let expectedParticipantID = session.cloudParticipantID {
-                    do {
-                        let accountGeneration = transport.accountGeneration
-                        if try await transport.participantID() == expectedParticipantID,
-                           transport.accountGeneration == accountGeneration,
-                           let lock = try await transport.accountMembershipLock(),
-                           lock.householdID == location.householdID,
-                           lock.attemptID == attemptID {
-                            familyDeletionHandled = try await transitionToOnboardingIfFamilyDeleted(
-                                lock: lock,
-                                location: location,
-                                participant: expectedParticipantID,
-                                expectedSession: expectedSession,
-                                expectedAccountGeneration: accountGeneration
-                            )
-                        }
-                    } catch {
-                        familyDeletionHandled = false
-                    }
-                }
             } else {
                 cloudAccessBlocked = error as? HouseholdError == .wrongAccount || error as? HouseholdError == .malformedData
             }
-            if familyDeletionHandled { return }
             if cloudAccessBlocked {
                 var updated = session
                 updated.cloudCanWrite = false
-                if familyAccessLost { updated.familyAccessLost = true }
                 try? repository.commit(facts: [], session: updated)
                 session = updated
                 cloudIsReadOnly = true
@@ -3364,9 +3491,11 @@ final class HouseholdStore {
         if isSyncing { syncAgain = true; return }
         syncTask?.cancel()
         syncTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
-            guard let self else { return }
-            do { try await self.synchronize() } catch { self.errorMessage = error.localizedDescription }
+            await Self.$cloudMutationToken.withValue(nil) {
+                do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                guard let self else { return }
+                do { try await self.synchronize() } catch { self.errorMessage = error.localizedDescription }
+            }
         }
     }
 

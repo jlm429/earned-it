@@ -39,13 +39,17 @@ CloudKit does not give a participant authority to delete the owner's private zon
 6. **Replace the active journal.** The repository verifies that the durable receipt is present, saves and releases the active SwiftData container without erasing it, checkpoints SQLite so the receipt is in the main journal, removes its WAL, SHM, and support artifacts, and removes the receipt-bearing `shared-household-v1.store` last. Any failure before that final unlink reopens the original journal with its receipt. A successful unlink is the atomic local completion boundary, after which the repository opens a clean replacement containing only a new empty `DeviceSession`.
 7. **Navigate.** The observable store reloads as an empty installation and the root route becomes Welcome.
 
+The onboarding root is keyed to the clean session's new device identity. A successful reset therefore replaces any existing onboarding navigation stack or presented Settings destination instead of leaving the deleted installation's navigation state visible.
+
 If the app terminates or a deletion fails, startup sees the receipt before membership recovery and resumes the same coordinator. Cloud cleanup always precedes final local cleanup. Local cleanup steps are idempotent, so an interruption between them can safely retry. A CloudKit account notification, participant mismatch, or generation change fails with `wrongAccount` before further deletion and preserves the receipt. Switching back to the bound account permits a new generation-safe retry.
 
 ## No-resurrection behavior
 
 Owned zones are deleted before lifecycle and private lock records. An interruption therefore leaves conservative evidence that blocks ordinary recovery until reset resumes. On full completion, no obsolete lock, lifecycle record, local invitation continuation, recovery receipt, or journal remains to reconstruct active membership.
 
-A stale offline installation can retain an old local journal, but it cannot recreate a deleted custom zone. Synchronization fetches the existing zone before upload, and zone creation is limited to explicit new-family connection. When the stale participant comes online, missing access produces the recovery screen with `Try Reconnecting` and the explicit destructive action. Reset then removes that participant account's private membership and shared access before clearing the stale local journal.
+A stale offline installation can retain an old local journal, but it cannot recreate a deleted custom zone. Synchronization fetches the existing zone before upload, and missing zone access is persisted as `familyAccessLost` during either startup reconciliation or synchronization. The relaunched participant therefore reaches the recovery screen with `Try Reconnecting` and the explicit destructive action regardless of debounced-sync ordering. Reset then removes that participant account's private membership and shared access before clearing the stale local journal.
+
+An interrupted owner connection is also fail closed. If a local family has a persisted provisional attempt but no committed cloud location, retry requires the exact provisional `AccountMembershipLock` for the same account, household, and attempt. If another installation completed account-wide reset and removed that evidence, startup enters recovery and explicit connection is rejected before any lock, zone, lifecycle authority, or journal upload can be recreated. A fresh invitation acceptance remains a separate bootstrap path.
 
 ## UI and accessibility
 
@@ -56,6 +60,7 @@ A stale offline installation can retain an old local journal, but it cannot recr
 - The confirmation is one system alert with a destructive button and Cancel. There is no phrase entry or second confirmation.
 - Stable accessibility identifiers cover the destructive action, retry action, recovery actions, and progress route.
 - Automatic membership reconciliation is owned by the store. Explicit retry or reset cancels and awaits that task before starting the selected operation, preserving one cloud mutation at a time.
+- Delayed synchronization clears inherited cloud-mutation task context before waiting, so an invitation operation cannot leave a stale exclusive token in its scheduled follow-up.
 - The creator-only `Delete Family and Cloud Data` flow and stale-owner `Release My Membership` flow remain available beside the account-wide escape hatch.
 - Child navigation exposes Settings and the account-wide reset without exposing the parent-only local disconnect control.
 
@@ -116,10 +121,11 @@ The reset's creator query also depends on the Production query index in step 4. 
 | Recovery invocation | The recovery UI confirms the action through an injected non-Production cloud boundary, reaches Welcome, and remains there after relaunch. |
 | Recovery operation ownership | Reset cancels and awaits an active automatic membership reconciliation before deleting. |
 | Account change | Participant or generation changes fail closed and retain the reset receipt. |
-| No resurrection and orphan sequence | A connected parent deletes while the child is offline; child reconnect fails without recreating the zone; child resets; Welcome survives relaunch; child accepts a fresh invitation into a new family. |
+| No resurrection and orphan sequence | A connected parent deletes while the child is offline; a newly opened persistent child store enters recovery without recreating the zone; child resets; Welcome survives another store reopen; child accepts a fresh invitation into a new family. |
+| Interrupted owner bootstrap | A persisted provisional owner attempt loses its authoritative lock to another installation's reset; relaunch and explicit connect cannot recreate the lock, zone, lifecycle authority, or stale journal. |
 | Historical local artifacts | Known historical and active store files, sidecars, support directories, cache contents, and the bundle preference domain are removed through the managed store lifecycle. |
 
-The focused recovery UI flows verify that reconnect and reset remain scroll-reachable during automatic recovery, that stale-owner release remains available, and that the exact reset confirmation is accessible at large Dynamic Type. Real signed two-account CloudKit behavior still requires the device procedure below.
+The focused recovery UI flows verify that reconnect and reset remain scroll-reachable during automatic recovery and missing-family recovery, that stale-owner release remains available, that the exact reset confirmation is accessible at large Dynamic Type, and that a reset launched from Welcome Settings visibly returns to Welcome. Real signed two-account CloudKit behavior still requires the device procedure below.
 
 ## Real-device captain procedure
 
@@ -134,8 +140,9 @@ For the orphan sequence, keep the child offline while the old parent resets. Bri
 
 Validation used one explicitly booted iPhone 17e simulator with parallel testing disabled:
 
-- `AccountDataResetTests`: 14 tests passed, including owner, participant, interruption, offline retry, identity changes, mutation exclusion, active-store ordering, historical local artifacts, and the full orphan sequence.
-- Focused recovery UI flows: 2 tests passed, verifying recovery-progress actions, stale-owner release, and the exact destructive confirmation at an accessibility text size.
+- `AccountDataResetTests`: 15 tests passed, including owner, participant, interruption, offline retry, identity changes, mutation exclusion, active-store ordering, historical local artifacts, persistent child relaunch, interrupted owner bootstrap, and the full orphan sequence.
+- `InvitationTests`: the focused delayed-sync regression passed without inheriting a completed invitation mutation token.
+- Focused recovery UI flows: 3 tests passed, verifying recovery-progress actions, missing-family actions, stale-owner release, Welcome Settings dismissal, and the exact destructive confirmation at an accessibility text size.
 - Complete `EarnedItCI` suite: 306 tests passed with 0 failures.
 - Release simulator build: succeeded. Release device-family metadata, build-number semantics, and App Store profile entitlement semantics all passed their repository validation scripts.
 

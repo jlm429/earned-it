@@ -200,6 +200,37 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
     }
 
+    func testFamilyAccessRecoveryAndWelcomeSettingsResetReturnToWelcome() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-family-access-lost",
+                               "--ui-test-account-reset",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("family-access-ended").waitForExistence(timeout: 8))
+        reveal(app.buttons["retry-family-access"])
+        XCTAssertTrue(app.buttons["retry-family-access"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
+
+        tap("delete-all-earned-it-data")
+        var alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+
+        tap("welcome-settings")
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        reveal(app.buttons["delete-all-earned-it-data"])
+        tap("delete-all-earned-it-data")
+        alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Delete All Earned It Data"].tap()
+
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.navigationBars["Settings"].exists)
+    }
+
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {
         createFamily()
         addChild("Hanna")

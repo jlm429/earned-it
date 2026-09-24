@@ -42,6 +42,28 @@ final class InvitationTests: XCTestCase {
         )
     }
 
+    func testScheduledSyncDoesNotInheritCompletedInvitationMutationToken() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: true
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+        try await Task.sleep(for: .milliseconds(500))
+        store.errorMessage = nil
+
+        _ = try await store.createChildInvitation(memberID: child.id)
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.syncMessage, "Up to date")
+    }
+
     func testCleanFirstChildInvitationCreatesAndRetainsOwnerMembership() async throws {
         let server = TestCloudServer()
         let transport = TestTransport(server: server, account: "owner")

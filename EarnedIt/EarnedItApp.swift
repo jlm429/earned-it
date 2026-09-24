@@ -81,6 +81,16 @@ struct EarnedItApp: App {
                 && arguments.contains("--ui-test-membership-recovery-progress") {
                 initialStore.prepareMembershipRecoveryProgressUITest()
             }
+            if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-family-access-lost") {
+                if initialStore.household == nil {
+                    try initialStore.createFamily(name: "Orphaned Family", parentName: "Parent")
+                    let child = try initialStore.saveMember(name: "Child", role: .child, avatar: .star)
+                    try initialStore.finishSetup()
+                    try initialStore.selectProfile(child.id)
+                }
+                try initialStore.prepareFamilyAccessLostUITest()
+            }
             #else
             let initialStore = try HouseholdStore(
                 repository: repository,

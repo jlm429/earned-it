@@ -43,9 +43,11 @@ Apple may independently collect App Store, operating-system, iCloud, diagnostic,
 
 Family history is retained so the app can preserve past assignments, progress, and allowance outcomes.
 
-On a family that has never enabled sharing, a parent can choose **Delete All Local Data** in Settings. This removes that family's local data from the device and cannot be undone.
+On a family that has never enabled sharing, a selected parent can choose **Delete All Local Data** in Settings. This removes that family's local data from the device and cannot be undone.
 
-On a shared installation, a person can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner can revoke invited access.
+On a shared installation, a selected parent can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner can revoke invited access.
+
+The family creator can choose **Delete Family and Cloud Data** to delete only the current shared family and its CloudKit data for everyone. This narrower action does not delete other Earned It families or all account-wide state.
 
 Every installation and role can choose **Delete All Earned It Data**. After one explicit confirmation, Earned It permanently removes every unambiguously Earned It household zone owned by the current iCloud account, this account's Earned It private membership and validation records, public Earned It lifecycle records created by this account, and local app data. For a participant, the action relinquishes the current account's shared access where CloudKit permits it. It does not delete another account's household zone or other participants' data. Cloud cleanup must succeed before local family data is cleared. A failed or interrupted deletion remains pending for retry and is not reported as complete.
 

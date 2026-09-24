@@ -157,6 +157,7 @@ struct RootView: View {
                 .accessibilityIdentifier("family-access-ended")
             } else if store.household == nil || store.household?.isSetupComplete == false {
                 SetupView()
+                    .id(store.session.deviceID)
                     .onAppear { store.recordJoinRootRoute(.onboarding) }
             } else if let member = store.selectedMember {
                 MainRoleView(user: member, today: store.today)

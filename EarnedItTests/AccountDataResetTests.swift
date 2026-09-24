@@ -395,37 +395,55 @@ final class AccountDataResetTests: XCTestCase {
         try await parent.connect()
         let oldInvitation = try await parent.createChildInvitation(memberID: childMember.id)
 
-        let childResetter = TestAccountLocalDataResetter()
-        let childRepository = try HouseholdRepository(inMemory: true)
+        let childRoot = FileManager.default.temporaryDirectory.appending(path: "orphaned-child-\(UUID())")
+        let childStoreURL = childRoot.appending(path: "shared-household-v1.store")
+        try FileManager.default.createDirectory(at: childRoot, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: childRoot) }
         let childTransport = TestTransport(server: server, account: "child")
-        var child = try HouseholdStore(
-            repository: childRepository,
-            transport: childTransport,
-            automaticSync: false,
-            localDataResetter: childResetter
-        )
-        try await child.redeemInvitation(oldInvitation.qrPayload)
-        let oldHouseholdID = try XCTUnwrap(child.household?.id)
+        func makeChildStore() throws -> HouseholdStore {
+            try HouseholdStore(
+                repository: HouseholdRepository(url: childStoreURL),
+                transport: childTransport,
+                automaticSync: false,
+                localDataResetter: AppAccountLocalDataResetter(
+                    applicationSupportDirectory: childRoot,
+                    documentsDirectory: childRoot,
+                    cachesDirectory: childRoot.appending(path: "Caches"),
+                    bundleIdentifier: nil,
+                    activeStoreURL: childStoreURL
+                )
+            )
+        }
+        let oldHouseholdID: UUID
+        do {
+            let offlineChild = try makeChildStore()
+            try await offlineChild.redeemInvitation(oldInvitation.qrPayload)
+            oldHouseholdID = try XCTUnwrap(offlineChild.household?.id)
+        }
 
         try await parent.deleteAllEarnedItData()
         XCTAssertNil(server.accountMembershipLocks["old-owner"])
         XCTAssertNotNil(server.accountMembershipLocks["child"])
 
-        await XCTAssertThrowsErrorAsync(try await child.synchronize())
-        XCTAssertTrue(child.familyAccessLost)
-        XCTAssertNil(server.zones.values.first { $0.householdID == oldHouseholdID })
-        XCTAssertNil(server.accountMembershipLocks["old-owner"])
+        do {
+            let relaunchedChild = try makeChildStore()
+            try await relaunchedChild.reconcileAccountMembershipLock()
+            XCTAssertTrue(relaunchedChild.familyAccessLost)
+            XCTAssertEqual(relaunchedChild.household?.id, oldHouseholdID)
+            XCTAssertNil(server.zones.values.first { $0.householdID == oldHouseholdID })
+            XCTAssertNil(server.accountMembershipLocks["old-owner"])
 
-        try await child.deleteAllEarnedItData()
-        XCTAssertNil(server.accountMembershipLocks["child"])
-        XCTAssertNil(child.household)
+            await XCTAssertThrowsErrorAsync(
+                try await relaunchedChild.synchronize(),
+                expectedCloudKitCode: .zoneNotFound
+            )
+            XCTAssertTrue(relaunchedChild.familyAccessLost)
+            try await relaunchedChild.deleteAllEarnedItData()
+            XCTAssertNil(server.accountMembershipLocks["child"])
+            XCTAssertNil(relaunchedChild.household)
+        }
 
-        child = try HouseholdStore(
-            repository: childRepository,
-            transport: childTransport,
-            automaticSync: false,
-            localDataResetter: childResetter
-        )
+        let child = try makeChildStore()
         try await child.reconcileAccountMembershipLock()
         XCTAssertNil(child.household)
         XCTAssertFalse(child.requiresMembershipRecovery)
@@ -439,6 +457,60 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertEqual(child.selectedMember?.id, freshParent.hanna.id)
         XCTAssertEqual(server.zones.count, 1)
         XCTAssertNil(server.zones.values.first { $0.householdID == oldHouseholdID })
+    }
+
+    func testInterruptedOwnerConnectionCannotRecreateAfterAnotherInstallationResetsAccount() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let staleRepository = try HouseholdRepository(inMemory: true)
+        let interrupted = try HouseholdStore(
+            repository: staleRepository,
+            transport: transport,
+            automaticSync: false
+        )
+        try interrupted.createFamily(name: "Interrupted Family", parentName: "Parent")
+        _ = try interrupted.saveMember(name: "Child", role: .child, avatar: .star)
+        try interrupted.finishSetup()
+        let householdID = try XCTUnwrap(interrupted.household?.id)
+        let attemptID = UUID()
+        var interruptedSession = interrupted.session
+        interruptedSession.cloudParticipantID = "owner"
+        interruptedSession.accountMembershipLockAttemptID = attemptID
+        try staleRepository.commit(facts: [], session: interruptedSession)
+        server.accountMembershipLocks["owner"] = AccountMembershipLock(
+            householdID: householdID,
+            attemptID: attemptID,
+            state: .provisional,
+            expiresAt: .distantFuture,
+            claimBinding: nil
+        )
+
+        let relaunched = try HouseholdStore(
+            repository: staleRepository,
+            transport: transport,
+            automaticSync: false
+        )
+        let resettingInstallation = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: false,
+            localDataResetter: TestAccountLocalDataResetter()
+        )
+        try await resettingInstallation.deleteAllEarnedItData()
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+
+        try await relaunched.reconcileAccountMembershipLock()
+        XCTAssertTrue(relaunched.familyAccessLost)
+        await XCTAssertThrowsErrorAsync(
+            try await relaunched.connect(),
+            expected: .ownerMembershipUnavailable
+        )
+
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+        XCTAssertTrue(server.zones.isEmpty)
+        XCTAssertTrue(server.lifecycleAuthorities.isEmpty)
+        XCTAssertTrue(transport.uploadedIDs.isEmpty)
+        XCTAssertEqual(server.createCalls, 0)
     }
 
     func testRecoveryStateInvokesSameResetCoordinatorAndFreshInstallStaysAtWelcome() async throws {
