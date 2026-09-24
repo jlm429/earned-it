@@ -508,6 +508,7 @@ final class HouseholdStore {
     }
 
     func createChildInvitation(memberID: UUID) async throws -> IssuedFamilyInvitation {
+        transport?.familyTransitionDiagnostics.clearInvitationAttempt()
         try requireParent()
         guard let member = snapshot.member(memberID), member.role == .child,
               snapshot.isActive(member, on: day) else { throw HouseholdError.permission }
@@ -515,6 +516,7 @@ final class HouseholdStore {
     }
 
     func createParentInvitation(name: String, avatar: AvatarOption) async throws -> IssuedFamilyInvitation {
+        transport?.familyTransitionDiagnostics.clearInvitationAttempt()
         try requireParent()
         guard let household else { throw HouseholdError.noHousehold }
         let name = try validatedName(name)
@@ -609,6 +611,7 @@ final class HouseholdStore {
             hasCloudLocation: session.location != nil
         )
         do {
+            await collectInvitationDiagnosticPreamble(household: household)
             if session.location == nil { _ = await collectOwnerTransitionPreflight() }
             if session.location?.isOwner == true {
                 diagnostics.record(stage: .invitationAccessPruning, outcome: .started,
@@ -667,9 +670,15 @@ final class HouseholdStore {
                                    householdID: household.id, error: error)
                 throw error
             }
+            diagnostics.record(stage: .invitationStateValidation, outcome: .started,
+                               householdID: household.id)
             guard let location = session.location, let parent = selectedMember else {
+                diagnostics.record(stage: .invitationStateValidation, outcome: .failed,
+                                   householdID: household.id, error: HouseholdError.cloudUnavailable)
                 throw HouseholdError.cloudUnavailable
             }
+            diagnostics.record(stage: .invitationStateValidation, outcome: .succeeded,
+                               householdID: household.id)
             let now = try await transport.invitationValidationTime(in: location, clientTime: clock())
             let issuedMember = newMember.map {
                 FamilyMember(id: $0.id, householdID: $0.householdID, displayName: $0.displayName,
@@ -723,6 +732,90 @@ final class HouseholdStore {
         }
     }
 
+    private func collectInvitationDiagnosticPreamble(household: Household) async {
+        guard let transport else { return }
+        let diagnostics = transport.familyTransitionDiagnostics
+        let generation = transport.accountGeneration
+        diagnostics.record(stage: .invitationDiagnosticPreamble, outcome: .started,
+                           householdID: household.id)
+
+        diagnostics.record(stage: .invitationDiagnosticIdentityRead, outcome: .started,
+                           householdID: household.id)
+        let participant: String?
+        do {
+            let currentParticipant = try await transport.participantID()
+            participant = currentParticipant
+            diagnostics.recordAccountIdentity(
+                participantID: currentParticipant,
+                generation: transport.accountGeneration,
+                stable: transport.accountGeneration == generation
+            )
+            diagnostics.record(stage: .invitationDiagnosticIdentityRead, outcome: .succeeded,
+                               householdID: household.id, participantID: currentParticipant,
+                               accountGenerationStable: transport.accountGeneration == generation)
+        } catch {
+            participant = nil
+            diagnostics.record(stage: .invitationDiagnosticIdentityRead, outcome: .failed,
+                               householdID: household.id,
+                               accountGenerationStable: transport.accountGeneration == generation,
+                               error: error)
+        }
+
+        let expectedOwnerBinding = AccountMembershipBinding.owner(householdID: household.id)
+        let expectedOwnerAuthorityBinding = participant.map {
+            AccountMembershipBinding.ownerAuthority(participantID: $0)
+        }
+        diagnostics.recordExpectedOwnerMembership(
+            householdID: household.id,
+            memberID: selectedMember?.id,
+            role: selectedMember?.role,
+            locationIsOwner: session.location?.isOwner == true,
+            participantID: participant
+        )
+        diagnostics.record(stage: .invitationDiagnosticMembershipLockRead, outcome: .started,
+                           householdID: household.id)
+        do {
+            let lock = try await transport.accountMembershipLock()
+            diagnostics.record(stage: .invitationDiagnosticMembershipLockRead,
+                               outcome: lock == nil ? .absent : .succeeded,
+                               lock: lock, householdID: household.id,
+                               accountGenerationStable: transport.accountGeneration == generation)
+            diagnostics.recordMembershipLock(
+                lock,
+                expectedOwnerBinding: expectedOwnerBinding,
+                expectedOwnerAuthorityBinding: expectedOwnerAuthorityBinding,
+                localAttemptID: session.accountMembershipLockAttemptID,
+                accountGeneration: transport.accountGeneration
+            )
+            if let location = session.location, let participant {
+                let comparison = ownerMembershipComparison(
+                    lock: lock,
+                    binding: expectedOwnerBinding,
+                    imported: snapshot,
+                    location: location,
+                    participant: participant
+                )
+                diagnostics.recordOwnerComparison(comparison)
+                diagnostics.recordOwnerBranch(
+                    comparison.permitsActiveOwnerReuse
+                        ? .readOnlyPreambleExactActiveOwnerCandidate
+                        : .readOnlyPreambleRequiresOwnerReconciliation,
+                    result: "observed"
+                )
+            } else {
+                diagnostics.recordOwnerBranch(.readOnlyPreambleUnavailable, result: "observed")
+            }
+        } catch {
+            diagnostics.record(stage: .invitationDiagnosticMembershipLockRead, outcome: .failed,
+                               householdID: household.id,
+                               accountGenerationStable: transport.accountGeneration == generation,
+                               error: error)
+            diagnostics.recordOwnerBranch(.readOnlyPreambleUnavailable, result: "observed")
+        }
+        diagnostics.record(stage: .invitationDiagnosticPreamble, outcome: .succeeded,
+                           householdID: household.id)
+    }
+
     func connect() async throws {
         try requireParent()
         guard let household, let transport else { throw HouseholdError.cloudUnavailable }
@@ -751,10 +844,17 @@ final class HouseholdStore {
                                                          householdID: household.id, error: error)
             throw error
         }
+        transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .started,
+                                                     householdID: household.id)
         guard session.deviceID == connectingSession.deviceID,
               session.householdID == connectingSession.householdID, session.location == nil else {
+            transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .failed,
+                                                         householdID: household.id,
+                                                         error: HouseholdError.noHousehold)
             throw HouseholdError.noHousehold
         }
+        transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .succeeded,
+                                                     householdID: household.id)
         let binding = AccountMembershipBinding.owner(householdID: household.id)
         let lock = try await acquireAccountMembershipLock(householdID: household.id,
                                                           attemptID: session.accountMembershipLockAttemptID,
@@ -770,11 +870,27 @@ final class HouseholdStore {
             householdID: household.id,
             expectedParticipantID: participant
         )
-        guard lifecycleState == .active else { throw HouseholdError.accountMembershipConflict }
+        transport.familyTransitionDiagnostics.record(stage: .lifecycleAuthorityValidation, outcome: .started,
+                                                     householdID: household.id)
+        guard lifecycleState == .active else {
+            transport.familyTransitionDiagnostics.record(stage: .lifecycleAuthorityValidation, outcome: .failed,
+                                                         householdID: household.id,
+                                                         error: HouseholdError.accountMembershipConflict)
+            throw HouseholdError.accountMembershipConflict
+        }
+        transport.familyTransitionDiagnostics.record(stage: .lifecycleAuthorityValidation, outcome: .succeeded,
+                                                     householdID: household.id)
+        transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .started,
+                                                     householdID: household.id)
         guard session.deviceID == connectingSession.deviceID,
               session.householdID == connectingSession.householdID, session.location == nil else {
+            transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .failed,
+                                                         householdID: household.id,
+                                                         error: HouseholdError.noHousehold)
             throw HouseholdError.noHousehold
         }
+        transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .succeeded,
+                                                     householdID: household.id)
         var updated = session
         updated.location = location
         updated.cloudParticipantID = participant
@@ -2689,7 +2805,16 @@ final class HouseholdStore {
                     householdID: location.householdID,
                     expectedParticipantID: participant
                 )
-                guard lifecycleState == .active else { throw HouseholdError.accountMembershipConflict }
+                diagnostics.record(stage: .lifecycleAuthorityValidation, outcome: .started,
+                                   householdID: location.householdID)
+                guard lifecycleState == .active else {
+                    diagnostics.record(stage: .lifecycleAuthorityValidation, outcome: .failed,
+                                       householdID: location.householdID,
+                                       error: HouseholdError.accountMembershipConflict)
+                    throw HouseholdError.accountMembershipConflict
+                }
+                diagnostics.record(stage: .lifecycleAuthorityValidation, outcome: .succeeded,
+                                   householdID: location.householdID)
             }
             shouldMarkMembershipReadOnlyOnConflict = true
             guard transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
@@ -2729,18 +2854,20 @@ final class HouseholdStore {
                                    householdID: location.householdID)
                 return
             }
+            let comparison = ownerMembershipComparison(
+                lock: currentLock,
+                binding: binding,
+                imported: imported,
+                location: location,
+                participant: participant
+            )
+            diagnostics.recordOwnerComparison(comparison)
             if let localBinding = session.accountMembershipClaimBinding, localBinding != binding {
                 diagnostics.recordOwnerBranch(.localClaimBindingConflict, result: "failed")
                 throw HouseholdError.accountMembershipConflict
             }
             if let currentLock {
-                if canReuseActiveOwnerMembership(
-                    currentLock,
-                    binding: binding,
-                    imported: imported,
-                    location: location,
-                    participant: participant
-                ) {
+                if comparison.permitsActiveOwnerReuse {
                     diagnostics.recordOwnerBranch(.reuseExactActiveOwnerMembership, result: "selected")
                     let active = try await transport.activateAccountMembershipLock(
                         householdID: location.householdID,
@@ -2832,16 +2959,16 @@ final class HouseholdStore {
         }
     }
 
-    private func canReuseActiveOwnerMembership(
-        _ lock: AccountMembershipLock,
+    private func ownerMembershipComparison(
+        lock: AccountMembershipLock?,
         binding: String,
         imported: HouseholdSnapshot,
         location: CloudLocation,
         participant: String
-    ) -> Bool {
+    ) -> InvitationOwnerMembershipComparison {
         let parent = selectedMember
         let localBinding = session.accountMembershipClaimBinding
-        let comparison = InvitationOwnerMembershipComparison(
+        return InvitationOwnerMembershipComparison(
             locationIsOwner: location.isOwner,
             sessionHouseholdMatchesLocation: session.householdID == location.householdID,
             sessionLocationMatches: session.location == location,
@@ -2854,18 +2981,16 @@ final class HouseholdStore {
             derivedBindingMatchesExpectedOwner: binding == AccountMembershipBinding.owner(
                 householdID: location.householdID
             ),
-            lockHouseholdMatchesLocation: lock.householdID == location.householdID,
-            lockStateIsActive: lock.state == .active,
-            lockClaimBindingPresent: lock.claimBinding != nil,
-            lockClaimBindingMatchesDerivedBinding: lock.claimBinding == binding,
-            lockOwnerAuthorityBindingPresent: lock.ownerAuthorityBinding != nil,
-            lockOwnerAuthorityBindingMatchesCurrentAccount: lock.ownerAuthorityBinding
+            lockHouseholdMatchesLocation: lock?.householdID == location.householdID,
+            lockStateIsActive: lock?.state == .active,
+            lockClaimBindingPresent: lock?.claimBinding != nil,
+            lockClaimBindingMatchesDerivedBinding: lock?.claimBinding == binding,
+            lockOwnerAuthorityBindingPresent: lock?.ownerAuthorityBinding != nil,
+            lockOwnerAuthorityBindingMatchesCurrentAccount: lock?.ownerAuthorityBinding
                 == AccountMembershipBinding.ownerAuthority(participantID: participant),
             localClaimBindingPresent: localBinding != nil,
             localClaimBindingMatchesDerivedBinding: localBinding.map { $0 == binding }
         )
-        transport?.familyTransitionDiagnostics.recordOwnerComparison(comparison)
-        return comparison.permitsActiveOwnerReuse
     }
 
     private func accessibleFacts(at location: CloudLocation) async throws -> [HouseholdFact]? {

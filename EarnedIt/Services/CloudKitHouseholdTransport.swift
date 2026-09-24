@@ -61,17 +61,19 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                                       leaseDuration: TimeInterval, clientTime: Date) async throws
         -> AccountMembershipLock {
         let startingGeneration = accountGeneration
-        let observedParticipantID = try await participantID()
         familyTransitionDiagnostics.record(
             stage: .membershipLockAcquire, outcome: .started, householdID: householdID,
-            attemptID: attemptID, participantID: observedParticipantID,
+            attemptID: attemptID,
             accountGenerationStable: accountGeneration == startingGeneration
         )
+        var observedParticipantID: String?
         do {
+            let participant = try await participantID()
+            observedParticipantID = participant
             let now = try await accountMembershipValidationTime(clientTime: clientTime)
             let boundedDuration = min(max(leaseDuration, 0), InvitationCode.lifetime)
             let lock = try await updateAccountMembershipLock(
-                expectedParticipantID: observedParticipantID,
+                expectedParticipantID: participant,
                 expectedGeneration: startingGeneration
             ) { existing in
                 if let existing, existing.state == .active {
@@ -85,7 +87,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
             familyTransitionDiagnostics.record(
                 stage: .membershipLockAcquire, outcome: .succeeded, lock: lock,
-                participantID: observedParticipantID, accountGenerationStable: accountGeneration == startingGeneration
+                participantID: participant, accountGenerationStable: accountGeneration == startingGeneration
             )
             return lock
         } catch {
@@ -166,15 +168,17 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                                        claimBinding: String, ownerAuthorityBinding: String,
                                        now: Date) async throws -> AccountMembershipLock {
         let startingGeneration = accountGeneration
-        let observedParticipantID = try await participantID()
         familyTransitionDiagnostics.record(
             stage: .membershipLockActivate, outcome: .started, householdID: householdID,
-            attemptID: attemptID, participantID: observedParticipantID,
+            attemptID: attemptID,
             accountGenerationStable: accountGeneration == startingGeneration
         )
+        var observedParticipantID: String?
         do {
+            let participant = try await participantID()
+            observedParticipantID = participant
             let lock = try await updateAccountMembershipLock(
-                expectedParticipantID: observedParticipantID,
+                expectedParticipantID: participant,
                 expectedGeneration: startingGeneration
             ) { existing in
                 guard var existing, existing.householdID == householdID else {
@@ -199,7 +203,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
             familyTransitionDiagnostics.record(
                 stage: .membershipLockActivate, outcome: .succeeded, lock: lock,
-                participantID: observedParticipantID, accountGenerationStable: accountGeneration == startingGeneration
+                participantID: participant, accountGenerationStable: accountGeneration == startingGeneration
             )
             return lock
         } catch {
@@ -587,7 +591,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         } catch let error as CKError where error.code == .unknownItem {
             familyTransitionDiagnostics.record(stage: .shareFetch, outcome: .absent,
                                                 householdID: location.householdID)
-            guard location.isOwner else { throw HouseholdError.invitation }
+            familyTransitionDiagnostics.record(stage: .shareOwnerValidation, outcome: .started,
+                                                householdID: location.householdID)
+            guard location.isOwner else {
+                familyTransitionDiagnostics.record(stage: .shareOwnerValidation, outcome: .failed,
+                                                    householdID: location.householdID,
+                                                    error: HouseholdError.invitation)
+                throw HouseholdError.invitation
+            }
+            familyTransitionDiagnostics.record(stage: .shareOwnerValidation, outcome: .succeeded,
+                                                householdID: location.householdID)
             let share = CKShare(recordZoneID: zoneID(for: location))
             share.publicPermission = .none
             share[CKShare.SystemFieldKey.title] = title as CKRecordValue
@@ -615,7 +628,16 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     func createInvitationAccess(for location: CloudLocation, title: String,
         role: UserRole) async throws -> CloudInvitationAccess {
         let share = try await share(for: location, title: title)
-        guard location.isOwner else { throw HouseholdError.invitationOwnerRequired }
+        familyTransitionDiagnostics.record(stage: .invitationAccessOwnerValidation, outcome: .started,
+                                            householdID: location.householdID)
+        guard location.isOwner else {
+            familyTransitionDiagnostics.record(stage: .invitationAccessOwnerValidation, outcome: .failed,
+                                                householdID: location.householdID,
+                                                error: HouseholdError.invitationOwnerRequired)
+            throw HouseholdError.invitationOwnerRequired
+        }
+        familyTransitionDiagnostics.record(stage: .invitationAccessOwnerValidation, outcome: .succeeded,
+                                            householdID: location.householdID)
 
         familyTransitionDiagnostics.record(stage: .participantCreate, outcome: .started,
                                             householdID: location.householdID)

@@ -7,6 +7,9 @@ enum FamilyTransitionDiagnosticStage: String, Equatable {
     case preflight
     case childRecoveryPreflight
     case invitationStart
+    case invitationDiagnosticPreamble
+    case invitationDiagnosticIdentityRead
+    case invitationDiagnosticMembershipLockRead
     case cloudAccountIdentity
     case invitationAccessPruning
     case invitationGeneration
@@ -29,7 +32,12 @@ enum FamilyTransitionDiagnosticStage: String, Equatable {
     case validationTimeWrite
     case shareFetch
     case shareCreate
+    case shareOwnerValidation
+    case invitationAccessOwnerValidation
     case participantCreate
+    case invitationStateValidation
+    case connectionStateValidation
+    case lifecycleAuthorityValidation
     case invitationAppend
     case invitationFactUpload
     case internalErrorCapture
@@ -138,6 +146,9 @@ struct InvitationOwnerMembershipComparison: Equatable {
 }
 
 enum InvitationOwnerMembershipBranch: String, Equatable {
+    case readOnlyPreambleExactActiveOwnerCandidate
+    case readOnlyPreambleRequiresOwnerReconciliation
+    case readOnlyPreambleUnavailable
     case noDerivedMembershipBindingValidateRetainedAttempt
     case localClaimBindingConflict
     case reuseExactActiveOwnerMembership
@@ -299,6 +310,15 @@ final class FamilyTransitionDiagnostics {
 
     var isActive: Bool { targetHouseholdID != nil }
 
+    func clearInvitationAttempt() {
+        events.removeAll(keepingCapacity: true)
+        targetHouseholdID = nil
+        expectedAttemptID = nil
+        expectedParticipantID = nil
+        invitationContext = nil
+        latestInvitationTrace = nil
+    }
+
     func begin(targetHouseholdID: UUID, localAttemptID: UUID?, localParticipantID: String?) {
         events.removeAll(keepingCapacity: true)
         invitationContext = nil
@@ -361,7 +381,7 @@ final class FamilyTransitionDiagnostics {
         memberID: UUID?,
         role: UserRole?,
         locationIsOwner: Bool,
-        participantID: String
+        participantID: String?
     ) {
         guard isActive, invitationContext != nil else { return }
         append(event(
@@ -373,7 +393,7 @@ final class FamilyTransitionDiagnostics {
                 role: role,
                 ownerLocation: locationIsOwner,
                 claimBindingKind: "deterministicOwnerHouseholdBinding",
-                ownerAuthorityDerivedFromCurrentAccount: !participantID.isEmpty
+                ownerAuthorityDerivedFromCurrentAccount: participantID?.isEmpty == false
             ))
         ))
     }
@@ -381,7 +401,7 @@ final class FamilyTransitionDiagnostics {
     func recordMembershipLock(
         _ lock: AccountMembershipLock?,
         expectedOwnerBinding: String,
-        expectedOwnerAuthorityBinding: String,
+        expectedOwnerAuthorityBinding: String?,
         localAttemptID: UUID?,
         accountGeneration: UInt64
     ) {
@@ -402,8 +422,8 @@ final class FamilyTransitionDiagnostics {
             claimBindingPresent: lock?.claimBinding != nil,
             claimBindingMatchesExpectedOwner: lock.map { $0.claimBinding == expectedOwnerBinding },
             ownerAuthorityBindingPresent: lock?.ownerAuthorityBinding != nil,
-            ownerAuthorityBindingMatchesCurrentAccount: lock.map {
-                $0.ownerAuthorityBinding == expectedOwnerAuthorityBinding
+            ownerAuthorityBindingMatchesCurrentAccount: expectedOwnerAuthorityBinding.flatMap { expected in
+                lock.map { $0.ownerAuthorityBinding == expected }
             },
             acquisitionNonceRelationship: nonceRelationship
         )
@@ -426,7 +446,7 @@ final class FamilyTransitionDiagnostics {
 
     func recordOwnerBranch(_ branch: InvitationOwnerMembershipBranch, result: String) {
         guard isActive, invitationContext != nil else { return }
-        let safeResult = ["selected", "passed", "failed", "notApplicable"].contains(result)
+        let safeResult = ["selected", "passed", "failed", "observed", "notApplicable"].contains(result)
             ? result : "notApplicable"
         append(event(
             stage: .ownerMembershipValidation,
@@ -443,7 +463,6 @@ final class FamilyTransitionDiagnostics {
             cloudErrors: Self.cloudErrors(from: error),
             detail: .internalError(Self.internalErrorChain(from: error))
         ))
-        refreshLatestInvitationTrace()
     }
 
     func recordUserFacingErrorConversion(_ error: Error) {
@@ -528,7 +547,11 @@ final class FamilyTransitionDiagnostics {
 
     func finish(outcome: FamilyTransitionDiagnosticOutcome, error: Error? = nil) {
         record(stage: .completed, outcome: outcome, error: error)
-        refreshLatestInvitationTrace()
+        if outcome == .failed {
+            refreshLatestInvitationTrace()
+        } else {
+            latestInvitationTrace = nil
+        }
         targetHouseholdID = nil
         expectedAttemptID = nil
         expectedParticipantID = nil
@@ -626,8 +649,17 @@ final class FamilyTransitionDiagnostics {
     }
 
     private func refreshLatestInvitationTrace() {
-        guard let context = invitationContext else { return }
-        let observationalStages: [FamilyTransitionDiagnosticStage] = [.preflight, .childRecoveryPreflight]
+        guard let context = invitationContext,
+              events.contains(where: { $0.stage == .completed && $0.outcome == .failed }) else {
+            latestInvitationTrace = nil
+            return
+        }
+        let observationalStages: [FamilyTransitionDiagnosticStage] = [
+            .preflight,
+            .childRecoveryPreflight,
+            .invitationDiagnosticIdentityRead,
+            .invitationDiagnosticMembershipLockRead
+        ]
         let causalFailure = events.first {
             $0.outcome == .failed && $0.stage != .completed && !observationalStages.contains($0.stage)
         }
@@ -639,16 +671,16 @@ final class FamilyTransitionDiagnostics {
             "sanitizer=allowListedTypedFields",
             "correlationID=\(context.correlationID.uuidString)",
             "householdID=\(context.householdID.uuidString)",
-            "currentParentMemberID=\(context.currentParentMemberID?.uuidString ?? \"unavailable\")",
+            "currentParentMemberID=\(context.currentParentMemberID?.uuidString ?? "unavailable")",
             "targetMemberID=\(context.targetMemberID.uuidString)",
             "targetRole=\(context.targetRole.rawValue)",
             "startedWithCloudLocation=\(context.startedWithCloudLocation)",
             "localAcquisitionNoncePresent=\(context.localAcquisitionNoncePresent)",
-            "cloudKitUserRecordNameSHA256=\(context.cloudKitUserRecordNameSHA256 ?? \"unavailable\")",
+            "cloudKitUserRecordNameSHA256=\(context.cloudKitUserRecordNameSHA256 ?? "unavailable")",
             "accountGeneration=\(context.accountGeneration)",
-            "firstFailureSequence=\(firstFailure.map { String($0.sequence) } ?? \"none\")",
-            "firstFailureStage=\(firstFailure?.stage.rawValue ?? \"none\")",
-            "firstFailureOperation=\(firstFailure.map { Self.operation(for: $0.stage) } ?? \"none\")",
+            "firstFailureSequence=\(firstFailure.map { String($0.sequence) } ?? "none")",
+            "firstFailureStage=\(firstFailure?.stage.rawValue ?? "none")",
+            "firstFailureOperation=\(firstFailure.map { Self.operation(for: $0.stage) } ?? "none")",
             "events:"
         ]
         lines += events.map(Self.invitationLine(for:))
@@ -681,7 +713,7 @@ final class FamilyTransitionDiagnostics {
             fields.append(
                 "cloudError[path=\(error.path),domain=\(error.domain),code=\(error.code.rawValue),"
                     + "codeName=\(error.codeName),source=\(error.source.rawValue),"
-                    + "retryAfterSeconds=\(error.retryAfterSeconds.map { String($0) } ?? \"none\")]"
+                    + "retryAfterSeconds=\(error.retryAfterSeconds.map { String($0) } ?? "none")]"
             )
         }
         return fields.joined(separator: " ")
@@ -703,8 +735,8 @@ final class FamilyTransitionDiagnostics {
             return [
                 "detail=expectedOwnerMembership",
                 "expected.householdID=\(expected.householdID.uuidString)",
-                "expected.memberProfileID=\(expected.memberID?.uuidString ?? \"unavailable\")",
-                "expected.role=\(expected.role?.rawValue ?? \"unavailable\")",
+                "expected.memberProfileID=\(expected.memberID?.uuidString ?? "unavailable")",
+                "expected.role=\(expected.role?.rawValue ?? "unavailable")",
                 "expected.ownerLocation=\(expected.ownerLocation)",
                 "expected.claimBindingKind=\(expected.claimBindingKind)",
                 "expected.ownerAuthorityDerivedFromCurrentAccount="
@@ -714,10 +746,10 @@ final class FamilyTransitionDiagnostics {
             return [
                 "detail=existingAccountMembershipLock",
                 "lock.present=\(lock.present)",
-                "lock.householdID=\(lock.householdID?.uuidString ?? \"none\")",
+                "lock.householdID=\(lock.householdID?.uuidString ?? "none")",
                 "lock.memberProfileID=notStored",
                 "lock.role=notStored",
-                "lock.state=\(lock.state?.rawValue ?? \"none\")",
+                "lock.state=\(lock.state?.rawValue ?? "none")",
                 "lock.accountGeneration=\(lock.accountGeneration)",
                 "lock.claimBindingPresent=\(lock.claimBindingPresent)",
                 "lock.claimBindingMatchesExpectedOwner=\(value(lock.claimBindingMatchesExpectedOwner))",
@@ -773,8 +805,8 @@ final class FamilyTransitionDiagnostics {
     private static func internalErrorFields(_ components: [InvitationInternalErrorComponent]) -> [String] {
         components.enumerated().map { index, component in
             "errorChain[\(index)]=depth:\(component.depth),kind:\(component.kind.rawValue),"
-                + "case:\(component.caseName ?? \"none\"),domain:\(component.domain ?? \"none\"),"
-                + "code:\(component.code.map { String($0) } ?? \"none\")"
+                + "case:\(component.caseName ?? "none"),domain:\(component.domain ?? "none"),"
+                + "code:\(component.code.map { String($0) } ?? "none")"
         }
     }
 
@@ -884,6 +916,10 @@ final class FamilyTransitionDiagnostics {
         case .preflight: "HouseholdTransport.ownerTransitionPreflight"
         case .childRecoveryPreflight: "HouseholdTransport.childRecoveryPreflight"
         case .invitationStart: "HouseholdStore.issueInvitation"
+        case .invitationDiagnosticPreamble: "HouseholdStore.collectInvitationDiagnosticPreamble"
+        case .invitationDiagnosticIdentityRead: "CKContainer.userRecordID.readOnlyDiagnostics"
+        case .invitationDiagnosticMembershipLockRead:
+            "CKDatabase.record.AccountMembershipLock.readOnlyDiagnostics"
         case .cloudAccountIdentity: "CKContainer.userRecordID"
         case .invitationAccessPruning: "HouseholdStore.pruneUnavailableInvitationAccess"
         case .invitationGeneration: "InvitationCode.generate"
@@ -906,7 +942,13 @@ final class FamilyTransitionDiagnostics {
         case .validationTimeWrite: "CKDatabase.modifyRecords.InvitationValidationTime"
         case .shareFetch: "CKDatabase.record.CKShare"
         case .shareCreate: "CKDatabase.save.CKShare"
+        case .shareOwnerValidation: "CloudKitHouseholdTransport.share.ownerGuard"
+        case .invitationAccessOwnerValidation:
+            "CloudKitHouseholdTransport.createInvitationAccess.ownerGuard"
         case .participantCreate: "CKShare.addParticipant+CKDatabase.save.CKShare"
+        case .invitationStateValidation: "HouseholdStore.issueInvitation.stateGuard"
+        case .connectionStateValidation: "HouseholdStore.connect.sessionGuard"
+        case .lifecycleAuthorityValidation: "HouseholdStore.lifecycleAuthority.activeGuard"
         case .invitationAppend: "HouseholdStore.append.InvitationFact"
         case .invitationFactUpload: "CKDatabase.modifyRecords.InvitationFact"
         case .internalErrorCapture: "HouseholdStore.issueInvitation.catch"

@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class InvitationDiagnosticsTests: XCTestCase {
-    func testProductionInvitationPathEmitsOrderedMajorStagesWithoutChangingIssuedInvitation() async throws {
+    func testProductionInvitationPathEmitsOrderedMajorStagesWithoutPublishingSuccessfulTrace() async throws {
         let server = TestCloudServer()
         let diagnostics = FamilyTransitionDiagnostics()
         let transport = TestTransport(
@@ -25,39 +25,44 @@ final class InvitationDiagnosticsTests: XCTestCase {
         try store.finishSetup()
 
         let issued = try await store.createChildInvitation(memberID: child.id)
-        let trace = try XCTUnwrap(store.latestInvitationDiagnostics)
 
         XCTAssertEqual(issued.invitation.memberID, child.id)
         XCTAssertEqual(issued.invitation.role, .child)
-        XCTAssertTrue(trace.contains("householdID=\(try XCTUnwrap(store.household).id.uuidString)"))
-        XCTAssertTrue(trace.contains("currentParentMemberID=\(parent.id.uuidString)"))
-        XCTAssertTrue(trace.contains("targetMemberID=\(child.id.uuidString)"))
-        XCTAssertTrue(trace.contains("firstFailureStage=none"))
+        XCTAssertNotNil(parent)
+        XCTAssertNil(store.latestInvitationDiagnostics)
 
-        let orderedStages = [
-            "stage=invitationStart",
-            "stage=invitationGeneration outcome=started",
-            "stage=zoneConnectionBootstrap outcome=started",
-            "stage=participantLookup outcome=started",
-            "stage=membershipLockAcquire outcome=started",
-            "stage=zoneCreate outcome=started",
-            "stage=lifecycleAuthorityPrepare outcome=started",
-            "stage=initialFactSynchronization outcome=started",
-            "stage=journalFetch outcome=started",
-            "stage=ownerMembershipValidation outcome=started",
-            "stage=membershipLockRead outcome=started",
-            "stage=journalUpload outcome=started",
-            "stage=preInvitationSynchronization outcome=started",
-            "stage=validationTimeWrite outcome=started",
-            "stage=shareFetch outcome=started",
-            "stage=shareCreate outcome=started",
-            "stage=participantCreate outcome=started",
-            "stage=invitationAppend outcome=started",
-            "stage=invitationFactUpload outcome=started",
-            "stage=completed"
+        let orderedStages: [(FamilyTransitionDiagnosticStage, FamilyTransitionDiagnosticOutcome)] = [
+            (.invitationStart, .started),
+            (.invitationDiagnosticPreamble, .started),
+            (.invitationDiagnosticIdentityRead, .started),
+            (.invitationDiagnosticMembershipLockRead, .started),
+            (.invitationGeneration, .started),
+            (.zoneConnectionBootstrap, .started),
+            (.participantLookup, .started),
+            (.membershipLockAcquire, .started),
+            (.zoneCreate, .started),
+            (.lifecycleAuthorityPrepare, .started),
+            (.initialFactSynchronization, .started),
+            (.journalFetch, .started),
+            (.ownerMembershipValidation, .started),
+            (.membershipLockRead, .started),
+            (.journalUpload, .started),
+            (.preInvitationSynchronization, .started),
+            (.invitationStateValidation, .started),
+            (.validationTimeWrite, .started),
+            (.shareFetch, .started),
+            (.shareCreate, .started),
+            (.invitationAccessOwnerValidation, .started),
+            (.participantCreate, .started),
+            (.invitationAppend, .started),
+            (.invitationFactUpload, .started),
+            (.completed, .succeeded)
         ]
-        let positions = try orderedStages.map { marker in
-            try XCTUnwrap(trace.range(of: marker)?.lowerBound, "Missing trace marker: \(marker)")
+        let positions = try orderedStages.map { stage, outcome in
+            try XCTUnwrap(
+                diagnostics.events.firstIndex { $0.stage == stage && $0.outcome == outcome },
+                "Missing trace event: \(stage.rawValue) \(outcome.rawValue)"
+            )
         }
         XCTAssertEqual(positions, positions.sorted())
 
@@ -67,9 +72,54 @@ final class InvitationDiagnosticsTests: XCTestCase {
             "membershipLockRead", "journalFetch", "journalUpload", "participantCreate",
             "invitationAppend", "invitationFactUpload"
         ] {
-            XCTAssertTrue(trace.contains("stage=\(stage) outcome=started"), stage)
-            XCTAssertTrue(trace.contains("stage=\(stage) outcome=succeeded"), stage)
+            XCTAssertTrue(diagnostics.events.contains {
+                $0.stage.rawValue == stage && $0.outcome == .started
+            }, stage)
+            XCTAssertTrue(diagnostics.events.contains {
+                $0.stage.rawValue == stage && $0.outcome == .succeeded
+            }, stage)
         }
+    }
+
+    func testPublicAttemptBoundaryClearsPriorFailureBeforeLocalValidationFailure() async throws {
+        let diagnostics = FamilyTransitionDiagnostics()
+        let transport = TestTransport(
+            server: TestCloudServer(),
+            account: "owner-account",
+            familyTransitionDiagnostics: diagnostics
+        )
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: false
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        _ = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        diagnostics.beginInvitation(
+            householdID: try XCTUnwrap(store.household).id,
+            currentParentMemberID: try XCTUnwrap(store.selectedMember).id,
+            targetMemberID: UUID(),
+            targetRole: .child,
+            localAttemptID: nil,
+            localParticipantID: "owner-account",
+            accountGeneration: 0,
+            hasCloudLocation: false
+        )
+        diagnostics.record(stage: .participantCreate, outcome: .failed,
+                           error: HouseholdError.invitation)
+        diagnostics.finish(outcome: .failed, error: HouseholdError.invitation)
+        XCTAssertNotNil(store.latestInvitationDiagnostics)
+
+        do {
+            _ = try await store.createParentInvitation(name: "Test Parent", avatar: .star)
+            XCTFail("The duplicate parent name must fail before invitation issuance")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .duplicateName)
+        }
+
+        XCTAssertNil(store.latestInvitationDiagnostics)
+        XCTAssertTrue(diagnostics.events.isEmpty)
     }
 
     func testFailedOwnerMembershipTraceRetainsFirstFailureComparisonAndPreConversionError() async throws {
@@ -117,6 +167,10 @@ final class InvitationDiagnosticsTests: XCTestCase {
         let expectedDigest = SHA256.hash(data: Data(rawCloudUser.utf8))
             .map { String(format: "%02x", $0) }.joined()
         XCTAssertTrue(trace.contains("cloudKitUserRecordNameSHA256=\(expectedDigest)"))
+        XCTAssertTrue(trace.contains("stage=invitationDiagnosticPreamble outcome=started"))
+        XCTAssertTrue(trace.contains("stage=invitationDiagnosticIdentityRead outcome=succeeded"))
+        XCTAssertTrue(trace.contains("stage=invitationDiagnosticMembershipLockRead outcome=succeeded"))
+        XCTAssertTrue(trace.contains("branch=readOnlyPreambleRequiresOwnerReconciliation"))
         XCTAssertTrue(trace.contains("expected.householdID=\(householdID.uuidString)"))
         XCTAssertTrue(trace.contains("expected.memberProfileID=\(parent.id.uuidString)"))
         XCTAssertTrue(trace.contains("expected.role=parent"))
@@ -140,6 +194,168 @@ final class InvitationDiagnosticsTests: XCTestCase {
         XCTAssertFalse(trace.contains(originalLock.attemptID.uuidString))
         XCTAssertFalse(trace.contains(try XCTUnwrap(originalLock.claimBinding)))
         XCTAssertFalse(trace.contains(wrongAuthority))
+    }
+
+    func testPruningFailureRetainsReadOnlyPreambleIdentityLockAndComparison() async throws {
+        let server = TestCloudServer()
+        let diagnostics = FamilyTransitionDiagnostics()
+        let rawCloudUser = "private-cloud-user-record-name"
+        let transport = TestTransport(
+            server: server,
+            account: rawCloudUser,
+            familyTransitionDiagnostics: diagnostics
+        )
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let parent = try XCTUnwrap(store.selectedMember)
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+        let householdID = try XCTUnwrap(store.household?.id)
+        let lock = try XCTUnwrap(server.accountMembershipLocks[rawCloudUser])
+        transport.invitationValidationTimeError = CKError(.networkFailure)
+
+        do {
+            _ = try await store.createChildInvitation(memberID: child.id)
+            XCTFail("The pruning validation-time operation must fail")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+            store.recordInvitationErrorBeforePresentation(error)
+        }
+
+        let trace = try XCTUnwrap(store.latestInvitationDiagnostics)
+        let expectedDigest = SHA256.hash(data: Data(rawCloudUser.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        XCTAssertTrue(trace.contains("currentParentMemberID=\(parent.id.uuidString)"))
+        XCTAssertTrue(trace.contains("cloudKitUserRecordNameSHA256=\(expectedDigest)"))
+        XCTAssertTrue(trace.contains("expected.householdID=\(householdID.uuidString)"))
+        XCTAssertTrue(trace.contains("lock.householdID=\(householdID.uuidString)"))
+        XCTAssertTrue(trace.contains("lock.state=active"))
+        XCTAssertTrue(trace.contains("lock.acquisitionNonceRelationship=matches"))
+        XCTAssertTrue(trace.contains("comparison.permitsActiveOwnerReuse=true"))
+        XCTAssertTrue(trace.contains("branch=readOnlyPreambleExactActiveOwnerCandidate"))
+        XCTAssertTrue(trace.contains("firstFailureStage=validationTimeWrite"))
+        XCTAssertTrue(trace.contains(
+            "firstFailureOperation=CKDatabase.modifyRecords.InvitationValidationTime"
+        ))
+        XCTAssertTrue(trace.contains("domain=CKErrorDomain"))
+        XCTAssertTrue(trace.contains("code=\(CKError.Code.networkFailure.rawValue)"))
+        XCTAssertTrue(trace.contains("detail=internalErrorBeforeUserFacingConversion"))
+        XCTAssertEqual(transport.invitationAccessCreationCalls, 0)
+        XCTAssertFalse(trace.contains(rawCloudUser))
+        XCTAssertFalse(trace.contains(lock.attemptID.uuidString))
+        XCTAssertFalse(trace.contains(try XCTUnwrap(lock.claimBinding)))
+    }
+
+    func testLocalClaimConflictRecordsTypedComparisonBeforeFailureBranch() async throws {
+        let server = TestCloudServer()
+        let diagnostics = FamilyTransitionDiagnostics()
+        let transport = TestTransport(
+            server: server,
+            account: "owner-account",
+            familyTransitionDiagnostics: diagnostics
+        )
+        let repository = try HouseholdRepository(inMemory: true)
+        let store = try HouseholdStore(
+            repository: repository,
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+
+        let rawConflictingBinding = "raw-conflicting-local-claim-binding"
+        var conflictingSession = store.session
+        conflictingSession.accountMembershipClaimBinding = rawConflictingBinding
+        try repository.commit(facts: [], session: conflictingSession)
+        let reopened = try HouseholdStore(
+            repository: repository,
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        do {
+            _ = try await reopened.createChildInvitation(memberID: child.id)
+            XCTFail("The local claim-binding mismatch must fail before share creation")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
+            reopened.recordInvitationErrorBeforePresentation(error)
+        }
+
+        let trace = try XCTUnwrap(reopened.latestInvitationDiagnostics)
+        let comparison = try XCTUnwrap(
+            trace.range(of: "compare.session.claimBinding_eq_derivedBinding=false")?.lowerBound
+        )
+        let branch = try XCTUnwrap(trace.range(of: "branch=localClaimBindingConflict")?.lowerBound)
+        XCTAssertLessThan(comparison, branch)
+        XCTAssertTrue(trace.contains("firstFailureStage=ownerMembershipValidation"))
+        XCTAssertTrue(trace.contains(
+            "firstFailureOperation=HouseholdStore.reconcileAccountMembershipLock"
+        ))
+        XCTAssertTrue(trace.contains("detail=internalErrorBeforeUserFacingConversion"))
+        XCTAssertEqual(transport.invitationAccessCreationCalls, 0)
+        XCTAssertFalse(trace.contains(rawConflictingBinding))
+    }
+
+    func testOwnerGuardFailureIsTheFirstCausalStageAfterShareFetch() async throws {
+        let server = TestCloudServer()
+        let diagnostics = FamilyTransitionDiagnostics()
+        let account = "owner-account"
+        let transport = TestTransport(
+            server: server,
+            account: account,
+            familyTransitionDiagnostics: diagnostics
+        )
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+        let location = try XCTUnwrap(store.session.location)
+        let originalZone = try XCTUnwrap(server.zones[location.zoneName])
+        var nonOwnerZone = TestCloudServer.Zone(
+            householdID: originalZone.householdID,
+            name: originalZone.name,
+            owner: "different-owner"
+        )
+        nonOwnerZone.participants = originalZone.participants.union([account])
+        nonOwnerZone.pendingInvitationParticipants = originalZone.pendingInvitationParticipants
+        nonOwnerZone.claimedInvitationAccounts = originalZone.claimedInvitationAccounts
+        nonOwnerZone.facts = originalZone.facts
+        nonOwnerZone.shareExists = true
+        server.zones[location.zoneName] = nonOwnerZone
+
+        do {
+            _ = try await store.createChildInvitation(memberID: child.id)
+            XCTFail("The invitation access owner guard must reject the operation")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitationOwnerRequired)
+            store.recordInvitationErrorBeforePresentation(error)
+        }
+
+        let trace = try XCTUnwrap(store.latestInvitationDiagnostics)
+        XCTAssertTrue(trace.contains("stage=shareFetch outcome=succeeded"))
+        XCTAssertTrue(trace.contains("stage=invitationAccessOwnerValidation outcome=failed"))
+        XCTAssertTrue(trace.contains("firstFailureStage=invitationAccessOwnerValidation"))
+        XCTAssertTrue(trace.contains(
+            "firstFailureOperation=CloudKitHouseholdTransport.createInvitationAccess.ownerGuard"
+        ))
+        XCTAssertTrue(trace.contains("kind:household,case:invitationOwnerRequired"))
+        XCTAssertEqual(transport.invitationAccessCreationCalls, 1)
     }
 
     func testAllowListedTraceRecursivelyRendersCloudErrorsWithoutSecretMetadata() throws {
