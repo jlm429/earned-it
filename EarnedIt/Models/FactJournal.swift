@@ -142,6 +142,12 @@ enum FamilyDeletionNoticeState: String, Codable, Equatable {
     case acknowledged
 }
 
+struct OwnerConnectionBootstrap: Codable, Equatable {
+    let householdID: UUID
+    let attemptID: UUID
+    let participantID: String
+}
+
 struct DeviceSession: Codable, Equatable {
     var deviceID = UUID()
     var householdID: UUID?
@@ -157,8 +163,10 @@ struct DeviceSession: Codable, Equatable {
     var pendingInvitationPackage: PendingInvitationPackage?
     var accountMembershipLockAttemptID: UUID?
     var accountMembershipClaimBinding: String?
+    var ownerConnectionBootstrap: OwnerConnectionBootstrap?
     var lastJoinReceipt: LastJoinReceipt?
     var familyAccessLost: Bool?
     var pendingFamilyDeletion: Bool?
     var familyDeletionNoticeState: FamilyDeletionNoticeState?
+    var accountDataResetProgress: AccountDataResetProgress?
 }

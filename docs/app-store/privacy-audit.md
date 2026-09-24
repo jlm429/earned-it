@@ -1,6 +1,6 @@
 # Privacy Implementation Audit
 
-Audit date: September 16, 2026.
+Audit date: September 24, 2026.
 
 ## Implementation findings
 
@@ -14,15 +14,15 @@ Audit date: September 16, 2026.
 | Camera | VisionKit's data scanner reads Earned It QR invitations. The app declares `NSCameraUsageDescription`, does not retain images, and offers manual code/link entry. |
 | Notifications | No user-notification framework, permission request, or push-notification entitlement was found. Synchronization is foreground/local-change/pull-to-refresh driven. |
 | Other protected APIs | No location, contacts, photos, microphone, speech, health, motion, HomeKit, Bluetooth, NFC, calendar, or biometric access was found. |
-| Local data | SwiftData stores family facts and a device session in Application Support. Debug UI tests use a separate Documents store only under `DEBUG`. |
-| iCloud data | Family facts use the owner's private CloudKit zone and invited participants' shared database. Private account-membership records bind the iCloud participant to one household membership. |
+| Local data | SwiftData stores family facts and a device session in Application Support. Debug UI tests use a separate Documents store only under `DEBUG`. Account-wide deletion clears the journal, current and historical stores, the app cache, and the app's UserDefaults domain after cloud cleanup completes. |
+| iCloud data | Family facts use the owner's private CloudKit zone and invited participants' shared database. Private account-membership and validation records bind the iCloud participant to one household membership. Public lifecycle records prevent deleted families from being restored as active. |
 | Identifiers | The journal contains generated household, member, device, record, invitation, and CloudKit participant identifiers. It does not request an advertising identifier. |
-| Logging | No `print`, `NSLog`, `os_log`, or `Logger` calls were found in application source. |
-| Required-reason APIs | The app creates its Application Support directory with `FileManager`, but does not use the covered file-timestamp, system-boot-time, disk-space, or user-defaults APIs identified in source. |
+| Logging | Family-transition diagnostics use unified logging with allow-listed comparison results and CloudKit error metadata. The app has no logging backend or third-party telemetry. |
+| Required-reason APIs | Account-wide deletion clears the app's own UserDefaults domain. `PrivacyInfo.xcprivacy` declares UserDefaults reason `CA92.1`. The app does not use the covered file-timestamp, system-boot-time, or disk-space APIs identified in source. |
 
 ## Privacy manifest
 
-`EarnedIt/PrivacyInfo.xcprivacy` declares no tracking domains and no required-reason API access. It declares the data types that the app retains off device through CloudKit for app functionality:
+`EarnedIt/PrivacyInfo.xcprivacy` declares no tracking domains and declares UserDefaults reason `CA92.1`. It declares the data types that the app retains off device through CloudKit for app functionality:
 
 - names;
 - other financial information for optional allowance amounts;

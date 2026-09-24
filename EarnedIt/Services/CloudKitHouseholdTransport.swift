@@ -11,6 +11,11 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     private let accountMembershipRecordType = "AccountMembershipLock"
     private let accountMembershipRecordName = "current-membership"
     private let familyLifecycleRecordType = "FamilyLifecycleAuthority"
+    private static let accountPrivateResetRecordTypes = [
+        "AccountMembershipLock",
+        "AccountMembershipValidationTime",
+        "InvitationValidationTime"
+    ]
     private(set) var accountGeneration: UInt64 = 0
     let familyTransitionDiagnostics: FamilyTransitionDiagnostics
 
@@ -27,6 +32,136 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     func participantID() async throws -> String {
         guard try await container.accountStatus() == .available else { throw HouseholdError.cloudUnavailable }
         return try await container.userRecordID().recordName
+    }
+
+    func accountDataResetTargets(
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [CloudAccountResetTarget] {
+        try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+        var targets: [CloudAccountResetTarget] = []
+
+        for zone in try await container.privateCloudDatabase.allRecordZones() {
+            guard isEarnedItZone(zone.zoneID) else { continue }
+            targets.append(.ownedZone(CloudResetZone(
+                zoneName: zone.zoneID.zoneName,
+                ownerName: zone.zoneID.ownerName
+            )))
+        }
+        try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+
+        for zone in try await container.sharedCloudDatabase.allRecordZones() {
+            guard isEarnedItZone(zone.zoneID) else { continue }
+            targets.append(.sharedParticipation(CloudResetZone(
+                zoneName: zone.zoneID.zoneName,
+                ownerName: zone.zoneID.ownerName
+            )))
+        }
+        try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+
+        for recordType in Self.accountPrivateResetRecordTypes where recordType != accountMembershipRecordType {
+            let records = try await resetRecords(
+                recordType: recordType,
+                predicate: NSPredicate(format: "TRUEPREDICATE"),
+                database: container.privateCloudDatabase,
+                zoneID: .default
+            )
+            targets += records.map {
+                .privateRecord(recordType: recordType, recordName: $0.recordID.recordName)
+            }
+            try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+        }
+        let membershipRecordID = CKRecord.ID(recordName: accountMembershipRecordName, zoneID: .default)
+        do {
+            let record = try await container.privateCloudDatabase.record(for: membershipRecordID)
+            guard record.recordType == accountMembershipRecordType else { throw HouseholdError.malformedData }
+            targets.append(.privateRecord(
+                recordType: accountMembershipRecordType,
+                recordName: accountMembershipRecordName
+            ))
+        } catch let error as CKError where Self.isRecordMissing(error, recordID: membershipRecordID) {
+        }
+
+        let creator = CKRecord.Reference(
+            recordID: CKRecord.ID(recordName: expectedParticipantID),
+            action: .none
+        )
+        let publicRecords = try await resetRecords(
+            recordType: familyLifecycleRecordType,
+            predicate: NSPredicate(
+                format: "%K == %@",
+                CKRecord.SystemFieldKey.creatorUserRecordID,
+                creator
+            ),
+            database: container.publicCloudDatabase,
+            zoneID: .default
+        )
+        targets += publicRecords.compactMap { record in
+            guard record.creatorUserRecordID?.recordName == expectedParticipantID else { return nil }
+            return .publicRecord(
+                recordType: familyLifecycleRecordType,
+                recordName: record.recordID.recordName
+            )
+        }
+        try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+        return CloudAccountResetTarget.ordered(targets)
+    }
+
+    func deleteAccountDataResetTarget(
+        _ target: CloudAccountResetTarget,
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws {
+        try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+        switch target {
+        case .ownedZone(let zone):
+            let zoneID = CKRecordZone.ID(zoneName: zone.zoneName, ownerName: zone.ownerName)
+            guard isEarnedItZone(zoneID) else { throw HouseholdError.permission }
+            do {
+                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+                _ = try await container.privateCloudDatabase.deleteRecordZone(withID: zoneID)
+            } catch let error as CKError where [.unknownItem, .zoneNotFound, .userDeletedZone].contains(error.code) {
+                break
+            }
+        case .sharedParticipation(let zone):
+            let zoneID = CKRecordZone.ID(zoneName: zone.zoneName, ownerName: zone.ownerName)
+            guard isEarnedItZone(zoneID) else { throw HouseholdError.permission }
+            let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID)
+            do {
+                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+                _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID)
+            } catch let error as CKError where [.unknownItem, .zoneNotFound, .permissionFailure].contains(error.code) {
+                break
+            }
+        case .privateRecord(let recordType, let recordName):
+            guard Self.accountPrivateResetRecordTypes.contains(recordType) else {
+                throw HouseholdError.permission
+            }
+            let recordID = CKRecord.ID(recordName: recordName, zoneID: .default)
+            do {
+                let record = try await container.privateCloudDatabase.record(for: recordID)
+                guard record.recordType == recordType else { throw HouseholdError.malformedData }
+                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+                _ = try await container.privateCloudDatabase.deleteRecord(withID: recordID)
+            } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
+                break
+            }
+        case .publicRecord(let recordType, let recordName):
+            guard recordType == familyLifecycleRecordType else { throw HouseholdError.permission }
+            let recordID = CKRecord.ID(recordName: recordName, zoneID: .default)
+            do {
+                let record = try await container.publicCloudDatabase.record(for: recordID)
+                guard record.recordType == recordType,
+                      record.creatorUserRecordID?.recordName == expectedParticipantID else {
+                    throw HouseholdError.permission
+                }
+                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+                _ = try await container.publicCloudDatabase.deleteRecord(withID: recordID)
+            } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
+                break
+            }
+        }
+        try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
     }
 
     func accountMembershipLock() async throws -> AccountMembershipLock? {
@@ -1375,10 +1510,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     private func requireAccount(_ expectedParticipantID: String, generation: UInt64) async throws {
-        try Task.checkCancellation()
-        guard accountGeneration == generation,
-              try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
-        try Task.checkCancellation()
+        try await requireAccountForReset(expectedParticipantID, generation: generation)
     }
 
     private func updateAccountMembershipLock(
@@ -1478,6 +1610,44 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
               (record["formatVersion"] as? Int) == 1,
               let payload = record["payload"] as? Data else { throw HouseholdError.malformedData }
         return try JSONDecoder().decode(AccountMembershipLock.self, from: payload)
+    }
+
+    private func resetRecords(
+        recordType: String,
+        predicate: NSPredicate,
+        database: CKDatabase,
+        zoneID: CKRecordZone.ID
+    ) async throws -> [CKRecord] {
+        let query = CKQuery(recordType: recordType, predicate: predicate)
+        var records: [CKRecord] = []
+        do {
+            var page = try await database.records(
+                matching: query,
+                inZoneWith: zoneID,
+                desiredKeys: []
+            )
+            while true {
+                records += try Self.availableResetRecords(page.matchResults.map(\.1))
+                guard let cursor = page.queryCursor else { return records }
+                page = try await database.records(continuingMatchFrom: cursor, desiredKeys: [])
+            }
+        } catch let error as CKError where error.code == .unknownItem {
+            return []
+        }
+    }
+
+    nonisolated static func availableResetRecords(
+        _ results: [Result<CKRecord, Error>]
+    ) throws -> [CKRecord] {
+        try results.compactMap { result in
+            do { return try result.get() }
+            catch let error as CKError where error.code == .unknownItem { return nil }
+        }
+    }
+
+    private func isEarnedItZone(_ zoneID: CKRecordZone.ID) -> Bool {
+        guard zoneID.zoneName.hasPrefix(zonePrefix) else { return false }
+        return UUID(uuidString: String(zoneID.zoneName.dropFirst(zonePrefix.count))) != nil
     }
 
     private func database(for location: CloudLocation) -> CKDatabase {

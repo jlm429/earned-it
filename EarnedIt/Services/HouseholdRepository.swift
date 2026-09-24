@@ -1,13 +1,26 @@
 import Foundation
+import SQLite3
 import SwiftData
 
 @MainActor
 final class HouseholdRepository {
-    let container: ModelContainer
+    private let schema = Schema([StoredFact.self, StoredSession.self])
+    private let storeURL: URL?
+    private let inMemory: Bool
+    private var activeContainer: ModelContainer?
+    var container: ModelContainer {
+        guard let activeContainer else { preconditionFailure("Persistent store is unavailable") }
+        return activeContainer
+    }
     private var context: ModelContext { container.mainContext }
 
     init(url: URL? = nil, inMemory: Bool = false) throws {
-        let schema = Schema([StoredFact.self, StoredSession.self])
+        storeURL = url
+        self.inMemory = inMemory
+        activeContainer = try Self.makeContainer(schema: schema, url: url, inMemory: inMemory)
+    }
+
+    private static func makeContainer(schema: Schema, url: URL?, inMemory: Bool) throws -> ModelContainer {
         let configuration: ModelConfiguration
         if let url {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -15,8 +28,9 @@ final class HouseholdRepository {
         } else {
             configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
         }
-        container = try ModelContainer(for: schema, configurations: [configuration])
-        context.autosaveEnabled = false
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        container.mainContext.autosaveEnabled = false
+        return container
     }
 
     func session() throws -> DeviceSession {
@@ -71,6 +85,11 @@ final class HouseholdRepository {
             }
             if let session {
                 if let stored = try context.fetch(FetchDescriptor<StoredSession>()).first {
+                    let persisted = try JSONDecoder().decode(DeviceSession.self, from: stored.payload)
+                    guard persisted.accountDataResetProgress == nil
+                            || session.accountDataResetProgress != nil else {
+                        throw HouseholdError.pendingChanges
+                    }
                     stored.payload = try JSONEncoder().encode(session)
                 } else {
                     context.insert(try StoredSession(session))
@@ -85,6 +104,7 @@ final class HouseholdRepository {
 
     func clearLocalData(retainingRejected: Bool = false) throws {
         do {
+            try requireNoPendingAccountReset()
             let stored = try context.fetch(FetchDescriptor<StoredFact>())
             let retainedHouseholds = Set(stored.filter { $0.rejectionReason != nil }.map(\.householdID))
             stored.filter { !retainingRejected || !retainedHouseholds.contains($0.householdID) }.forEach(context.delete)
@@ -96,8 +116,40 @@ final class HouseholdRepository {
         }
     }
 
+    func completeAccountDataReset(
+        removingPersistentStoreAuxiliaryArtifacts: () throws -> Void,
+        removingPersistentStoreFile: () throws -> Void
+    ) throws {
+        guard activeContainer != nil else { throw HouseholdError.cloudUnavailable }
+        let persistedSession = try session()
+        guard persistedSession.accountDataResetProgress != nil else {
+            throw HouseholdError.pendingChanges
+        }
+        do {
+            try context.save()
+            if storeURL != nil {
+                self.activeContainer = nil
+                try checkpointPersistentStore()
+            }
+            try removingPersistentStoreAuxiliaryArtifacts()
+            try removingPersistentStoreFile()
+            if storeURL == nil {
+                try activeContainer?.erase()
+                self.activeContainer = nil
+            }
+            self.activeContainer = try Self.makeContainer(schema: schema, url: storeURL, inMemory: inMemory)
+            _ = try session()
+        } catch {
+            if self.activeContainer == nil {
+                self.activeContainer = try? Self.makeContainer(schema: schema, url: storeURL, inMemory: inMemory)
+            }
+            throw error
+        }
+    }
+
     func purgeHouseholdData(householdID: UUID, replacementSession: DeviceSession) throws {
         do {
+            try requireNoPendingAccountReset()
             for stored in try context.fetch(FetchDescriptor<StoredFact>()) where stored.householdID == householdID {
                 context.delete(stored)
             }
@@ -115,6 +167,7 @@ final class HouseholdRepository {
 
     func discardFacts(householdID: UUID, retaining retainedFactIDs: Set<UUID>, updating session: DeviceSession) throws {
         do {
+            try requireNoPendingAccountReset()
             for stored in try context.fetch(FetchDescriptor<StoredFact>())
                 where stored.householdID == householdID && !retainedFactIDs.contains(stored.id) {
                 context.delete(stored)
@@ -128,6 +181,46 @@ final class HouseholdRepository {
         } catch {
             context.rollback()
             throw error
+        }
+    }
+
+    private func requireNoPendingAccountReset() throws {
+        guard let stored = try context.fetch(FetchDescriptor<StoredSession>()).first else { return }
+        let session = try JSONDecoder().decode(DeviceSession.self, from: stored.payload)
+        guard session.accountDataResetProgress == nil else { throw HouseholdError.pendingChanges }
+    }
+
+    private func checkpointPersistentStore() throws {
+        guard let storeURL else { return }
+        var database: OpaquePointer?
+        let openResult = sqlite3_open_v2(
+            storeURL.path,
+            &database,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+        guard openResult == SQLITE_OK, let database else {
+            if let database { sqlite3_close(database) }
+            throw NSError(
+                domain: "HouseholdRepository.SQLite",
+                code: Int(openResult),
+                userInfo: [NSLocalizedDescriptionKey: "The local family journal could not be prepared for deletion."]
+            )
+        }
+        defer { sqlite3_close(database) }
+        let checkpointResult = sqlite3_wal_checkpoint_v2(
+            database,
+            nil,
+            SQLITE_CHECKPOINT_TRUNCATE,
+            nil,
+            nil
+        )
+        guard checkpointResult == SQLITE_OK else {
+            throw NSError(
+                domain: "HouseholdRepository.SQLite",
+                code: Int(checkpointResult),
+                userInfo: [NSLocalizedDescriptionKey: "The local family journal could not be checkpointed for deletion."]
+            )
         }
     }
 }

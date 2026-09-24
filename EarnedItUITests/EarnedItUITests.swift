@@ -141,9 +141,10 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.alerts["Family data was deleted"].exists)
     }
 
-    func testOwnerMembershipRecoveryShowsPreciseCopyAndConfirmation() throws {
+    func testOwnerMembershipRecoveryOffersReconnectAndAccountResetConfirmation() throws {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-stale-owner-membership",
+                               "--ui-test-account-reset",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         app.launch()
 
@@ -152,19 +153,104 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS 'owning-parent membership'")
         ).firstMatch.exists)
-        XCTAssertTrue(app.buttons["retry-owner-membership-recovery"].exists)
-        XCTAssertTrue(app.buttons["release-stale-owner-membership"].exists)
+        reveal(app.buttons["retry-owner-membership-recovery"])
+        XCTAssertTrue(app.buttons["retry-owner-membership-recovery"].isHittable)
+        reveal(app.buttons["release-stale-owner-membership"])
+        XCTAssertTrue(app.buttons["release-stale-owner-membership"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'ask a parent'")).firstMatch.exists)
         keepScreenshot("owner-membership-recovery-largest-text")
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
 
-        tap("release-stale-owner-membership")
-        XCTAssertTrue(app.staticTexts["Release This Membership?"].waitForExistence(timeout: 5))
+        tap("delete-all-earned-it-data")
+        XCTAssertTrue(app.staticTexts["Delete All Earned It Data?"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS 'does not delete family data'")
+            NSPredicate(format: "label == 'This permanently deletes your Earned It family data, membership, invitations, and local app data from iCloud and this device. This cannot be undone.'")
         ).firstMatch.exists)
-        XCTAssertTrue(app.buttons["Release My Membership"].exists)
-        keepScreenshot("owner-membership-release-confirmation")
+        XCTAssertTrue(app.buttons["Delete All Earned It Data"].exists)
+        keepScreenshot("owner-membership-account-reset-confirmation")
+        app.alerts["Delete All Earned It Data?"].buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("owner-membership-recovery-required").exists)
+
+        relaunch(largeType: true)
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("owner-membership-recovery-required").exists)
+    }
+
+    func testMembershipRecoveryProgressKeepsReconnectAndResetReachable() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset",
+                               "--ui-test-membership-recovery-progress", "--ui-test-account-reset",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("membership-recovery-progress").waitForExistence(timeout: 8))
+        reveal(app.buttons["retry-membership-recovery-progress"])
+        XCTAssertTrue(app.buttons["retry-membership-recovery-progress"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+
+        tap("delete-all-earned-it-data")
+        let alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+    }
+
+    func testRecoveryAndStartupFailureResetsReturnToWelcome() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-family-access-lost",
+                               "--ui-test-account-reset",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("family-access-ended").waitForExistence(timeout: 8))
+        reveal(app.buttons["retry-family-access"])
+        XCTAssertTrue(app.buttons["retry-family-access"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
+
+        tap("delete-all-earned-it-data")
+        var alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+
+        tap("welcome-settings")
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        reveal(app.buttons["delete-all-earned-it-data"])
+        tap("delete-all-earned-it-data")
+        alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Delete All Earned It Data"].tap()
+
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.navigationBars["Settings"].exists)
+
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-startup-failure",
+                               "--ui-test-account-reset",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("startup-failure-recovery").waitForExistence(timeout: 8))
+        reveal(app.buttons["retry-open-family-data"])
+        XCTAssertTrue(app.buttons["retry-open-family-data"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
+
+        tap("delete-all-earned-it-data")
+        alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(
+            format: "label == 'This permanently deletes your Earned It family data, membership, invitations, and local app data from iCloud and this device. This cannot be undone.'"
+        )).firstMatch.exists)
+        alert.buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("startup-failure-recovery").exists)
     }
 
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {

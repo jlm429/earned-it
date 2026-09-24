@@ -22,21 +22,26 @@ struct HouseholdSettingsView: View {
                         .accessibilityIdentifier("save-family-name")
                 }
             }
-            Section("Family dates") {
-                LabeledContent("Time zone", value: store.household?.timeZoneID ?? "Not set")
-                Text("Lists and history always use this family timezone, even when a device travels.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("This Device") {
-                SyncStatusView()
-                Text(store.session.location == nil
-                     ? "This family is saved only on this device. Invite a family member from Manage Family to begin sharing."
-                     : "Disconnect removes this family from this device. Other family devices keep their data, and you can reconnect later.")
-                Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
-                    confirmingReset = true
+            if store.household != nil {
+                Section("Family dates") {
+                    LabeledContent("Time zone", value: store.household?.timeZoneID ?? "Not set")
+                    Text("Lists and history always use this family timezone, even when a device travels.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                .disabled(deletingFamily || store.session.pendingFamilyDeletion == true)
-                .accessibilityIdentifier("clear-all-data")
+                Section("This Device") {
+                    SyncStatusView()
+                    Text(store.session.location == nil
+                         ? "This family is saved only on this device. Invite a family member from Manage Family to begin sharing."
+                         : "Disconnect removes this family from this device. Other family devices keep their data, and you can reconnect later.")
+                    if store.selectedMember?.role == .parent {
+                        Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
+                            confirmingReset = true
+                        }
+                        .disabled(deletingFamily || store.isDeletingAllEarnedItData
+                            || store.session.pendingFamilyDeletion == true)
+                        .accessibilityIdentifier("clear-all-data")
+                    }
+                }
             }
             if store.canDeleteFamily {
                 Section {
@@ -44,13 +49,22 @@ struct HouseholdSettingsView: View {
                     Button("Delete Family and Cloud Data", role: .destructive) {
                         confirmingFamilyDeletion = true
                     }
-                    .disabled(deletingFamily)
+                    .disabled(deletingFamily || store.isDeletingAllEarnedItData)
                     .accessibilityIdentifier("delete-family")
                     if deletingFamily { ProgressView("Deleting family…") }
                 } header: {
                     Text("Delete Family")
                 } footer: {
                     Text("Only the family creator can permanently delete the family for everyone.")
+                }
+            }
+            Section("Delete All Data") {
+                Text("This removes every Earned It family you own, your membership in shared families, account records, and local app data.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                DeleteAllEarnedItDataButton()
+                if store.isDeletingAllEarnedItData {
+                    ProgressView("Deleting data…")
                 }
             }
             Section("About") {
