@@ -1,6 +1,6 @@
 # Earned It Privacy Policy
 
-Effective date: September 16, 2026
+Effective date: September 24, 2026
 
 Earned It is a shared chore app for families. It is free and contains no ads, behavioral analytics, or cross-app tracking.
 
@@ -21,7 +21,7 @@ Earned It does not ask for an email address, phone number, postal address, preci
 
 The app keeps a local journal on each device. A family can initially exist only on one device.
 
-When family sharing is enabled, Earned It sends the family journal to Apple's CloudKit service. The data is kept in the family owner's private iCloud database and made available through Apple's shared database only to invited participants. Earned It uses CloudKit for app functionality, synchronization, invitation acceptance, membership recovery, and access management.
+When family sharing is enabled, Earned It sends the family journal to Apple's CloudKit service. The data is kept in the family owner's private iCloud database and made available through Apple's shared database only to invited participants. Earned It also keeps account membership and validation records in the current person's private CloudKit database and an owner lifecycle record in the public database. Earned It uses CloudKit for app functionality, synchronization, invitation acceptance, membership recovery, access management, and deletion.
 
 The developer does not operate a separate server that receives the family's chore data. Apple processes iCloud data under Apple's agreements and privacy policies.
 
@@ -45,9 +45,13 @@ Family history is retained so the app can preserve past assignments, progress, a
 
 On a family that has never enabled sharing, a parent can choose **Delete All Local Data** in Settings. This removes that family's local data from the device and cannot be undone.
 
-On a shared installation, a parent can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner can revoke invited access. The creating parent can instead choose **Delete Family and Cloud Data** after two confirmations to permanently remove the shared family's facts, invitations, and share from iCloud and remove that family from connected installations. Removing the app from a device removes its local app data according to iOS behavior but does not perform this permanent family deletion.
+On a shared installation, a person can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner can revoke invited access.
 
-Earned It does not provide a developer-operated account or server-side deletion portal. The CloudKit family owner manages the shared family and its participants in the app. Apple also provides controls for iCloud data through the person's Apple account and services.
+Every installation and role can choose **Delete All Earned It Data**. After one explicit confirmation, Earned It permanently removes every unambiguously Earned It household zone owned by the current iCloud account, this account's Earned It private membership and validation records, public Earned It lifecycle records created by this account, and local app data. For a participant, the action relinquishes the current account's shared access where CloudKit permits it. It does not delete another account's household zone or other participants' data. Cloud cleanup must succeed before local family data is cleared. A failed or interrupted deletion remains pending for retry and is not reported as complete.
+
+Removing the app from a device removes its local app data according to iOS behavior but does not perform the account-wide CloudKit deletion.
+
+Earned It does not provide a developer-operated account or server-side deletion portal. Each person initiates deletion for the currently authenticated iCloud account in the app. Apple also provides controls for iCloud data through the person's Apple account and services.
 
 ## Children's privacy
 
