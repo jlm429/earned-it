@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct FamilyInvitationView: View {
     @Environment(HouseholdStore.self) private var store
@@ -26,7 +27,18 @@ struct FamilyInvitationView: View {
             }
             .alert("Unable to Create Invitation", isPresented: Binding(
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
-            )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }
+            )) {
+                if store.latestInvitationDiagnostics != nil {
+                    Button("Copy Diagnostics") { copyDiagnostics() }
+                        .accessibilityIdentifier("copy-invitation-diagnostics")
+                } else {
+                    Button("Diagnostics Unavailable") {}
+                        .disabled(true)
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "Please try again.")
+            }
         }
     }
 
@@ -145,7 +157,15 @@ struct FamilyInvitationView: View {
                 } else if role == .parent {
                     issued = try await store.createParentInvitation(name: parentName, avatar: parentAvatar)
                 }
-            } catch { errorMessage = error.localizedDescription }
+            } catch {
+                store.recordInvitationErrorBeforePresentation(error)
+                errorMessage = error.localizedDescription
+            }
         }
+    }
+
+    private func copyDiagnostics() {
+        guard let diagnostics = store.latestInvitationDiagnostics else { return }
+        UIPasteboard.general.string = diagnostics
     }
 }
