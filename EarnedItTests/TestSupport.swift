@@ -533,7 +533,21 @@ final class TestTransport: HouseholdTransport {
             throw HouseholdError.wrongAccount
         }
         if let existing = server.lifecycleAuthorities[householdID] {
-            guard existing.creator == account, existing.lastModifier == account else {
+            let comparison = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: existing.state.rawValue,
+                creatorParticipantID: existing.creator,
+                modifierParticipantID: existing.lastModifier,
+                ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: account)
+            )
+            familyTransitionDiagnostics.recordLifecycleAuthority(
+                attempt: 1,
+                phase: .existingFetch,
+                result: comparison.isAccepted ? .recordAccepted : .recordRejected,
+                comparison: comparison
+            )
+            guard comparison.isAccepted else {
                 familyTransitionDiagnostics.record(stage: .lifecycleAuthorityPrepare, outcome: .failed,
                                                     householdID: householdID,
                                                     error: HouseholdError.accountMembershipConflict)
@@ -543,12 +557,32 @@ final class TestTransport: HouseholdTransport {
                                                 householdID: householdID)
             return existing.state
         }
+        familyTransitionDiagnostics.recordLifecycleAuthority(
+            attempt: 1,
+            phase: .existingFetch,
+            result: .recordAbsent
+        )
         guard accountGeneration == generation else { throw HouseholdError.wrongAccount }
         lifecycleMutationEnqueues += 1
         server.lifecycleAuthorities[householdID] = TestCloudServer.LifecycleAuthority(
             state: .active,
             creator: account,
             lastModifier: account
+        )
+        let comparison = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+            recordTypeMatches: true,
+            formatVersion: 1,
+            rawState: FamilyLifecycleState.active.rawValue,
+            creatorParticipantID: account,
+            modifierParticipantID: account,
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: account)
+        )
+        familyTransitionDiagnostics.recordLifecycleAuthority(
+            attempt: 1,
+            phase: .verificationFetch,
+            result: .recordAccepted,
+            comparison: comparison,
+            stateMatchesRequested: true
         )
         familyTransitionDiagnostics.record(stage: .lifecycleAuthorityPrepare, outcome: .succeeded,
                                             householdID: householdID)

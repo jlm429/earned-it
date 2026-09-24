@@ -218,6 +218,7 @@ final class InvitationDiagnosticsTests: XCTestCase {
         try await store.connect()
         let householdID = try XCTUnwrap(store.household?.id)
         let lock = try XCTUnwrap(server.accountMembershipLocks[rawCloudUser])
+        transport.invitationValidationTimeFailures = 1
         transport.invitationValidationTimeError = CKError(.networkFailure)
 
         do {
@@ -430,6 +431,191 @@ final class InvitationDiagnosticsTests: XCTestCase {
         XCTAssertFalse(trace.contains(rawOwnerAuthority))
         XCTAssertFalse(trace.contains(invitationSecret))
         XCTAssertFalse(trace.contains(shareURL))
+    }
+
+    func testLifecycleAuthorityComparisonRequiresExactCreatorAndModifier() {
+        let account = "current-owner-account"
+        let expectedBinding = AccountMembershipBinding.ownerAuthority(participantID: account)
+        let accepted = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+            recordTypeMatches: true,
+            formatVersion: 1,
+            rawState: FamilyLifecycleState.active.rawValue,
+            creatorParticipantID: account,
+            modifierParticipantID: account,
+            ownerAuthorityBinding: expectedBinding
+        )
+
+        XCTAssertTrue(accepted.isAccepted)
+        XCTAssertEqual(accepted.state, .active)
+        XCTAssertEqual(accepted.creatorMatchesCurrentAccount, true)
+        XCTAssertEqual(accepted.modifierMatchesCurrentAccount, true)
+
+        let rejected = [
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: false,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorParticipantID: account,
+                modifierParticipantID: account,
+                ownerAuthorityBinding: expectedBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 2,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorParticipantID: account,
+                modifierParticipantID: account,
+                ownerAuthorityBinding: expectedBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: "unknown-state",
+                creatorParticipantID: account,
+                modifierParticipantID: account,
+                ownerAuthorityBinding: expectedBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorParticipantID: nil,
+                modifierParticipantID: account,
+                ownerAuthorityBinding: expectedBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorParticipantID: "foreign-account",
+                modifierParticipantID: account,
+                ownerAuthorityBinding: expectedBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorParticipantID: account,
+                modifierParticipantID: nil,
+                ownerAuthorityBinding: expectedBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorParticipantID: account,
+                modifierParticipantID: "foreign-account",
+                ownerAuthorityBinding: expectedBinding
+            )
+        ]
+
+        XCTAssertTrue(rejected.allSatisfy { !$0.isAccepted })
+    }
+
+    func testLifecycleAuthorityFailureTraceIncludesLoadBearingComparisonWithoutRawIdentity() async throws {
+        let server = TestCloudServer()
+        let diagnostics = FamilyTransitionDiagnostics()
+        let account = "raw-current-owner-account"
+        let foreignModifier = "raw-foreign-modifier-account"
+        let transport = TestTransport(
+            server: server,
+            account: account,
+            familyTransitionDiagnostics: diagnostics
+        )
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        let householdID = try XCTUnwrap(store.household?.id)
+        server.lifecycleAuthorities[householdID] = .init(
+            state: .active,
+            creator: account,
+            lastModifier: foreignModifier
+        )
+
+        do {
+            _ = try await store.createChildInvitation(memberID: child.id)
+            XCTFail("A foreign lifecycle modifier must fail before share creation")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
+            store.recordInvitationErrorBeforePresentation(error)
+        }
+
+        let trace = try XCTUnwrap(store.latestInvitationDiagnostics)
+        XCTAssertTrue(trace.contains("traceFormat=EarnedItInvitationIssuance/2"))
+        XCTAssertTrue(trace.contains("detail=lifecycleAuthorityComparison"))
+        XCTAssertTrue(trace.contains("lifecycle.attempt=1"))
+        XCTAssertTrue(trace.contains("lifecycle.phase=existingFetch"))
+        XCTAssertTrue(trace.contains("lifecycle.result=recordRejected"))
+        XCTAssertTrue(trace.contains("lifecycle.recordTypeMatches=true"))
+        XCTAssertTrue(trace.contains("lifecycle.formatVersionMatches=true"))
+        XCTAssertTrue(trace.contains("lifecycle.state=active"))
+        XCTAssertTrue(trace.contains("lifecycle.creatorPresent=true"))
+        XCTAssertTrue(trace.contains("lifecycle.creatorMatchesCurrentAccount=true"))
+        XCTAssertTrue(trace.contains("lifecycle.modifierPresent=true"))
+        XCTAssertTrue(trace.contains("lifecycle.modifierMatchesCurrentAccount=false"))
+        XCTAssertTrue(trace.contains("lifecycle.recordAccepted=false"))
+        XCTAssertTrue(trace.contains("firstFailureStage=lifecycleAuthorityPrepare"))
+        XCTAssertEqual(transport.invitationAccessCreationCalls, 0)
+        XCTAssertFalse(trace.contains(account))
+        XCTAssertFalse(trace.contains(foreignModifier))
+    }
+
+    func testLifecycleAuthorityRetryTraceRetainsCaughtCloudErrorsAndExhaustion() throws {
+        let diagnostics = FamilyTransitionDiagnostics()
+        let householdID = UUID()
+        let rawAccount = "raw-owner-account"
+        let rawRecordName = "raw-lifecycle-record-name"
+        diagnostics.beginInvitation(
+            householdID: householdID,
+            currentParentMemberID: UUID(),
+            targetMemberID: UUID(),
+            targetRole: .child,
+            localAttemptID: UUID(),
+            localParticipantID: rawAccount,
+            accountGeneration: 0,
+            hasCloudLocation: false
+        )
+        let recordID = CKRecord.ID(recordName: rawRecordName)
+        let missing = CKError(.partialFailure, userInfo: [
+            CKPartialErrorsByItemIDKey: [recordID: CKError(.unknownItem)]
+        ])
+        for attempt in 1...4 {
+            diagnostics.recordLifecycleAuthority(
+                attempt: attempt,
+                phase: .verificationFetch,
+                result: .retryableCloudError,
+                error: missing
+            )
+        }
+        diagnostics.recordLifecycleAuthority(
+            attempt: 4,
+            phase: .terminal,
+            result: .retriesExhausted
+        )
+        diagnostics.record(
+            stage: .lifecycleAuthorityPrepare,
+            outcome: .failed,
+            error: HouseholdError.accountMembershipConflict
+        )
+        diagnostics.recordInternalError(HouseholdError.accountMembershipConflict)
+        diagnostics.finish(outcome: .failed, error: HouseholdError.accountMembershipConflict)
+        diagnostics.recordUserFacingErrorConversion(HouseholdError.accountMembershipConflict)
+
+        let trace = try XCTUnwrap(diagnostics.latestInvitationTrace)
+        XCTAssertEqual(trace.components(separatedBy: "lifecycle.result=retryableCloudError").count - 1, 4)
+        XCTAssertTrue(trace.contains("lifecycle.phase=verificationFetch"))
+        XCTAssertTrue(trace.contains("lifecycle.result=retriesExhausted"))
+        XCTAssertTrue(trace.contains("code=\(CKError.Code.partialFailure.rawValue)"))
+        XCTAssertTrue(trace.contains("code=\(CKError.Code.unknownItem.rawValue)"))
+        XCTAssertTrue(trace.contains("kind:household,case:accountMembershipConflict"))
+        XCTAssertFalse(trace.contains(rawAccount))
+        XCTAssertFalse(trace.contains(rawRecordName))
     }
 
     func testCopyDiagnosticsStateIsUnavailableBeforeAnyInvitationAttempt() throws {

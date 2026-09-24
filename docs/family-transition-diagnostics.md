@@ -33,6 +33,8 @@ The snapshot reports:
 - Child member, child invitation, child claim, child grant-reference, and internally consistent exact-child recovery-binding counts.
 - Exact `CKError.Code`, top-level or partial-item source, grouped item count, and retry-after seconds when CloudKit supplies it.
 
+Invitation trace format 2 also records the lifecycle-authority attempt and fetch or save phase. A fetched record is represented only by typed comparisons for record type, format version, recognized lifecycle state, creator presence and current-account match, modifier presence and current-account match, and requested-state match. Internally retried missing-record or record-conflict errors retain only their allow-listed CloudKit codes and retry timing. The trace never includes the public record name, creator or modifier identifiers, or the opaque owner-authority binding.
+
 An absent or inaccessible value remains unknown rather than being inferred. A lock for another household is the privacy-safe observable for the released Family A candidate when Family A's identity is no longer local.
 
 ## Current physical-device evidence

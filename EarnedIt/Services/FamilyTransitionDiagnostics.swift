@@ -157,6 +157,49 @@ enum InvitationOwnerMembershipBranch: String, Equatable {
     case activateMembershipLock
 }
 
+enum InvitationLifecycleAuthorityPhase: String, Equatable {
+    case existingFetch
+    case save
+    case verificationFetch
+    case terminal
+}
+
+enum InvitationLifecycleAuthorityResult: String, Equatable {
+    case recordAbsent
+    case recordAccepted
+    case recordRejected
+    case retryableCloudError
+    case savedStateMismatch
+    case retriesExhausted
+}
+
+struct InvitationLifecycleAuthorityRecordComparison: Equatable {
+    let recordTypeMatches: Bool
+    let formatVersionMatches: Bool
+    let state: FamilyLifecycleState?
+    let stateRecognized: Bool
+    let creatorPresent: Bool
+    let creatorMatchesCurrentAccount: Bool?
+    let modifierPresent: Bool
+    let modifierMatchesCurrentAccount: Bool?
+
+    var isAccepted: Bool {
+        recordTypeMatches
+            && formatVersionMatches
+            && stateRecognized
+            && creatorMatchesCurrentAccount == true
+            && modifierMatchesCurrentAccount == true
+    }
+}
+
+struct InvitationLifecycleAuthorityObservation: Equatable {
+    let attempt: Int
+    let phase: InvitationLifecycleAuthorityPhase
+    let result: InvitationLifecycleAuthorityResult
+    let comparison: InvitationLifecycleAuthorityRecordComparison?
+    let stateMatchesRequested: Bool?
+}
+
 enum InvitationInternalErrorKind: String, Equatable {
     case household
     case cloudKit
@@ -182,6 +225,7 @@ enum InvitationDiagnosticDetail: Equatable {
     case membershipLock(InvitationMembershipLockSnapshot)
     case ownerComparison(InvitationOwnerMembershipComparison)
     case ownerBranch(InvitationOwnerMembershipBranch, result: String)
+    case lifecycleAuthority(InvitationLifecycleAuthorityObservation)
     case internalError([InvitationInternalErrorComponent])
     case userFacingConversion([InvitationInternalErrorComponent], mapping: String)
 }
@@ -455,6 +499,29 @@ final class FamilyTransitionDiagnostics {
         ))
     }
 
+    func recordLifecycleAuthority(
+        attempt: Int,
+        phase: InvitationLifecycleAuthorityPhase,
+        result: InvitationLifecycleAuthorityResult,
+        comparison: InvitationLifecycleAuthorityRecordComparison? = nil,
+        stateMatchesRequested: Bool? = nil,
+        error: Error? = nil
+    ) {
+        guard isActive, invitationContext != nil else { return }
+        append(event(
+            stage: .lifecycleAuthorityPrepare,
+            outcome: .observed,
+            cloudErrors: error.map(Self.cloudErrors(from:)) ?? [],
+            detail: .lifecycleAuthority(InvitationLifecycleAuthorityObservation(
+                attempt: attempt,
+                phase: phase,
+                result: result,
+                comparison: comparison,
+                stateMatchesRequested: stateMatchesRequested
+            ))
+        ))
+    }
+
     func recordInternalError(_ error: Error) {
         guard invitationContext != nil else { return }
         append(event(
@@ -667,7 +734,7 @@ final class FamilyTransitionDiagnostics {
         let firstFailure = causalFailure ?? completedFailure
         var lines = [
             "Earned It Production Invitation Issuance Trace",
-            "traceFormat=EarnedItInvitationIssuance/1",
+            "traceFormat=EarnedItInvitationIssuance/2",
             "sanitizer=allowListedTypedFields",
             "correlationID=\(context.correlationID.uuidString)",
             "householdID=\(context.householdID.uuidString)",
@@ -794,6 +861,30 @@ final class FamilyTransitionDiagnostics {
                 "branch=\(branch.rawValue)",
                 "branchResult=\(result)"
             ]
+        case .lifecycleAuthority(let observation):
+            var fields = [
+                "detail=lifecycleAuthorityComparison",
+                "lifecycle.attempt=\(observation.attempt)",
+                "lifecycle.phase=\(observation.phase.rawValue)",
+                "lifecycle.result=\(observation.result.rawValue)",
+                "lifecycle.stateMatchesRequested=\(value(observation.stateMatchesRequested))"
+            ]
+            if let comparison = observation.comparison {
+                fields += [
+                    "lifecycle.recordTypeMatches=\(comparison.recordTypeMatches)",
+                    "lifecycle.formatVersionMatches=\(comparison.formatVersionMatches)",
+                    "lifecycle.state=\(comparison.state?.rawValue ?? "unknown")",
+                    "lifecycle.stateRecognized=\(comparison.stateRecognized)",
+                    "lifecycle.creatorPresent=\(comparison.creatorPresent)",
+                    "lifecycle.creatorMatchesCurrentAccount="
+                        + "\(value(comparison.creatorMatchesCurrentAccount))",
+                    "lifecycle.modifierPresent=\(comparison.modifierPresent)",
+                    "lifecycle.modifierMatchesCurrentAccount="
+                        + "\(value(comparison.modifierMatchesCurrentAccount))",
+                    "lifecycle.recordAccepted=\(comparison.isAccepted)"
+                ]
+            }
+            return fields
         case .internalError(let components):
             return ["detail=internalErrorBeforeRethrow"] + internalErrorFields(components)
         case .userFacingConversion(let components, let mapping):
