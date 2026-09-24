@@ -27,10 +27,16 @@ private extension XCTestCase {
 
 final class TestAccountLocalDataResetter: AccountLocalDataResetting {
     private(set) var clearCount = 0
+    private(set) var activeStoreClearCount = 0
     var error: Error?
 
     func clearNonJournalData() throws {
         clearCount += 1
+        if let error { throw error }
+    }
+
+    func clearActiveStoreArtifacts() throws {
+        activeStoreClearCount += 1
         if let error { throw error }
     }
 }
@@ -94,6 +100,7 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertNotNil(server.zones["Other-\(unrelatedID.uuidString)"])
         XCTAssertNotNil(server.zones["EarnedIt-not-a-uuid"])
         XCTAssertEqual(resetter.clearCount, 1)
+        XCTAssertEqual(resetter.activeStoreClearCount, 1)
     }
 
     func testParticipantResetDeletesOnlyParticipantPrivateStateAndRelinquishesShare() async throws {
@@ -300,6 +307,51 @@ final class AccountDataResetTests: XCTestCase {
         }
     }
 
+    func testResetExcludesConcurrentMembershipMutationAndPublishesDurableReceipt() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let repository = try HouseholdRepository(inMemory: true)
+        let store = try HouseholdStore(repository: repository, transport: transport, automaticSync: false)
+        let staleSession = store.session
+        server.accountMembershipLocks["owner"] = AccountMembershipLock(
+            householdID: UUID(),
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .now,
+            claimBinding: "stale"
+        )
+        let gate = TestSuspensionGate()
+        transport.beforeAccountResetDeletion = { await gate.wait() }
+
+        let reset = Task { try await store.deleteAllEarnedItData() }
+        while !gate.isWaiting { await Task.yield() }
+
+        XCTAssertNotNil(store.session.accountDataResetProgress)
+        await XCTAssertThrowsErrorAsync(
+            try await store.reconcileAccountMembershipLock(),
+            expected: .pendingChanges
+        )
+        XCTAssertThrowsError(try repository.commit(facts: [], session: staleSession)) { error in
+            XCTAssertEqual(error as? HouseholdError, .pendingChanges)
+        }
+
+        gate.resume()
+        try await reset.value
+        XCTAssertNil(store.session.accountDataResetProgress)
+    }
+
+    func testResetRecordResultsKeepSuccessfulRecordsWhenAnotherRecordDisappears() throws {
+        let recordID = CKRecord.ID(recordName: "surviving")
+        let record = CKRecord(recordType: "AccountMembershipValidationTime", recordID: recordID)
+
+        let records = try CloudKitHouseholdTransport.availableResetRecords([
+            .success(record),
+            .failure(CKError(.unknownItem))
+        ])
+
+        XCTAssertEqual(records.map(\.recordID), [recordID])
+    }
+
     func testOrphanedOfflineChildCanResetRelaunchAndJoinFreshFamilyWithoutResurrection() async throws {
         let server = TestCloudServer()
         let parentResetter = TestAccountLocalDataResetter()
@@ -410,9 +462,21 @@ final class AccountDataResetTests: XCTestCase {
             documents.appending(path: "isolated-ui-tests.store"),
             caches.appending(path: "cached-profile")
         ]
+        let activeStore = support.appending(path: "shared-household-v1.store")
+        let activeArtifacts = [
+            activeStore,
+            URL(fileURLWithPath: activeStore.path + "-wal"),
+            URL(fileURLWithPath: activeStore.path + "-shm"),
+            URL(fileURLWithPath: activeStore.path + "_SUPPORT", isDirectory: true)
+        ]
         for artifact in artifacts {
             try Data("artifact".utf8).write(to: artifact)
         }
+        for artifact in activeArtifacts.dropLast() {
+            try Data("active".utf8).write(to: artifact)
+        }
+        try FileManager.default.createDirectory(at: try XCTUnwrap(activeArtifacts.last),
+                                                withIntermediateDirectories: true)
         let suiteName = "AccountDataResetTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.set("receipt", forKey: "recovery-receipt")
@@ -421,12 +485,18 @@ final class AccountDataResetTests: XCTestCase {
             documentsDirectory: documents,
             cachesDirectory: caches,
             bundleIdentifier: suiteName,
-            userDefaults: defaults
+            userDefaults: defaults,
+            activeStoreURL: activeStore
         )
 
         try resetter.clearNonJournalData()
 
         XCTAssertTrue(artifacts.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        XCTAssertTrue(activeArtifacts.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
         XCTAssertNil(defaults.object(forKey: "recovery-receipt"))
+
+        try resetter.clearActiveStoreArtifacts()
+
+        XCTAssertTrue(activeArtifacts.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
     }
 }

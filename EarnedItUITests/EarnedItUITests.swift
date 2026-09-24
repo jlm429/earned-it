@@ -144,6 +144,7 @@ final class EarnedItUITests: XCTestCase {
     func testOwnerMembershipRecoveryOffersReconnectAndAccountResetConfirmation() throws {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-stale-owner-membership",
+                               "--ui-test-account-reset",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         app.launch()
 
@@ -167,6 +168,13 @@ final class EarnedItUITests: XCTestCase {
         ).firstMatch.exists)
         XCTAssertTrue(app.buttons["Delete All Earned It Data"].exists)
         keepScreenshot("owner-membership-account-reset-confirmation")
+        app.alerts["Delete All Earned It Data?"].buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("owner-membership-recovery-required").exists)
+
+        relaunch(largeType: true)
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("owner-membership-recovery-required").exists)
     }
 
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {

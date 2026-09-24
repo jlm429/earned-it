@@ -55,10 +55,12 @@ struct AccountDataResetProgress: Codable, Equatable {
 
 protocol AccountLocalDataResetting {
     func clearNonJournalData() throws
+    func clearActiveStoreArtifacts() throws
 }
 
 struct NoOpAccountLocalDataResetter: AccountLocalDataResetting {
     func clearNonJournalData() throws {}
+    func clearActiveStoreArtifacts() throws {}
 }
 
 struct AppAccountLocalDataResetter: AccountLocalDataResetting {
@@ -68,6 +70,7 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
     let bundleIdentifier: String?
     let userDefaults: UserDefaults
     let fileManager: FileManager
+    let activeStoreURL: URL
 
     init(
         applicationSupportDirectory: URL = .applicationSupportDirectory,
@@ -75,7 +78,8 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
         cachesDirectory: URL = .cachesDirectory,
         bundleIdentifier: String? = Bundle.main.bundleIdentifier,
         userDefaults: UserDefaults = .standard,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        activeStoreURL: URL? = nil
     ) {
         self.applicationSupportDirectory = applicationSupportDirectory
         self.documentsDirectory = documentsDirectory
@@ -83,6 +87,8 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
         self.bundleIdentifier = bundleIdentifier
         self.userDefaults = userDefaults
         self.fileManager = fileManager
+        self.activeStoreURL = activeStoreURL
+            ?? applicationSupportDirectory.appending(path: "shared-household-v1.store")
     }
 
     func clearNonJournalData() throws {
@@ -91,7 +97,7 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
             documentsDirectory.appending(path: "isolated-ui-tests.store"),
             documentsDirectory.appending(path: "shared-household-ui-tests.store")
         ]
-        for store in obsoleteStores {
+        for store in obsoleteStores where store.standardizedFileURL != activeStoreURL.standardizedFileURL {
             for artifact in Self.storeArtifacts(for: store) where fileManager.fileExists(atPath: artifact.path) {
                 try fileManager.removeItem(at: artifact)
             }
@@ -109,6 +115,13 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
         }
     }
 
+    func clearActiveStoreArtifacts() throws {
+        for artifact in Self.storeArtifacts(for: activeStoreURL)
+            where fileManager.fileExists(atPath: artifact.path) {
+            try fileManager.removeItem(at: artifact)
+        }
+    }
+
     private static func storeArtifacts(for store: URL) -> [URL] {
         [
             store,
@@ -123,12 +136,12 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
 final class AccountDataResetCoordinator {
     private static let maximumVerificationPasses = 4
     private let repository: HouseholdRepository
-    private let transport: any HouseholdTransport
+    private let transport: any AccountDataResetCloudBoundary
     private let localDataResetter: any AccountLocalDataResetting
 
     init(
         repository: HouseholdRepository,
-        transport: any HouseholdTransport,
+        transport: any AccountDataResetCloudBoundary,
         localDataResetter: any AccountLocalDataResetting
     ) {
         self.repository = repository
@@ -136,7 +149,7 @@ final class AccountDataResetCoordinator {
         self.localDataResetter = localDataResetter
     }
 
-    func run() async throws {
+    func run(progressDidPersist: (DeviceSession) -> Void) async throws {
         var session = try repository.session()
         var progress: AccountDataResetProgress
         if let pending = session.accountDataResetProgress {
@@ -149,6 +162,7 @@ final class AccountDataResetCoordinator {
             session.accountDataResetProgress = progress
             try repository.commit(facts: [], session: session)
         }
+        progressDidPersist(session)
 
         let generation = transport.accountGeneration
         try await requireExpectedAccount(progress.expectedParticipantID, generation: generation)
@@ -160,7 +174,7 @@ final class AccountDataResetCoordinator {
                     expectedAccountGeneration: generation
                 )
                 progress.remainingTargets = CloudAccountResetTarget.ordered(discovered)
-                try persist(progress)
+                progressDidPersist(try persist(progress))
             }
 
             while let target = progress.remainingTargets?.first {
@@ -170,19 +184,19 @@ final class AccountDataResetCoordinator {
                     expectedAccountGeneration: generation
                 )
                 progress.remainingTargets?.removeFirst()
-                try persist(progress)
+                progressDidPersist(try persist(progress))
             }
 
             progress.completedDiscoveryPasses += 1
             progress.remainingTargets = nil
-            try persist(progress)
+            progressDidPersist(try persist(progress))
             let remaining = try await transport.accountDataResetTargets(
                 expectedParticipantID: progress.expectedParticipantID,
                 expectedAccountGeneration: generation
             )
             guard !remaining.isEmpty else { break }
             progress.remainingTargets = CloudAccountResetTarget.ordered(remaining)
-            try persist(progress)
+            progressDidPersist(try persist(progress))
             guard progress.completedDiscoveryPasses < Self.maximumVerificationPasses else {
                 throw HouseholdError.cloudUnavailable
             }
@@ -190,10 +204,12 @@ final class AccountDataResetCoordinator {
 
         try await requireExpectedAccount(progress.expectedParticipantID, generation: generation)
         try localDataResetter.clearNonJournalData()
-        try repository.completeAccountDataReset()
+        try repository.completeAccountDataReset {
+            try localDataResetter.clearActiveStoreArtifacts()
+        }
     }
 
-    private func persist(_ progress: AccountDataResetProgress) throws {
+    private func persist(_ progress: AccountDataResetProgress) throws -> DeviceSession {
         var session = try repository.session()
         guard let current = session.accountDataResetProgress,
               current.expectedParticipantID == progress.expectedParticipantID else {
@@ -201,6 +217,7 @@ final class AccountDataResetCoordinator {
         }
         session.accountDataResetProgress = progress
         try repository.commit(facts: [], session: session)
+        return session
     }
 
     private func requireExpectedAccount(_ participantID: String, generation: UInt64) async throws {
@@ -211,3 +228,30 @@ final class AccountDataResetCoordinator {
         try Task.checkCancellation()
     }
 }
+
+#if DEBUG
+@MainActor
+final class UITestAccountDataResetCloudBoundary: AccountDataResetCloudBoundary {
+    let accountGeneration: UInt64 = 0
+
+    func participantID() async throws -> String { "ui-test-account" }
+
+    func accountDataResetTargets(
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [CloudAccountResetTarget] {
+        guard expectedParticipantID == "ui-test-account", expectedAccountGeneration == 0 else {
+            throw HouseholdError.wrongAccount
+        }
+        return []
+    }
+
+    func deleteAccountDataResetTarget(
+        _ target: CloudAccountResetTarget,
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws {
+        throw HouseholdError.cloudUnavailable
+    }
+}
+#endif

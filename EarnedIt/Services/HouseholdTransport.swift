@@ -34,18 +34,23 @@ enum AccountMembershipLockReleaseReason {
     case ownerSelfRelease
 }
 
-/// Production uses the same boundary exercised by the in-memory server in tests.
 @MainActor
-protocol HouseholdTransport {
-    var familyTransitionDiagnostics: FamilyTransitionDiagnostics { get }
+protocol AccountDataResetCloudBoundary {
     var accountGeneration: UInt64 { get }
-    func accountDidChange()
     func participantID() async throws -> String
     func accountDataResetTargets(expectedParticipantID: String,
                                  expectedAccountGeneration: UInt64) async throws -> [CloudAccountResetTarget]
     func deleteAccountDataResetTarget(_ target: CloudAccountResetTarget,
                                       expectedParticipantID: String,
                                       expectedAccountGeneration: UInt64) async throws
+}
+
+/// Production uses the same boundary exercised by the in-memory server in tests.
+@MainActor
+protocol HouseholdTransport: AccountDataResetCloudBoundary {
+    var familyTransitionDiagnostics: FamilyTransitionDiagnostics { get }
+    var accountGeneration: UInt64 { get }
+    func accountDidChange()
     func accountMembershipLock() async throws -> AccountMembershipLock?
     func accountMembershipValidationTime(clientTime: Date) async throws -> Date
     func acquireAccountMembershipLock(householdID: UUID, attemptID: UUID,

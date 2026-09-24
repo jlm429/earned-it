@@ -1628,12 +1628,21 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 desiredKeys: []
             )
             while true {
-                for (_, result) in page.matchResults { records.append(try result.get()) }
+                records += try Self.availableResetRecords(page.matchResults.map(\.1))
                 guard let cursor = page.queryCursor else { return records }
                 page = try await database.records(continuingMatchFrom: cursor, desiredKeys: [])
             }
         } catch let error as CKError where error.code == .unknownItem {
             return []
+        }
+    }
+
+    nonisolated static func availableResetRecords(
+        _ results: [Result<CKRecord, Error>]
+    ) throws -> [CKRecord] {
+        try results.compactMap { result in
+            do { return try result.get() }
+            catch let error as CKError where error.code == .unknownItem { return nil }
         }
     }
 

@@ -46,11 +46,11 @@ struct RootView: View {
                 }
                 .accessibilityIdentifier("account-data-reset-progress")
             } else if store.hasPendingInvitationPackage {
-                ContentUnavailableView {
-                    Label("Finish Joining Your Family", systemImage: "person.crop.circle.badge.checkmark")
-                } description: {
-                    Text("Follow any Apple confirmation to connect to your family. Earned It keeps this invitation so you can finish without entering the code again.")
-                } actions: {
+                ScrollableUnavailableView(
+                    title: "Finish Joining Your Family",
+                    systemImage: "person.crop.circle.badge.checkmark",
+                    description: "Follow any Apple confirmation to connect to your family. Earned It keeps this invitation so you can finish without entering the code again."
+                ) {
                     if store.isJoiningInvitation {
                         ProgressView("Connecting to your family…")
                     } else {
@@ -62,6 +62,7 @@ struct RootView: View {
                         }
                         .accessibilityIdentifier("continue-invitation")
                     }
+                    DeleteAllEarnedItDataButton()
                 }
                 .accessibilityIdentifier("pending-invitation-screen")
                 .onAppear { store.recordJoinRootRoute(.pendingInvitation) }
@@ -220,7 +221,9 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
-            guard !readOnlyPreflightMode, url.scheme == "earnedit-invitation" else { return }
+            guard !readOnlyPreflightMode, !store.hasPendingAccountDataReset,
+                  !store.isDeletingAllEarnedItData,
+                  url.scheme == "earnedit-invitation" else { return }
             Task {
                 do { try await store.redeemInvitation(url.absoluteString) }
                 catch { store.errorMessage = error.localizedDescription }
@@ -267,8 +270,12 @@ struct RootView: View {
     }
 
     private func acceptInvitation() async {
-        guard !readOnlyPreflightMode, !store.isJoiningInvitation,
-              let metadata = invitations.pending else { return }
+        guard !readOnlyPreflightMode else { return }
+        if store.hasPendingAccountDataReset || store.isDeletingAllEarnedItData {
+            invitations.pending = nil
+            return
+        }
+        guard !store.isJoiningInvitation, let metadata = invitations.pending else { return }
         invitations.pending = nil
         await store.accept(metadata: metadata)
     }

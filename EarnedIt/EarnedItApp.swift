@@ -64,10 +64,14 @@ struct EarnedItApp: App {
             transport = CloudKitHouseholdTransport()
             #endif
             #if DEBUG
+            let resetBoundary: (any AccountDataResetCloudBoundary)? = isUITest
+                && arguments.contains("--ui-test-account-reset")
+                ? UITestAccountDataResetCloudBoundary() : nil
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
                 clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
                 automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight,
-                localDataResetter: AppAccountLocalDataResetter())
+                localDataResetter: AppAccountLocalDataResetter(activeStoreURL: url),
+                accountDataResetCloudBoundary: resetBoundary)
             if !readOnlyPreflight { try WeeklyUITestFixture.prepare(initialStore) }
             if !readOnlyPreflight && isUITest
                 && arguments.contains("--ui-test-stale-owner-membership") {
@@ -77,7 +81,7 @@ struct EarnedItApp: App {
             let initialStore = try HouseholdStore(
                 repository: repository,
                 transport: transport,
-                localDataResetter: AppAccountLocalDataResetter()
+                localDataResetter: AppAccountLocalDataResetter(activeStoreURL: url)
             )
             #endif
             _store = State(initialValue: initialStore)

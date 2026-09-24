@@ -35,8 +35,8 @@ CloudKit does not give a participant authority to delete the owner's private zon
 2. **Discover.** It rechecks participant and generation, enumerates exact owner and shared zones, queries the historical private-record allow-list, and queries public lifecycle records by creator. The deterministically ordered target plan is persisted.
 3. **Delete and checkpoint.** Targets are processed in order: owned zones, shared participation, public records, then private records. After each successful deletion, the target is removed from the persisted plan. Exact record or zone not-found is success. Record type and public creator are checked before individual deletion.
 4. **Verify absence.** The coordinator repeats full discovery after the target plan is exhausted. It cannot report success while a target remains. Up to four verification passes bound eventual-consistency retries. A still-visible target or a real CloudKit error leaves the receipt and remaining targets intact and surfaces a retryable error.
-5. **Clear nonjournal local state.** Only after an empty cloud discovery pass does the app remove known historical stores and sidecars, app cache contents, the app's UserDefaults domain, and in-memory diagnostic receipts.
-6. **Commit clean local state.** One SwiftData save deletes all `StoredFact` and `StoredSession` rows and inserts a new empty `DeviceSession`. This removes the reset receipt only in the same successful transaction that clears the current journal.
+5. **Clear nonjournal local state.** Only after an empty cloud discovery pass does the app remove obsolete historical stores and sidecars, app cache contents, the app's UserDefaults domain, and in-memory diagnostic receipts.
+6. **Replace the active journal.** SwiftData erases the active container, the repository releases it, and the resetter removes `shared-household-v1.store`, its WAL and SHM sidecars, and its support directory before opening a clean replacement store. The container erase removes the receipt with the current journal as the final local transaction, and the replacement contains only a new empty `DeviceSession`.
 7. **Navigate.** The observable store reloads as an empty installation and the root route becomes Welcome.
 
 If the app terminates or a deletion fails, startup sees the receipt before membership recovery and resumes the same coordinator. Cloud cleanup always precedes final local cleanup. Local cleanup steps are idempotent, so an interruption between them can safely retry. A CloudKit account notification, participant mismatch, or generation change fails with `wrongAccount` before further deletion and preserves the receipt. Switching back to the bound account permits a new generation-safe retry.
@@ -50,11 +50,12 @@ A stale offline installation can retain an old local journal, but it cannot recr
 ## UI and accessibility
 
 - Settings contains the same destructive action for owner parents, invited parents, children, unselected profiles, and a clean Welcome installation.
+- The pending Apple invitation-verification route is scrollable and retains the same destructive action.
 - Recovery screens always retain `Try Reconnecting` and add `Delete All Earned It Data`. A reconnect failure never starts reset automatically.
 - A pending reset has a dedicated progress route. It retries on launch and offers `Retry Deletion` after an error.
 - The confirmation is one system alert with a destructive button and Cancel. There is no phrase entry or second confirmation.
 - Stable accessibility identifiers cover the destructive action, retry action, recovery actions, and progress route.
-- Child navigation now exposes Settings without granting any parent-only editing permission.
+- Child navigation exposes Settings and the account-wide reset without exposing the parent-only local disconnect control.
 
 ## CloudKit safety properties
 
@@ -109,10 +110,10 @@ The reset's creator query also depends on the Production query index in step 4. 
 | Offline then online | Discovery fails offline, retains progress, and succeeds after retry. |
 | Stale local data | Cloud cleanup is verified before current journal and session data are atomically cleared. |
 | Fresh installation and relaunch | An empty repository remains at Welcome after server reset and repeated recovery checks. |
-| Recovery invocation | The same `HouseholdStore.deleteAllEarnedItData()` and coordinator are used from recovery and Settings. |
+| Recovery invocation | The recovery UI confirms the action through an injected non-Production cloud boundary, reaches Welcome, and remains there after relaunch. |
 | Account change | Participant or generation changes fail closed and retain the reset receipt. |
 | No resurrection and orphan sequence | A connected parent deletes while the child is offline; child reconnect fails without recreating the zone; child resets; Welcome survives relaunch; child accepts a fresh invitation into a new family. |
-| Historical local artifacts | Known store files and sidecars, cache contents, and the bundle preference domain are removed. |
+| Historical local artifacts | Known historical and active store files, sidecars, support directories, cache contents, and the bundle preference domain are removed through the managed store lifecycle. |
 
 The focused recovery UI flow verifies both recovery actions, the exact confirmation copy, accessibility descriptions, and large Dynamic Type. Real signed two-account CloudKit behavior still requires the device procedure below.
 
@@ -129,7 +130,7 @@ For the orphan sequence, keep the child offline while the old parent resets. Bri
 
 Validation used one explicitly booted iPhone 17e simulator with parallel testing disabled:
 
-- `AccountDataResetTests`: 10 tests passed, including owner, participant, interruption, offline retry, identity changes, historical local artifacts, and the full orphan sequence.
+- `AccountDataResetTests`: 12 tests passed, including owner, participant, interruption, offline retry, identity changes, mutation exclusion, historical local artifacts, and the full orphan sequence.
 - Focused recovery UI flow: 1 test passed, verifying both recovery actions and the exact destructive confirmation at an accessibility text size.
 - Complete `EarnedItCI` suite: 306 tests passed with 0 failures.
 - Release simulator build: succeeded. Release device-family metadata, build-number semantics, and App Store profile entitlement semantics all passed their repository validation scripts.

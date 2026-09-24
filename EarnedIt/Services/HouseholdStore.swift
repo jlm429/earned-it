@@ -6,6 +6,8 @@ import UIKit
 @MainActor
 @Observable
 final class HouseholdStore {
+    @TaskLocal private static var cloudMutationToken: UUID?
+
     private struct StaleOwnerMembershipReleaseCandidate {
         let lock: AccountMembershipLock
         let participantID: String
@@ -40,14 +42,22 @@ final class HouseholdStore {
     private var syncAgain = false
     private var facts: [HouseholdFact] = []
     private var staleOwnerMembershipReleaseCandidate: StaleOwnerMembershipReleaseCandidate?
+    private var activeCloudMutationToken: UUID?
 
     init(repository: HouseholdRepository, transport: (any HouseholdTransport)? = nil,
          clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
          performLocalMigrations: Bool = true,
-         localDataResetter: any AccountLocalDataResetting = NoOpAccountLocalDataResetter()) throws {
+         localDataResetter: any AccountLocalDataResetting = NoOpAccountLocalDataResetter(),
+         accountDataResetCloudBoundary: (any AccountDataResetCloudBoundary)? = nil) throws {
         self.repository = repository
         self.transport = transport
-        accountDataResetCoordinator = transport.map {
+        let resetBoundary: (any AccountDataResetCloudBoundary)?
+        if let accountDataResetCloudBoundary {
+            resetBoundary = accountDataResetCloudBoundary
+        } else {
+            resetBoundary = transport
+        }
+        accountDataResetCoordinator = resetBoundary.map {
             AccountDataResetCoordinator(
                 repository: repository,
                 transport: $0,
@@ -116,23 +126,55 @@ final class HouseholdStore {
     }
 
     func deleteAllEarnedItData() async throws {
-        guard !isSyncing, activeSync == nil else { throw HouseholdError.pendingChanges }
-        guard let accountDataResetCoordinator else { throw HouseholdError.cloudUnavailable }
-        guard !isDeletingAllEarnedItData else { return }
-        isDeletingAllEarnedItData = true
-        isCheckingAccountMembership = false
-        syncTask?.cancel()
-        invitationCleanupTail?.cancel()
-        syncAgain = false
-        defer { isDeletingAllEarnedItData = false }
-        do {
-            try await accountDataResetCoordinator.run()
-            try resetAfterAccountDataReset()
-        } catch {
-            if let persisted = try? repository.session(), persisted.accountDataResetProgress != nil {
-                session = persisted
+        try await withExclusiveCloudMutation(allowPendingReset: true) {
+            guard !isSyncing, activeSync == nil else { throw HouseholdError.pendingChanges }
+            guard let accountDataResetCoordinator else { throw HouseholdError.cloudUnavailable }
+            guard !isDeletingAllEarnedItData else { return }
+            isDeletingAllEarnedItData = true
+            isCheckingAccountMembership = false
+            syncTask?.cancel()
+            invitationCleanupTail?.cancel()
+            ShareAcceptance.shared.pending = nil
+            syncAgain = false
+            defer { isDeletingAllEarnedItData = false }
+            do {
+                try await accountDataResetCoordinator.run { session = $0 }
+                try resetAfterAccountDataReset()
+            } catch {
+                if let persisted = try? repository.session(), persisted.accountDataResetProgress != nil {
+                    session = persisted
+                }
+                throw error
             }
-            throw error
+        }
+    }
+
+    private func withExclusiveCloudMutation<T>(
+        allowPendingReset: Bool = false,
+        _ operation: @MainActor () async throws -> T
+    ) async throws -> T {
+        if let token = Self.cloudMutationToken {
+            guard token == activeCloudMutationToken else { throw HouseholdError.pendingChanges }
+            return try await operation()
+        }
+        guard activeCloudMutationToken == nil,
+              !isDeletingAllEarnedItData,
+              allowPendingReset || !hasPendingAccountDataReset else {
+            throw HouseholdError.pendingChanges
+        }
+        let token = UUID()
+        activeCloudMutationToken = token
+        defer {
+            if activeCloudMutationToken == token { activeCloudMutationToken = nil }
+        }
+        return try await Self.$cloudMutationToken.withValue(token) {
+            try await operation()
+        }
+    }
+
+    private func requireInvitationIngressAllowed() throws {
+        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+            throw HouseholdError.pendingChanges
         }
     }
 
@@ -250,6 +292,7 @@ final class HouseholdStore {
 
     func createFamily(name: String, parentName: String, timeZone: TimeZone = .current) throws {
         today = clock()
+        try requireWriteAccess()
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard !requiresMembershipRecovery else { throw HouseholdError.accountMembershipConflict }
         let name = try validatedName(name)
@@ -558,46 +601,52 @@ final class HouseholdStore {
     }
 
     func createChildInvitation(memberID: UUID) async throws -> IssuedFamilyInvitation {
-        transport?.familyTransitionDiagnostics.clearInvitationAttempt()
-        try requireParent()
-        guard let member = snapshot.member(memberID), member.role == .child,
-              snapshot.isActive(member, on: day) else { throw HouseholdError.permission }
-        return try await issueInvitation(for: member, adding: nil)
+        try await withExclusiveCloudMutation {
+            transport?.familyTransitionDiagnostics.clearInvitationAttempt()
+            try requireParent()
+            guard let member = snapshot.member(memberID), member.role == .child,
+                  snapshot.isActive(member, on: day) else { throw HouseholdError.permission }
+            return try await issueInvitation(for: member, adding: nil)
+        }
     }
 
     func createParentInvitation(name: String, avatar: AvatarOption) async throws -> IssuedFamilyInvitation {
-        transport?.familyTransitionDiagnostics.clearInvitationAttempt()
-        try requireParent()
-        guard let household else { throw HouseholdError.noHousehold }
-        let name = try validatedName(name)
-        guard !snapshot.members.contains(where: {
-            $0.role == .parent && $0.archivedFrom == nil
-                && $0.displayName.localizedCaseInsensitiveCompare(name) == .orderedSame
-        }) else { throw HouseholdError.duplicateName }
-        let member = FamilyMember(id: UUID(), householdID: household.id, displayName: name, role: .parent,
-                                  avatar: avatar, joinedDay: day)
-        return try await issueInvitation(for: member, adding: member)
+        try await withExclusiveCloudMutation {
+            transport?.familyTransitionDiagnostics.clearInvitationAttempt()
+            try requireParent()
+            guard let household else { throw HouseholdError.noHousehold }
+            let name = try validatedName(name)
+            guard !snapshot.members.contains(where: {
+                $0.role == .parent && $0.archivedFrom == nil
+                    && $0.displayName.localizedCaseInsensitiveCompare(name) == .orderedSame
+            }) else { throw HouseholdError.duplicateName }
+            let member = FamilyMember(id: UUID(), householdID: household.id, displayName: name, role: .parent,
+                                      avatar: avatar, joinedDay: day)
+            return try await issueInvitation(for: member, adding: member)
+        }
     }
 
     func revokeInvitation(_ invitation: FamilyInvitation) async throws {
-        try requireParent()
-        guard snapshot.invitation(invitation.id) == invitation,
-              snapshot.invitationClaim(invitation.id)?.deviceID != session.deviceID,
-              let parent = selectedMember, let transport, let location = session.location else {
-            throw HouseholdError.permission
+        try await withExclusiveCloudMutation {
+            try requireParent()
+            guard snapshot.invitation(invitation.id) == invitation,
+                  snapshot.invitationClaim(invitation.id)?.deviceID != session.deviceID,
+                  let parent = selectedMember, let transport, let location = session.location else {
+                throw HouseholdError.permission
+            }
+            try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID, from: location)
+            var bodies: [HouseholdFactBody] = [
+                .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
+                                                           revokedByMemberID: parent.id))
+            ]
+            if snapshot.invitationClaim(invitation.id) == nil, invitation.role == .parent,
+               var unclaimedParent = snapshot.member(invitation.memberID) {
+                unclaimedParent.archivedFrom = day
+                bodies.append(.member(unclaimedParent))
+            }
+            try append(bodies)
+            try await synchronize()
         }
-        try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID, from: location)
-        var bodies: [HouseholdFactBody] = [
-            .invitationRevocation(InvitationRevocation(invitationID: invitation.id,
-                                                       revokedByMemberID: parent.id))
-        ]
-        if snapshot.invitationClaim(invitation.id) == nil, invitation.role == .parent,
-           var unclaimedParent = snapshot.member(invitation.memberID) {
-            unclaimedParent.archivedFrom = day
-            bodies.append(.member(unclaimedParent))
-        }
-        try append(bodies)
-        try await synchronize()
     }
 
     @discardableResult
@@ -874,6 +923,7 @@ final class HouseholdStore {
     }
 
     func connect() async throws {
+        try await withExclusiveCloudMutation {
         try requireParent()
         guard let household, let transport else { throw HouseholdError.cloudUnavailable }
         if session.location != nil {
@@ -978,6 +1028,7 @@ final class HouseholdStore {
         connected.accountMembershipClaimBinding = binding
         try repository.commit(facts: [], session: connected)
         session = connected
+        }
     }
 
     func discoverFamilies() async throws -> [CloudFamily] {
@@ -995,6 +1046,7 @@ final class HouseholdStore {
     }
 
     func recoverOwnerFamily(_ location: CloudLocation) async throws {
+        try await withExclusiveCloudMutation {
         guard session.householdID == nil, location.isOwner else { throw HouseholdError.invitationUnavailable }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
@@ -1068,9 +1120,12 @@ final class HouseholdStore {
         try reload()
         cloudIsReadOnly = false
         syncMessage = "Family connected"
+        }
     }
 
     func join(url: URL) async throws {
+        try await withExclusiveCloudMutation {
+        try requireInvitationIngressAllowed()
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
@@ -1094,9 +1149,12 @@ final class HouseholdStore {
         }
         try await transport.accept(url: url, expected: location)
         try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
+        }
     }
 
     func join(url: URL, invitationCode: String) async throws {
+        try await withExclusiveCloudMutation {
+        try requireInvitationIngressAllowed()
         var components = URLComponents()
         components.scheme = "earnedit-invitation"
         components.host = "join"
@@ -1104,10 +1162,13 @@ final class HouseholdStore {
                                  URLQueryItem(name: "share", value: url.absoluteString)]
         guard let package = components.url else { throw HouseholdError.invitationNotFound }
         try await redeemInvitation(package.absoluteString)
+        }
     }
 
     func redeemInvitation(_ text: String,
                           openShareURL: (URL) async -> Bool = { await UIApplication.shared.open($0) }) async throws {
+        try await withExclusiveCloudMutation {
+        try requireInvitationIngressAllowed()
         guard let credential = InvitationCredential(text: text),
               let digest = InvitationCode.digest(credential.code) else { throw HouseholdError.invitationNotFound }
         guard !isJoiningInvitation else { return }
@@ -1134,6 +1195,7 @@ final class HouseholdStore {
         } else {
             try await redeemCredential(codeDigest: digest, shareURL: nil)
         }
+        }
     }
 
     /// Retry the same package after cold launch, native callback, or interrupted acceptance.
@@ -1141,6 +1203,8 @@ final class HouseholdStore {
     @discardableResult
     func continuePendingInvitation(allowAppleVerification: Bool = false,
                                    openShareURL: (URL) async -> Bool = { await UIApplication.shared.open($0) }) async throws -> Bool {
+        try await withExclusiveCloudMutation {
+        try requireInvitationIngressAllowed()
         guard !isJoiningInvitation, var pending = session.pendingInvitationPackage else { return false }
         if session.lastJoinReceipt == nil { recordJoinReceipt { $0 = LastJoinReceipt() } }
         guard let transport else { throw HouseholdError.cloudUnavailable }
@@ -1163,6 +1227,7 @@ final class HouseholdStore {
             recordJoinFailure(stage: joinFailureStage, error: error, preserveExisting: true)
             try clearTerminalInvitationPackage(after: error)
             throw error
+        }
         }
     }
 
@@ -1234,6 +1299,7 @@ final class HouseholdStore {
 
     func accept(metadata: CKShare.Metadata) async {
         do {
+            try requireInvitationIngressAllowed()
             guard let transport else { throw HouseholdError.cloudUnavailable }
             let location = try transport.invitationLocation(for: metadata)
             try await acceptSystemInvitation(location: location) {
@@ -1243,6 +1309,8 @@ final class HouseholdStore {
     }
 
     func acceptSystemInvitation(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
+        try await withExclusiveCloudMutation {
+        try requireInvitationIngressAllowed()
         if session.lastJoinReceipt == nil { recordJoinReceipt { $0 = LastJoinReceipt() } }
         if let package = session.pendingInvitationPackage {
             guard !isJoiningInvitation else { return }
@@ -1273,6 +1341,7 @@ final class HouseholdStore {
             return
         }
         try await acceptSystemInvitationAccess(location: location, acceptance)
+        }
     }
 
     private func acceptSystemInvitationAccess(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
@@ -1302,6 +1371,8 @@ final class HouseholdStore {
     }
 
     func joinExisting(_ location: CloudLocation) async throws {
+        try await withExclusiveCloudMutation {
+        try requireInvitationIngressAllowed()
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
@@ -1310,6 +1381,7 @@ final class HouseholdStore {
                                                           attemptID: session.accountMembershipLockAttemptID,
                                                           matching: binding)
         try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
+        }
     }
 
     private func redeemPreparedInvitation(codeDigest: String, in location: CloudLocation, participant: String) async throws {
@@ -2271,6 +2343,7 @@ final class HouseholdStore {
     }
 
     func pendingInvitationCleanupDelay() async throws -> TimeInterval? {
+        try await withExclusiveCloudMutation {
         guard let pending = session.pendingInvitationAcceptance else { return nil }
         if pending.phase == .cleanupRequired {
             return Self.pendingInvitationCleanupRetryDelay
@@ -2288,6 +2361,7 @@ final class HouseholdStore {
         } catch let error as CKError where Self.isRetryableInvitationError(error) {
             return Self.pendingInvitationCleanupRetryDelay
         }
+        }
     }
 
     func retryScheduledInvitationCleanup() async throws -> TimeInterval? {
@@ -2304,6 +2378,7 @@ final class HouseholdStore {
     }
 
     func retryInvitationCleanup() async throws {
+        try await withExclusiveCloudMutation {
         let predecessor = invitationCleanupTail
         let cleanup = Task { @MainActor in
             await predecessor?.value
@@ -2315,6 +2390,7 @@ final class HouseholdStore {
             try await cleanup.value
         } onCancel: {
             cleanup.cancel()
+        }
         }
     }
 
@@ -2398,6 +2474,7 @@ final class HouseholdStore {
     }
 
     func reconcileAccountMembershipLock() async throws {
+        try await withExclusiveCloudMutation {
         if session.householdID == nil, session.pendingInvitationAcceptance == nil {
             try await recoverExistingAccountMembership()
             return
@@ -2434,6 +2511,7 @@ final class HouseholdStore {
         try await reconcileAccountMembershipLock(imported: imported, location: location,
                                                   participant: participant,
                                                   expectedAccountGeneration: accountGeneration)
+        }
     }
 
     /// Local absence is a bootstrap condition, never evidence that the account left its family.
@@ -2682,6 +2760,7 @@ final class HouseholdStore {
     }
 
     func releaseStaleOwnerMembership() async throws {
+        try await withExclusiveCloudMutation {
         guard canReleaseStaleOwnerMembership, requiresMembershipRecovery,
               session.householdID == nil, session.pendingInvitationAcceptance == nil,
               let candidate = staleOwnerMembershipReleaseCandidate,
@@ -2719,6 +2798,7 @@ final class HouseholdStore {
         requiresMembershipRecovery = false
         errorMessage = nil
         syncMessage = "Ready to create or join a family"
+        }
     }
 
     private func clearReleasedOwnerMembershipRouting(
@@ -3112,6 +3192,7 @@ final class HouseholdStore {
     }
 
     func synchronize() async throws {
+        try await withExclusiveCloudMutation {
         guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
             throw HouseholdError.pendingChanges
         }
@@ -3120,6 +3201,7 @@ final class HouseholdStore {
         activeSync = task
         defer { activeSync = nil }
         try await task.value
+        }
     }
 
     private func performSynchronization() async throws {
@@ -3239,6 +3321,9 @@ final class HouseholdStore {
 
     func resetLocalData() throws {
         today = clock()
+        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+            throw HouseholdError.pendingChanges
+        }
         guard !isSyncing else { throw HouseholdError.pendingChanges }
         guard session.pendingFamilyDeletion != true else { throw HouseholdError.pendingChanges }
         if !profiles.isEmpty { try PermissionService.requireParent(selectedMember) }
@@ -3265,6 +3350,7 @@ final class HouseholdStore {
     }
 
     func deleteFamily() async throws {
+        try await withExclusiveCloudMutation {
         guard !isSyncing else { throw HouseholdError.pendingChanges }
         guard let actor = selectedMember, actor.role == .parent,
               actor.id == snapshot.creatorMemberID,
@@ -3274,7 +3360,7 @@ final class HouseholdStore {
               let transport else { throw HouseholdError.permission }
         let deviceID = session.deviceID
         let householdID = location.householdID
-        func requireDeletionSession(pending: Bool? = nil) throws {
+        @MainActor func requireDeletionSession(pending: Bool? = nil) throws {
             guard session.deviceID == deviceID,
                   session.householdID == householdID,
                   session.location == location,
@@ -3321,9 +3407,13 @@ final class HouseholdStore {
         syncTask?.cancel()
         try requireDeletionSession(pending: true)
         try purgeDeletedFamily(householdID: householdID)
+        }
     }
 
     func removeUnavailableFamilyFromDevice() throws {
+        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+            throw HouseholdError.pendingChanges
+        }
         guard canRemoveUnavailableFamilyFromDevice else { throw HouseholdError.cloudUnavailable }
         syncTask?.cancel()
         try repository.clearLocalData()

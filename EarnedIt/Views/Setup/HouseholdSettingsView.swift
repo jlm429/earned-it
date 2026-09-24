@@ -30,11 +30,13 @@ struct HouseholdSettingsView: View {
                     Text(store.session.location == nil
                          ? "This family is saved only on this device. Invite a family member from Manage Family to begin sharing."
                          : "Disconnect removes this family from this device. Other family devices keep their data, and you can reconnect later.")
-                    Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
-                        confirmingReset = true
+                    if store.selectedMember?.role == .parent {
+                        Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
+                            confirmingReset = true
+                        }
+                        .disabled(store.isDeletingAllEarnedItData || store.session.pendingFamilyDeletion == true)
+                        .accessibilityIdentifier("clear-all-data")
                     }
-                    .disabled(store.isDeletingAllEarnedItData || store.session.pendingFamilyDeletion == true)
-                    .accessibilityIdentifier("clear-all-data")
                 }
             }
             Section("Delete All Data") {
