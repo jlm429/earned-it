@@ -55,12 +55,14 @@ struct AccountDataResetProgress: Codable, Equatable {
 
 protocol AccountLocalDataResetting {
     func clearNonJournalData() throws
-    func clearActiveStoreArtifacts() throws
+    func clearActiveStoreAuxiliaryArtifacts() throws
+    func clearActiveStoreFile() throws
 }
 
 struct NoOpAccountLocalDataResetter: AccountLocalDataResetting {
     func clearNonJournalData() throws {}
-    func clearActiveStoreArtifacts() throws {}
+    func clearActiveStoreAuxiliaryArtifacts() throws {}
+    func clearActiveStoreFile() throws {}
 }
 
 struct AppAccountLocalDataResetter: AccountLocalDataResetting {
@@ -115,10 +117,16 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
         }
     }
 
-    func clearActiveStoreArtifacts() throws {
-        for artifact in Self.storeArtifacts(for: activeStoreURL)
+    func clearActiveStoreAuxiliaryArtifacts() throws {
+        for artifact in Self.storeArtifacts(for: activeStoreURL).dropFirst()
             where fileManager.fileExists(atPath: artifact.path) {
             try fileManager.removeItem(at: artifact)
+        }
+    }
+
+    func clearActiveStoreFile() throws {
+        if fileManager.fileExists(atPath: activeStoreURL.path) {
+            try fileManager.removeItem(at: activeStoreURL)
         }
     }
 
@@ -204,9 +212,14 @@ final class AccountDataResetCoordinator {
 
         try await requireExpectedAccount(progress.expectedParticipantID, generation: generation)
         try localDataResetter.clearNonJournalData()
-        try repository.completeAccountDataReset {
-            try localDataResetter.clearActiveStoreArtifacts()
-        }
+        try repository.completeAccountDataReset(
+            removingPersistentStoreAuxiliaryArtifacts: {
+                try localDataResetter.clearActiveStoreAuxiliaryArtifacts()
+            },
+            removingPersistentStoreFile: {
+                try localDataResetter.clearActiveStoreFile()
+            }
+        )
     }
 
     private func persist(_ progress: AccountDataResetProgress) throws -> DeviceSession {

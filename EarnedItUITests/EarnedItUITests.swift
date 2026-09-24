@@ -155,6 +155,8 @@ final class EarnedItUITests: XCTestCase {
         ).firstMatch.exists)
         reveal(app.buttons["retry-owner-membership-recovery"])
         XCTAssertTrue(app.buttons["retry-owner-membership-recovery"].isHittable)
+        reveal(app.buttons["release-stale-owner-membership"])
+        XCTAssertTrue(app.buttons["release-stale-owner-membership"].isHittable)
         reveal(app.buttons["delete-all-earned-it-data"])
         XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'ask a parent'")).firstMatch.exists)
@@ -175,6 +177,27 @@ final class EarnedItUITests: XCTestCase {
         relaunch(largeType: true)
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
         XCTAssertFalse(screen("owner-membership-recovery-required").exists)
+    }
+
+    func testMembershipRecoveryProgressKeepsReconnectAndResetReachable() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset",
+                               "--ui-test-membership-recovery-progress", "--ui-test-account-reset",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("membership-recovery-progress").waitForExistence(timeout: 8))
+        reveal(app.buttons["retry-membership-recovery-progress"])
+        XCTAssertTrue(app.buttons["retry-membership-recovery-progress"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+
+        tap("delete-all-earned-it-data")
+        let alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
     }
 
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {

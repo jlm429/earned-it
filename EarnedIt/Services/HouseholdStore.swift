@@ -43,6 +43,8 @@ final class HouseholdStore {
     private var facts: [HouseholdFact] = []
     private var staleOwnerMembershipReleaseCandidate: StaleOwnerMembershipReleaseCandidate?
     private var activeCloudMutationToken: UUID?
+    private var automaticMembershipReconciliationTask: Task<Void, Error>?
+    private var automaticMembershipReconciliationID: UUID?
 
     init(repository: HouseholdRepository, transport: (any HouseholdTransport)? = nil,
          clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
@@ -126,6 +128,7 @@ final class HouseholdStore {
     }
 
     func deleteAllEarnedItData() async throws {
+        await cancelAutomaticMembershipReconciliation()
         try await withExclusiveCloudMutation(allowPendingReset: true) {
             guard !isSyncing, activeSync == nil else { throw HouseholdError.pendingChanges }
             guard let accountDataResetCoordinator else { throw HouseholdError.cloudUnavailable }
@@ -136,7 +139,10 @@ final class HouseholdStore {
             invitationCleanupTail?.cancel()
             ShareAcceptance.shared.pending = nil
             syncAgain = false
-            defer { isDeletingAllEarnedItData = false }
+            defer {
+                ShareAcceptance.shared.pending = nil
+                isDeletingAllEarnedItData = false
+            }
             do {
                 try await accountDataResetCoordinator.run { session = $0 }
                 try resetAfterAccountDataReset()
@@ -146,6 +152,44 @@ final class HouseholdStore {
                 }
                 throw error
             }
+        }
+    }
+
+    func reconcileAccountMembershipLockAutomatically() async throws {
+        if let task = automaticMembershipReconciliationTask {
+            try await task.value
+            return
+        }
+        let id = UUID()
+        let task = Task { try await self.reconcileAccountMembershipLock() }
+        automaticMembershipReconciliationTask = task
+        automaticMembershipReconciliationID = id
+        defer {
+            if automaticMembershipReconciliationID == id {
+                automaticMembershipReconciliationTask = nil
+                automaticMembershipReconciliationID = nil
+            }
+        }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func retryAccountMembershipRecovery() async throws {
+        await cancelAutomaticMembershipReconciliation()
+        try await reconcileAccountMembershipLock()
+    }
+
+    private func cancelAutomaticMembershipReconciliation() async {
+        guard let task = automaticMembershipReconciliationTask else { return }
+        let id = automaticMembershipReconciliationID
+        task.cancel()
+        _ = try? await task.value
+        if automaticMembershipReconciliationID == id {
+            automaticMembershipReconciliationTask = nil
+            automaticMembershipReconciliationID = nil
         }
     }
 
@@ -201,6 +245,13 @@ final class HouseholdStore {
         isCheckingAccountMembership = false
         requiresMembershipRecovery = true
         canReleaseStaleOwnerMembership = true
+    }
+
+    func prepareMembershipRecoveryProgressUITest() {
+        guard session.householdID == nil, session.pendingInvitationAcceptance == nil else { return }
+        isCheckingAccountMembership = true
+        requiresMembershipRecovery = false
+        canReleaseStaleOwnerMembership = false
     }
     #endif
 

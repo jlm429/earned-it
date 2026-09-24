@@ -77,6 +77,10 @@ struct EarnedItApp: App {
                 && arguments.contains("--ui-test-stale-owner-membership") {
                 initialStore.prepareStaleOwnerMembershipRecoveryUITest()
             }
+            if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-membership-recovery-progress") {
+                initialStore.prepareMembershipRecoveryProgressUITest()
+            }
             #else
             let initialStore = try HouseholdStore(
                 repository: repository,

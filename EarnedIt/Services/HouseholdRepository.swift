@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import SwiftData
 
 @MainActor
@@ -115,12 +116,27 @@ final class HouseholdRepository {
         }
     }
 
-    func completeAccountDataReset(removingPersistentStoreArtifacts: () throws -> Void) throws {
+    func completeAccountDataReset(
+        removingPersistentStoreAuxiliaryArtifacts: () throws -> Void,
+        removingPersistentStoreFile: () throws -> Void
+    ) throws {
         guard activeContainer != nil else { throw HouseholdError.cloudUnavailable }
+        let persistedSession = try session()
+        guard persistedSession.accountDataResetProgress != nil else {
+            throw HouseholdError.pendingChanges
+        }
         do {
-            try activeContainer?.erase()
-            self.activeContainer = nil
-            try removingPersistentStoreArtifacts()
+            try context.save()
+            if storeURL != nil {
+                self.activeContainer = nil
+                try checkpointPersistentStore()
+            }
+            try removingPersistentStoreAuxiliaryArtifacts()
+            try removingPersistentStoreFile()
+            if storeURL == nil {
+                try activeContainer?.erase()
+                self.activeContainer = nil
+            }
             self.activeContainer = try Self.makeContainer(schema: schema, url: storeURL, inMemory: inMemory)
             _ = try session()
         } catch {
@@ -172,5 +188,39 @@ final class HouseholdRepository {
         guard let stored = try context.fetch(FetchDescriptor<StoredSession>()).first else { return }
         let session = try JSONDecoder().decode(DeviceSession.self, from: stored.payload)
         guard session.accountDataResetProgress == nil else { throw HouseholdError.pendingChanges }
+    }
+
+    private func checkpointPersistentStore() throws {
+        guard let storeURL else { return }
+        var database: OpaquePointer?
+        let openResult = sqlite3_open_v2(
+            storeURL.path,
+            &database,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX,
+            nil
+        )
+        guard openResult == SQLITE_OK, let database else {
+            if let database { sqlite3_close(database) }
+            throw NSError(
+                domain: "HouseholdRepository.SQLite",
+                code: Int(openResult),
+                userInfo: [NSLocalizedDescriptionKey: "The local family journal could not be prepared for deletion."]
+            )
+        }
+        defer { sqlite3_close(database) }
+        let checkpointResult = sqlite3_wal_checkpoint_v2(
+            database,
+            nil,
+            SQLITE_CHECKPOINT_TRUNCATE,
+            nil,
+            nil
+        )
+        guard checkpointResult == SQLITE_OK else {
+            throw NSError(
+                domain: "HouseholdRepository.SQLite",
+                code: Int(checkpointResult),
+                userInfo: [NSLocalizedDescriptionKey: "The local family journal could not be checkpointed for deletion."]
+            )
+        }
     }
 }

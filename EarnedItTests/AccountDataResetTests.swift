@@ -27,6 +27,7 @@ private extension XCTestCase {
 
 final class TestAccountLocalDataResetter: AccountLocalDataResetting {
     private(set) var clearCount = 0
+    private(set) var activeStoreAuxiliaryClearCount = 0
     private(set) var activeStoreClearCount = 0
     var error: Error?
 
@@ -35,7 +36,12 @@ final class TestAccountLocalDataResetter: AccountLocalDataResetting {
         if let error { throw error }
     }
 
-    func clearActiveStoreArtifacts() throws {
+    func clearActiveStoreAuxiliaryArtifacts() throws {
+        activeStoreAuxiliaryClearCount += 1
+        if let error { throw error }
+    }
+
+    func clearActiveStoreFile() throws {
         activeStoreClearCount += 1
         if let error { throw error }
     }
@@ -100,6 +106,7 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertNotNil(server.zones["Other-\(unrelatedID.uuidString)"])
         XCTAssertNotNil(server.zones["EarnedIt-not-a-uuid"])
         XCTAssertEqual(resetter.clearCount, 1)
+        XCTAssertEqual(resetter.activeStoreAuxiliaryClearCount, 1)
         XCTAssertEqual(resetter.activeStoreClearCount, 1)
     }
 
@@ -340,6 +347,25 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertNil(store.session.accountDataResetProgress)
     }
 
+    func testResetCancelsAutomaticMembershipRecoveryBeforeDeleting() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "account")
+        let repository = try HouseholdRepository(inMemory: true)
+        let store = try HouseholdStore(repository: repository, transport: transport, automaticSync: false)
+        let gate = TestSuspensionGate()
+        transport.afterAccountMembershipLockRead = { await gate.waitForCancellation() }
+
+        let recovery = Task { try await store.reconcileAccountMembershipLockAutomatically() }
+        while !gate.isWaiting { await Task.yield() }
+
+        try await store.deleteAllEarnedItData()
+        _ = try? await recovery.value
+
+        XCTAssertFalse(gate.isWaiting)
+        XCTAssertFalse(store.hasPendingAccountDataReset)
+        XCTAssertNil(store.household)
+    }
+
     func testResetRecordResultsKeepSuccessfulRecordsWhenAnotherRecordDisappears() throws {
         let recordID = CKRecord.ID(recordName: "surviving")
         let record = CKRecord(recordType: "AccountMembershipValidationTime", recordID: recordID)
@@ -495,8 +521,62 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertTrue(activeArtifacts.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
         XCTAssertNil(defaults.object(forKey: "recovery-receipt"))
 
-        try resetter.clearActiveStoreArtifacts()
+        try resetter.clearActiveStoreAuxiliaryArtifacts()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeStore.path))
+        XCTAssertTrue(activeArtifacts.dropFirst().allSatisfy {
+            !FileManager.default.fileExists(atPath: $0.path)
+        })
+
+        try resetter.clearActiveStoreFile()
 
         XCTAssertTrue(activeArtifacts.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    func testActiveStoreTeardownRetainsReceiptUntilMainStoreRemoval() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "active-store-reset-\(UUID())")
+        let storeURL = root.appending(path: "shared-household-v1.store")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let repository = try HouseholdRepository(url: storeURL)
+        var session = try repository.session()
+        session.accountDataResetProgress = AccountDataResetProgress(expectedParticipantID: "account")
+        try repository.commit(facts: [], session: session)
+        let removalError = NSError(domain: "AccountDataResetTests", code: 1)
+
+        XCTAssertThrowsError(try repository.completeAccountDataReset(
+            removingPersistentStoreAuxiliaryArtifacts: {
+                XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
+                throw removalError
+            },
+            removingPersistentStoreFile: {
+                XCTFail("The receipt-bearing store must remain after auxiliary cleanup fails")
+            }
+        ))
+        XCTAssertNotNil(try repository.session().accountDataResetProgress)
+
+        let resetter = AppAccountLocalDataResetter(
+            applicationSupportDirectory: root,
+            documentsDirectory: root,
+            cachesDirectory: root.appending(path: "Caches"),
+            bundleIdentifier: nil,
+            activeStoreURL: storeURL
+        )
+        var phases: [String] = []
+        try repository.completeAccountDataReset(
+            removingPersistentStoreAuxiliaryArtifacts: {
+                phases.append("auxiliary")
+                XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
+                try resetter.clearActiveStoreAuxiliaryArtifacts()
+            },
+            removingPersistentStoreFile: {
+                phases.append("store")
+                XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
+                try resetter.clearActiveStoreFile()
+            }
+        )
+
+        XCTAssertEqual(phases, ["auxiliary", "store"])
+        XCTAssertNil(try repository.session().accountDataResetProgress)
     }
 }

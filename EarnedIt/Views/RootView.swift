@@ -9,6 +9,7 @@ struct RootView: View {
     @State private var cloudAccountRevision = 0
     @State private var diagnosticPreflightFinished = false
     @State private var diagnosticPreflightAvailable = false
+    @State private var confirmsStaleOwnerRelease = false
 
     var body: some View {
         @Bindable var store = store
@@ -67,9 +68,23 @@ struct RootView: View {
                 .accessibilityIdentifier("pending-invitation-screen")
                 .onAppear { store.recordJoinRootRoute(.pendingInvitation) }
             } else if store.isCheckingAccountMembership && store.household == nil {
-                ProgressView("Reconnecting to your family…")
-                    .accessibilityIdentifier("membership-recovery-progress")
-                    .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
+                ScrollableUnavailableView(
+                    title: "Reconnecting to Your Family",
+                    systemImage: "icloud.and.arrow.down",
+                    description: "Earned It is checking this iCloud account's family membership. You can retry or permanently delete this account's Earned It data."
+                ) {
+                    ProgressView("Reconnecting to your family…")
+                    Button("Try Reconnecting") {
+                        Task {
+                            do { try await store.retryAccountMembershipRecovery() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .accessibilityIdentifier("retry-membership-recovery-progress")
+                    DeleteAllEarnedItDataButton()
+                }
+                .accessibilityIdentifier("membership-recovery-progress")
+                .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.requiresMembershipRecovery && store.canReleaseStaleOwnerMembership
                 && store.household == nil {
                 ScrollableUnavailableView(
@@ -79,11 +94,15 @@ struct RootView: View {
                 ) {
                     Button("Try Reconnecting") {
                         Task {
-                            do { try await store.reconcileAccountMembershipLock() }
+                            do { try await store.retryAccountMembershipRecovery() }
                             catch { store.errorMessage = error.localizedDescription }
                         }
                     }
                     .accessibilityIdentifier("retry-owner-membership-recovery")
+                    Button("Release My Membership", role: .destructive) {
+                        confirmsStaleOwnerRelease = true
+                    }
+                    .accessibilityIdentifier("release-stale-owner-membership")
                     DeleteAllEarnedItDataButton()
                 }
                 .accessibilityIdentifier("owner-membership-recovery-required")
@@ -96,7 +115,7 @@ struct RootView: View {
                 ) {
                     Button("Try Reconnecting") {
                         Task {
-                            do { try await store.reconcileAccountMembershipLock() }
+                            do { try await store.retryAccountMembershipRecovery() }
                             catch { store.errorMessage = error.localizedDescription }
                         }
                     }
@@ -162,6 +181,7 @@ struct RootView: View {
                 diagnosticPreflightFinished = true
                 return
             }
+            if membershipRecoveryProgressUITestMode { return }
             if store.hasPendingAccountDataReset {
                 do { try await store.deleteAllEarnedItData() }
                 catch { store.errorMessage = error.localizedDescription }
@@ -175,7 +195,7 @@ struct RootView: View {
                 return
             }
             do {
-                try await store.reconcileAccountMembershipLock()
+                try await store.reconcileAccountMembershipLockAutomatically()
             }
             catch { store.errorMessage = error.localizedDescription }
             await acceptInvitation()
@@ -267,6 +287,18 @@ struct RootView: View {
         } message: {
             Text("This family was permanently deleted. You can create or join another family.")
         }
+        .confirmationDialog("Release This Membership?", isPresented: $confirmsStaleOwnerRelease,
+                            titleVisibility: .visible) {
+            Button("Release My Membership", role: .destructive) {
+                Task {
+                    do { try await store.releaseStaleOwnerMembership() }
+                    catch { store.errorMessage = error.localizedDescription }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This releases only this iCloud account's stale Earned It membership. It does not delete family data or change anyone else's access.")
+        }
     }
 
     private func acceptInvitation() async {
@@ -298,6 +330,14 @@ struct RootView: View {
 
     private var readOnlyPreflightMode: Bool {
         ownerTransitionPreflightMode || childRecoveryPreflightMode
+    }
+
+    private var membershipRecoveryProgressUITestMode: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--ui-test-membership-recovery-progress")
+        #else
+        false
+        #endif
     }
 }
 

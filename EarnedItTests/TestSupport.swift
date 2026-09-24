@@ -24,6 +24,12 @@ final class TestSuspensionGate {
         continuation = nil
         isWaiting = false
     }
+
+    func waitForCancellation() async {
+        isWaiting = true
+        while !Task.isCancelled { await Task.yield() }
+        isWaiting = false
+    }
 }
 
 @MainActor
