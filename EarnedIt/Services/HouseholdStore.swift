@@ -2181,7 +2181,8 @@ final class HouseholdStore {
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try await reconcileAccountMembershipLock(imported: imported, location: location,
-                                                  participant: participant)
+                                                  participant: participant,
+                                                  expectedAccountGeneration: accountGeneration)
     }
 
     /// Local absence is a bootstrap condition, never evidence that the account left its family.
@@ -2582,8 +2583,12 @@ final class HouseholdStore {
     }
 
     private func reconcileAccountMembershipLock(imported: HouseholdSnapshot, location: CloudLocation,
-                                                participant: String) async throws {
+                                                participant: String,
+                                                expectedAccountGeneration: UInt64) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        guard transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
         if location.isOwner {
             let lifecycleState = try await transport.ensureFamilyLifecycleAuthority(
                 householdID: location.householdID,
@@ -2592,24 +2597,55 @@ final class HouseholdStore {
             guard lifecycleState == .active else { throw HouseholdError.accountMembershipConflict }
         }
         do {
-            if let localAttemptID = session.accountMembershipLockAttemptID {
-                if let currentLock = try await transport.accountMembershipLock() {
-                    guard currentLock.householdID == location.householdID,
-                          currentLock.attemptID == localAttemptID,
-                          currentLock.state != .released else {
-                        throw HouseholdError.accountMembershipConflict
-                    }
-                }
-            }
+            guard transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+            let currentLock = try await transport.accountMembershipLock()
+            guard transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
             guard let binding = try membershipBinding(
                 in: imported,
                 location: location,
                 participant: participant
             ) else {
+                try validateRetainedMembershipAttempt(currentLock, location: location)
                 return
             }
             if let localBinding = session.accountMembershipClaimBinding, localBinding != binding {
                 throw HouseholdError.accountMembershipConflict
+            }
+            if let currentLock {
+                if canReuseActiveOwnerMembership(
+                    currentLock,
+                    binding: binding,
+                    imported: imported,
+                    location: location,
+                    participant: participant
+                ) {
+                    let active = try await transport.activateAccountMembershipLock(
+                        householdID: location.householdID,
+                        attemptID: currentLock.attemptID,
+                        claimBinding: binding,
+                        ownerAuthorityBinding: ownerAuthorityBinding(for: location, participant: participant),
+                        now: clock()
+                    )
+                    guard transport.accountGeneration == expectedAccountGeneration,
+                          try await transport.participantID() == participant,
+                          transport.accountGeneration == expectedAccountGeneration,
+                          session.householdID == location.householdID,
+                          session.location == location,
+                          session.cloudParticipantID == participant else {
+                        throw HouseholdError.wrongAccount
+                    }
+                    guard active == currentLock else { throw HouseholdError.accountMembershipConflict }
+                    if session.accountMembershipLockAttemptID != active.attemptID
+                        || session.accountMembershipClaimBinding != binding {
+                        var updated = session
+                        updated.accountMembershipLockAttemptID = active.attemptID
+                        updated.accountMembershipClaimBinding = binding
+                        try repository.commit(facts: [], session: updated)
+                        session = updated
+                    }
+                    return
+                }
+                try validateRetainedMembershipAttempt(currentLock, location: location)
             }
             let lock = try await acquireAccountMembershipLock(
                 householdID: location.householdID,
@@ -2639,6 +2675,45 @@ final class HouseholdStore {
             cloudIsReadOnly = true
             throw HouseholdError.accountMembershipConflict
         }
+    }
+
+    private func validateRetainedMembershipAttempt(
+        _ lock: AccountMembershipLock?,
+        location: CloudLocation
+    ) throws {
+        guard let lock else { return }
+        guard let localAttemptID = session.accountMembershipLockAttemptID else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        guard lock.householdID == location.householdID,
+              lock.attemptID == localAttemptID,
+              lock.state != .released else {
+            throw HouseholdError.accountMembershipConflict
+        }
+    }
+
+    private func canReuseActiveOwnerMembership(
+        _ lock: AccountMembershipLock,
+        binding: String,
+        imported: HouseholdSnapshot,
+        location: CloudLocation,
+        participant: String
+    ) -> Bool {
+        guard location.isOwner,
+              session.householdID == location.householdID,
+              session.location == location,
+              session.cloudParticipantID == participant,
+              let parent = selectedMember,
+              parent.role == .parent,
+              imported.member(parent.id)?.role == .parent,
+              binding == AccountMembershipBinding.owner(householdID: location.householdID),
+              lock.householdID == location.householdID,
+              lock.state == .active,
+              lock.claimBinding == binding,
+              lock.ownerAuthorityBinding == AccountMembershipBinding.ownerAuthority(participantID: participant) else {
+            return false
+        }
+        return true
     }
 
     private func accessibleFacts(at location: CloudLocation) async throws -> [HouseholdFact]? {
@@ -2722,13 +2797,16 @@ final class HouseholdStore {
         }
         do {
             guard session.pendingFamilyDeletion != true else { throw HouseholdError.permission }
+            let accountGeneration = transport.accountGeneration
             let participant = try await transport.participantID()
-            guard participant == session.cloudParticipantID else { throw HouseholdError.wrongAccount }
+            guard participant == session.cloudParticipantID,
+                  transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
             let remote = try await transport.fetch(from: location)
             try validate(remote, householdID: location.householdID)
             let remoteSnapshot = HouseholdSnapshot(facts: remote)
             try await reconcileAccountMembershipLock(imported: remoteSnapshot, location: location,
-                                                      participant: participant)
+                                                      participant: participant,
+                                                      expectedAccountGeneration: accountGeneration)
             cloudIsReadOnly = try await !transport.canWrite(to: location)
             var updated = session
             updated.cloudCanWrite = !cloudIsReadOnly
