@@ -17,7 +17,7 @@ Current authoritative evidence is in:
 - `EarnedIt/Services/CloudKitHouseholdTransport.swift` for databases, zones, record encodings, shares, and account checks;
 - `EarnedIt/Services/HouseholdTransport.swift` and `EarnedIt/Services/InvitationService.swift` for lock and lifecycle identities;
 - `EarnedIt/Models/Household.swift` for every journal fact body;
-- `EarnedIt/Models/FactJournal.swift` and `EarnedIt/Services/HouseholdRepository.swift` for current local persistence;
+- `EarnedIt/Models/FactJournal.swift`, `EarnedIt/Services/HouseholdRepository.swift`, and `EarnedIt/Services/AccountDataResetCoordinator.swift` for current local persistence and the independent reset receipt;
 - `docs/shared-household-architecture.md` and the production evidence packages under `docs/` for security and recovery behavior;
 - `EarnedItTests/TestSupport.swift`, `EarnedItTests/InvitationTests.swift`, and `EarnedItTests/ProductionCleanupTests.swift` for executable historical and failure-state coverage.
 
@@ -106,6 +106,7 @@ Apple may retain service-level share acceptance, audit, backup, or diagnostic ma
 | `4f933fc` through `636907e` | SwiftData's implicit default store, normally `default.store`, with `-wal`, `-shm`, and support artifacts. Models were `AppSetting`, `DailyRecord`, `ExcusedDay`, `FamilyUser`, and `Responsibility`. | Setup completion and sample/live mode, people and roles, responsibilities, daily outcomes, excuses, allowance and scoring inputs. This predates CloudKit sharing and is incompatible with the journal schema. |
 | `636907e` debug UI tests | Documents `isolated-ui-tests.store` and sidecars. | The same pre-journal models under an isolated UI-test launch. |
 | `1c12a8d` to current | Application Support `shared-household-v1.store`, `shared-household-v1.store-wal`, `shared-household-v1.store-shm`, and `shared-household-v1.store_SUPPORT`. Debug UI tests use the same artifact forms for Documents `shared-household-ui-tests.store`. Models are `StoredFact` and `StoredSession`. SwiftData CloudKit mirroring is explicitly disabled. | The complete local household journal, upload and rejection state, and the encoded device session. |
+| Account-wide reset | `account-data-reset-v1.json` beside the active SwiftData store. | The participant-bound reset receipt, deterministic remaining target plan, and completed verification-pass count. It is written atomically before cloud mutation, remains readable when SwiftData cannot open, and is removed only after verified cloud cleanup and local store-file removal. |
 
 Unit tests have also created temporary `shared-household.store`, `household-test-<UUID>`, `reset-test-<UUID>`, `membership-recovery-<UUID>`, and UUID-named stores under the XCTest temporary directory. Test teardown owns those paths. A production installation cannot safely guess or delete external XCTest temporary paths.
 
@@ -121,9 +122,10 @@ Unit tests have also created temporary `shared-household.store`, `household-test
 - pending invitation acceptance phase, location, participant, retained facts, lock attempt, invitation ID, expiry, and access history;
 - pending invitation package digest, URL, participant, and Apple-verification flag;
 - membership-lock attempt and claim binding;
+- owner connection bootstrap household, attempt, and participant provenance persisted before the first cloud write;
 - `LastJoinReceipt` recovery and refusal evidence;
 - family-access-lost, pending family deletion, and family-deletion notice state;
-- the new durable account-reset participant binding, remaining target list, and verification progress.
+- a mirror of the durable account-reset participant binding, remaining target list, and verification progress when SwiftData is readable.
 
 Other local state includes in-memory household projections, cached profiles, rejected writes, sync status, recovery flags, pending tasks, and invitation diagnostics. `FamilyTransitionDiagnostics` holds an in-memory event buffer and latest sanitized trace. It also writes allow-listed comparison results to Apple's unified logging system. Reset clears the in-process buffer. iOS owns unified log retention, and an app sandbox has no supported API to delete selected historical unified-log entries.
 
@@ -138,6 +140,7 @@ No historical source used `UserDefaults`, `@AppStorage`, Keychain, `SecItem`, an
 | Public database | Every `FamilyLifecycleAuthority` created by the current participant where CloudKit authorizes deletion. |
 | Participant shared database | Every exact Earned It shared-zone participation visible to the current account, by relinquishing access through the zone-wide share reference. |
 | Current local store | Every `StoredFact` and `StoredSession`, replaced atomically by one clean session only after cloud verification. |
+| Independent reset receipt | The `account-data-reset-v1.json` receipt, removed last after cloud verification and active-store deletion. |
 | Historical local stores | Known incompatible and UI-test stores plus SQLite sidecars and support directories inside the app container. |
 | Other local state | Bundle-scoped preferences, app cache contents, in-memory projections, receipts, invitation and recovery state, identifiers, and diagnostic buffers. |
 

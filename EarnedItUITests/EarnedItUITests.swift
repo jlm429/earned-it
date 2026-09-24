@@ -200,7 +200,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
     }
 
-    func testFamilyAccessRecoveryAndWelcomeSettingsResetReturnToWelcome() throws {
+    func testRecoveryAndStartupFailureResetsReturnToWelcome() throws {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-family-access-lost",
                                "--ui-test-account-reset",
@@ -229,6 +229,28 @@ final class EarnedItUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
         XCTAssertFalse(app.navigationBars["Settings"].exists)
+
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-startup-failure",
+                               "--ui-test-account-reset",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+
+        XCTAssertTrue(screen("startup-failure-recovery").waitForExistence(timeout: 8))
+        reveal(app.buttons["retry-open-family-data"])
+        XCTAssertTrue(app.buttons["retry-open-family-data"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
+
+        tap("delete-all-earned-it-data")
+        alert = app.alerts["Delete All Earned It Data?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(
+            format: "label == 'This permanently deletes your Earned It family data, membership, invitations, and local app data from iCloud and this device. This cannot be undone.'"
+        )).firstMatch.exists)
+        alert.buttons["Delete All Earned It Data"].tap()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
+        XCTAssertFalse(screen("startup-failure-recovery").exists)
     }
 
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {

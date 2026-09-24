@@ -65,6 +65,34 @@ struct NoOpAccountLocalDataResetter: AccountLocalDataResetting {
     func clearActiveStoreFile() throws {}
 }
 
+struct FileAccountDataResetJournal {
+    static let fileName = "account-data-reset-v1.json"
+
+    let url: URL
+    let fileManager: FileManager
+
+    init(storeURL: URL, fileManager: FileManager = .default) {
+        url = storeURL.deletingLastPathComponent().appending(path: Self.fileName)
+        self.fileManager = fileManager
+    }
+
+    func progress() throws -> AccountDataResetProgress? {
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(AccountDataResetProgress.self, from: Data(contentsOf: url))
+    }
+
+    func persist(_ progress: AccountDataResetProgress) throws {
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(progress).write(to: url, options: .atomic)
+    }
+
+    func clear() throws {
+        if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+    }
+}
+
 struct AppAccountLocalDataResetter: AccountLocalDataResetting {
     let applicationSupportDirectory: URL
     let documentsDirectory: URL
@@ -141,36 +169,162 @@ struct AppAccountLocalDataResetter: AccountLocalDataResetting {
 }
 
 @MainActor
+protocol AccountDataResetLocalBoundary {
+    func accountDataResetProgress() throws -> AccountDataResetProgress?
+    func persistAccountDataResetProgress(_ progress: AccountDataResetProgress) throws
+    func completeAccountDataReset() throws
+}
+
+@MainActor
+final class RepositoryAccountDataResetLocalBoundary: AccountDataResetLocalBoundary {
+    private let repository: HouseholdRepository
+    private let localDataResetter: any AccountLocalDataResetting
+    private let journal: FileAccountDataResetJournal?
+
+    init(
+        repository: HouseholdRepository,
+        localDataResetter: any AccountLocalDataResetting,
+        journal: FileAccountDataResetJournal?
+    ) {
+        self.repository = repository
+        self.localDataResetter = localDataResetter
+        self.journal = journal
+    }
+
+    func accountDataResetProgress() throws -> AccountDataResetProgress? {
+        var session = try repository.session()
+        if let durable = try journal?.progress() {
+            if let stored = session.accountDataResetProgress,
+               stored.expectedParticipantID != durable.expectedParticipantID {
+                throw HouseholdError.accountMembershipConflict
+            }
+            if session.accountDataResetProgress != durable {
+                session.accountDataResetProgress = durable
+                try repository.commit(facts: [], session: session)
+            }
+            return durable
+        }
+        if let stored = session.accountDataResetProgress {
+            try journal?.persist(stored)
+            return stored
+        }
+        return nil
+    }
+
+    func persistAccountDataResetProgress(_ progress: AccountDataResetProgress) throws {
+        var session = try repository.session()
+        if let stored = session.accountDataResetProgress,
+           stored.expectedParticipantID != progress.expectedParticipantID {
+            throw HouseholdError.accountMembershipConflict
+        }
+        if let durable = try journal?.progress(),
+           durable.expectedParticipantID != progress.expectedParticipantID {
+            throw HouseholdError.accountMembershipConflict
+        }
+        try journal?.persist(progress)
+        session.accountDataResetProgress = progress
+        do {
+            try repository.commit(facts: [], session: session)
+        } catch {
+            guard journal != nil else { throw error }
+        }
+    }
+
+    func completeAccountDataReset() throws {
+        try localDataResetter.clearNonJournalData()
+        try repository.completeAccountDataReset(
+            removingPersistentStoreAuxiliaryArtifacts: {
+                try localDataResetter.clearActiveStoreAuxiliaryArtifacts()
+            },
+            removingPersistentStoreFile: {
+                try localDataResetter.clearActiveStoreFile()
+            }
+        )
+        try journal?.clear()
+    }
+}
+
+@MainActor
+final class StartupFailureAccountDataResetLocalBoundary: AccountDataResetLocalBoundary {
+    private let localDataResetter: any AccountLocalDataResetting
+    private let journal: FileAccountDataResetJournal
+
+    init(
+        localDataResetter: any AccountLocalDataResetting,
+        journal: FileAccountDataResetJournal
+    ) {
+        self.localDataResetter = localDataResetter
+        self.journal = journal
+    }
+
+    func accountDataResetProgress() throws -> AccountDataResetProgress? {
+        try journal.progress()
+    }
+
+    func persistAccountDataResetProgress(_ progress: AccountDataResetProgress) throws {
+        if let durable = try journal.progress(),
+           durable.expectedParticipantID != progress.expectedParticipantID {
+            throw HouseholdError.accountMembershipConflict
+        }
+        try journal.persist(progress)
+    }
+
+    func completeAccountDataReset() throws {
+        try localDataResetter.clearNonJournalData()
+        try localDataResetter.clearActiveStoreAuxiliaryArtifacts()
+        try localDataResetter.clearActiveStoreFile()
+        try journal.clear()
+    }
+}
+
+@MainActor
 final class AccountDataResetCoordinator {
     private static let maximumVerificationPasses = 4
-    private let repository: HouseholdRepository
     private let transport: any AccountDataResetCloudBoundary
-    private let localDataResetter: any AccountLocalDataResetting
+    private let localBoundary: any AccountDataResetLocalBoundary
 
     init(
         repository: HouseholdRepository,
         transport: any AccountDataResetCloudBoundary,
-        localDataResetter: any AccountLocalDataResetting
+        localDataResetter: any AccountLocalDataResetting,
+        journal: FileAccountDataResetJournal? = nil
     ) {
-        self.repository = repository
         self.transport = transport
-        self.localDataResetter = localDataResetter
+        localBoundary = RepositoryAccountDataResetLocalBoundary(
+            repository: repository,
+            localDataResetter: localDataResetter,
+            journal: journal
+        )
     }
 
-    func run(progressDidPersist: (DeviceSession) -> Void) async throws {
-        var session = try repository.session()
+    init(
+        transport: any AccountDataResetCloudBoundary,
+        localBoundary: any AccountDataResetLocalBoundary
+    ) {
+        self.transport = transport
+        self.localBoundary = localBoundary
+    }
+
+    func restoredProgress() throws -> AccountDataResetProgress? {
+        try localBoundary.accountDataResetProgress()
+    }
+
+    func accountDidChange() {
+        transport.accountDidChange()
+    }
+
+    func run(progressDidPersist: (AccountDataResetProgress?) -> Void) async throws {
         var progress: AccountDataResetProgress
-        if let pending = session.accountDataResetProgress {
+        if let pending = try localBoundary.accountDataResetProgress() {
             progress = pending
+            progressDidPersist(progress)
         } else {
             let generation = transport.accountGeneration
             let participant = try await transport.participantID()
             guard transport.accountGeneration == generation else { throw HouseholdError.wrongAccount }
             progress = AccountDataResetProgress(expectedParticipantID: participant)
-            session.accountDataResetProgress = progress
-            try repository.commit(facts: [], session: session)
+            try persist(progress, progressDidPersist: progressDidPersist)
         }
-        progressDidPersist(session)
 
         let generation = transport.accountGeneration
         try await requireExpectedAccount(progress.expectedParticipantID, generation: generation)
@@ -182,7 +336,7 @@ final class AccountDataResetCoordinator {
                     expectedAccountGeneration: generation
                 )
                 progress.remainingTargets = CloudAccountResetTarget.ordered(discovered)
-                progressDidPersist(try persist(progress))
+                try persist(progress, progressDidPersist: progressDidPersist)
             }
 
             while let target = progress.remainingTargets?.first {
@@ -192,60 +346,48 @@ final class AccountDataResetCoordinator {
                     expectedAccountGeneration: generation
                 )
                 progress.remainingTargets?.removeFirst()
-                progressDidPersist(try persist(progress))
+                try persist(progress, progressDidPersist: progressDidPersist)
             }
 
             progress.completedDiscoveryPasses += 1
             progress.remainingTargets = nil
-            progressDidPersist(try persist(progress))
+            try persist(progress, progressDidPersist: progressDidPersist)
             let remaining = try await transport.accountDataResetTargets(
                 expectedParticipantID: progress.expectedParticipantID,
                 expectedAccountGeneration: generation
             )
             guard !remaining.isEmpty else { break }
             progress.remainingTargets = CloudAccountResetTarget.ordered(remaining)
-            progressDidPersist(try persist(progress))
+            try persist(progress, progressDidPersist: progressDidPersist)
             guard progress.completedDiscoveryPasses < Self.maximumVerificationPasses else {
                 throw HouseholdError.cloudUnavailable
             }
         }
 
         try await requireExpectedAccount(progress.expectedParticipantID, generation: generation)
-        try localDataResetter.clearNonJournalData()
-        try repository.completeAccountDataReset(
-            removingPersistentStoreAuxiliaryArtifacts: {
-                try localDataResetter.clearActiveStoreAuxiliaryArtifacts()
-            },
-            removingPersistentStoreFile: {
-                try localDataResetter.clearActiveStoreFile()
-            }
-        )
+        try localBoundary.completeAccountDataReset()
+        progressDidPersist(nil)
     }
 
-    private func persist(_ progress: AccountDataResetProgress) throws -> DeviceSession {
-        var session = try repository.session()
-        guard let current = session.accountDataResetProgress,
-              current.expectedParticipantID == progress.expectedParticipantID else {
-            throw HouseholdError.accountMembershipConflict
-        }
-        session.accountDataResetProgress = progress
-        try repository.commit(facts: [], session: session)
-        return session
+    private func persist(
+        _ progress: AccountDataResetProgress,
+        progressDidPersist: (AccountDataResetProgress?) -> Void
+    ) throws {
+        try localBoundary.persistAccountDataResetProgress(progress)
+        progressDidPersist(progress)
     }
 
     private func requireExpectedAccount(_ participantID: String, generation: UInt64) async throws {
-        try Task.checkCancellation()
-        guard transport.accountGeneration == generation,
-              try await transport.participantID() == participantID,
-              transport.accountGeneration == generation else { throw HouseholdError.wrongAccount }
-        try Task.checkCancellation()
+        try await transport.requireAccountForReset(participantID, generation: generation)
     }
 }
 
 #if DEBUG
 @MainActor
 final class UITestAccountDataResetCloudBoundary: AccountDataResetCloudBoundary {
-    let accountGeneration: UInt64 = 0
+    private(set) var accountGeneration: UInt64 = 0
+
+    func accountDidChange() { accountGeneration &+= 1 }
 
     func participantID() async throws -> String { "ui-test-account" }
 

@@ -56,7 +56,8 @@ final class HouseholdStore {
          clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
          performLocalMigrations: Bool = true,
          localDataResetter: any AccountLocalDataResetting = NoOpAccountLocalDataResetter(),
-         accountDataResetCloudBoundary: (any AccountDataResetCloudBoundary)? = nil) throws {
+         accountDataResetCloudBoundary: (any AccountDataResetCloudBoundary)? = nil,
+         accountDataResetJournal: FileAccountDataResetJournal? = nil) throws {
         self.repository = repository
         self.transport = transport
         let resetBoundary: (any AccountDataResetCloudBoundary)?
@@ -65,16 +66,22 @@ final class HouseholdStore {
         } else {
             resetBoundary = transport
         }
-        accountDataResetCoordinator = resetBoundary.map {
+        let resetCoordinator = resetBoundary.map {
             AccountDataResetCoordinator(
                 repository: repository,
                 transport: $0,
-                localDataResetter: localDataResetter
+                localDataResetter: localDataResetter,
+                journal: accountDataResetJournal
             )
         }
+        accountDataResetCoordinator = resetCoordinator
         self.clock = clock
         self.automaticSync = automaticSync
         session = try repository.session()
+        if let resetCoordinator {
+            _ = try resetCoordinator.restoredProgress()
+            session = try repository.session()
+        }
         today = clock()
         isCheckingAccountMembership = transport != nil && session.accountDataResetProgress == nil
             && session.householdID == nil
@@ -150,7 +157,14 @@ final class HouseholdStore {
                 isDeletingAllEarnedItData = false
             }
             do {
-                try await accountDataResetCoordinator.run { session = $0 }
+                try await accountDataResetCoordinator.run { progress in
+                    if let persisted = try? repository.session(),
+                       persisted.accountDataResetProgress != nil || progress == nil {
+                        session = persisted
+                    } else {
+                        session.accountDataResetProgress = progress
+                    }
+                }
                 try resetAfterAccountDataReset()
             } catch {
                 if let persisted = try? repository.session(), persisted.accountDataResetProgress != nil {
@@ -1007,7 +1021,7 @@ final class HouseholdStore {
             try await reconcileAccountMembershipLock()
             return
         }
-        let connectingSession = session
+        var connectingSession = session
         let accountGeneration = transport.accountGeneration
         transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .started,
                                                      householdID: household.id)
@@ -1040,6 +1054,19 @@ final class HouseholdStore {
                 try markFamilyAccessLost(expectedSession: connectingSession)
                 throw HouseholdError.ownerMembershipUnavailable
             }
+        } else {
+            let attemptID = UUID()
+            var prepared = connectingSession
+            prepared.cloudParticipantID = participant
+            prepared.accountMembershipLockAttemptID = attemptID
+            prepared.ownerConnectionBootstrap = OwnerConnectionBootstrap(
+                householdID: household.id,
+                attemptID: attemptID,
+                participantID: participant
+            )
+            try repository.commit(facts: [], session: prepared)
+            session = prepared
+            connectingSession = prepared
         }
         transport.familyTransitionDiagnostics.record(stage: .connectionStateValidation, outcome: .started,
                                                      householdID: household.id)
@@ -1054,7 +1081,7 @@ final class HouseholdStore {
                                                      householdID: household.id)
         let binding = AccountMembershipBinding.owner(householdID: household.id)
         let lock = try await acquireAccountMembershipLock(householdID: household.id,
-                                                          attemptID: session.accountMembershipLockAttemptID,
+                                                          attemptID: connectingSession.accountMembershipLockAttemptID,
                                                           matching: binding)
         transport.familyTransitionDiagnostics.expect(attemptID: lock.attemptID)
         var provisional = session
@@ -1092,6 +1119,7 @@ final class HouseholdStore {
         updated.location = location
         updated.cloudParticipantID = participant
         updated.accountMembershipLockAttemptID = lock.attemptID
+        updated.ownerConnectionBootstrap = nil
         try repository.commit(facts: [], session: updated)
         session = updated
         transport.familyTransitionDiagnostics.record(stage: .initialFactSynchronization, outcome: .started,
@@ -2058,7 +2086,11 @@ final class HouseholdStore {
               expectedSession.householdID == householdID,
               expectedSession.location == nil,
               expectedSession.accountMembershipClaimBinding == nil,
-              let attemptID = expectedSession.accountMembershipLockAttemptID else {
+              let attemptID = expectedSession.accountMembershipLockAttemptID,
+              let bootstrap = expectedSession.ownerConnectionBootstrap,
+              bootstrap.householdID == householdID,
+              bootstrap.attemptID == attemptID,
+              bootstrap.participantID == participant else {
             return false
         }
         guard expectedSession.cloudParticipantID == participant else {
@@ -3026,6 +3058,7 @@ final class HouseholdStore {
         releasedSession.cloudCanWrite = nil
         releasedSession.accountMembershipLockAttemptID = nil
         releasedSession.accountMembershipClaimBinding = nil
+        releasedSession.ownerConnectionBootstrap = nil
         guard releasedSession != expectedSession else { return }
         try repository.commit(facts: [], session: releasedSession)
         session = releasedSession

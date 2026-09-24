@@ -314,6 +314,35 @@ final class AccountDataResetTests: XCTestCase {
         }
     }
 
+    func testDeletionRejectsGenerationChangeDuringSuspendedIdentityLookup() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let householdID = UUID()
+        let zoneName = "EarnedIt-\(householdID.uuidString)"
+        server.zones[zoneName] = TestCloudServer.Zone(
+            householdID: householdID,
+            name: "Family",
+            owner: "owner"
+        )
+        let gate = TestSuspensionGate()
+        transport.beforeParticipantIDReturn = { await gate.wait() }
+        let deletion = Task {
+            try await transport.deleteAccountDataResetTarget(
+                .ownedZone(CloudResetZone(zoneName: zoneName, ownerName: "owner")),
+                expectedParticipantID: "owner",
+                expectedAccountGeneration: 0
+            )
+        }
+        while !gate.isWaiting { await Task.yield() }
+
+        transport.accountDidChange()
+        gate.resume()
+
+        await XCTAssertThrowsErrorAsync(try await deletion.value, expected: .wrongAccount)
+        XCTAssertEqual(transport.accountResetDeletionAttempts, 0)
+        XCTAssertNotNil(server.zones[zoneName])
+    }
+
     func testResetExcludesConcurrentMembershipMutationAndPublishesDurableReceipt() async throws {
         let server = TestCloudServer()
         let transport = TestTransport(server: server, account: "owner")
@@ -511,6 +540,129 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertTrue(server.lifecycleAuthorities.isEmpty)
         XCTAssertTrue(transport.uploadedIDs.isEmpty)
         XCTAssertEqual(server.createCalls, 0)
+    }
+
+    func testOwnerLockCrashBeforeConnectReturnCannotResurrectAfterReset() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "owner-bootstrap-\(UUID())")
+        let storeURL = root.appending(path: "shared-household-v1.store")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let householdID: UUID
+        let attemptID: UUID
+        do {
+            let repository = try HouseholdRepository(url: storeURL)
+            let store = try HouseholdStore(
+                repository: repository,
+                transport: transport,
+                automaticSync: false
+            )
+            try store.createFamily(name: "Interrupted Family", parentName: "Parent")
+            _ = try store.saveMember(name: "Child", role: .child, avatar: .star)
+            try store.finishSetup()
+            householdID = try XCTUnwrap(store.household?.id)
+            let gate = TestSuspensionGate()
+            transport.afterAccountLockAcquireSubmission = { await gate.waitForCancellation() }
+            let connection = Task { try await store.connect() }
+            while !gate.isWaiting { await Task.yield() }
+
+            let bootstrap = try XCTUnwrap(store.session.ownerConnectionBootstrap)
+            attemptID = bootstrap.attemptID
+            XCTAssertEqual(bootstrap.householdID, householdID)
+            XCTAssertEqual(bootstrap.participantID, "owner")
+            XCTAssertEqual(store.session.accountMembershipLockAttemptID, attemptID)
+            XCTAssertEqual(server.accountMembershipLocks["owner"]?.attemptID, attemptID)
+
+            connection.cancel()
+            await XCTAssertThrowsErrorAsync(try await connection.value)
+            transport.afterAccountLockAcquireSubmission = nil
+        }
+
+        let resettingInstallation = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: false,
+            localDataResetter: TestAccountLocalDataResetter()
+        )
+        try await resettingInstallation.deleteAllEarnedItData()
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+
+        let relaunched = try HouseholdStore(
+            repository: HouseholdRepository(url: storeURL),
+            transport: transport,
+            automaticSync: false
+        )
+        XCTAssertEqual(relaunched.session.ownerConnectionBootstrap?.attemptID, attemptID)
+        try await relaunched.reconcileAccountMembershipLock()
+        XCTAssertTrue(relaunched.familyAccessLost)
+        await XCTAssertThrowsErrorAsync(
+            try await relaunched.connect(),
+            expected: .ownerMembershipUnavailable
+        )
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+        XCTAssertTrue(server.zones.isEmpty)
+        XCTAssertTrue(server.lifecycleAuthorities.isEmpty)
+        XCTAssertTrue(transport.uploadedIDs.isEmpty)
+        XCTAssertEqual(server.createCalls, 0)
+    }
+
+    func testStartupFailureResetPersistsIndependentReceiptAndResumes() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "startup-reset-\(UUID())")
+        let support = root.appending(path: "Application Support")
+        let documents = root.appending(path: "Documents")
+        let caches = root.appending(path: "Caches")
+        let storeURL = support.appending(path: "shared-household-v1.store")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        try Data("unreadable-store".utf8).write(to: storeURL)
+        XCTAssertThrowsError(try HouseholdRepository(url: storeURL))
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let journal = FileAccountDataResetJournal(storeURL: storeURL)
+        let resetter = AppAccountLocalDataResetter(
+            applicationSupportDirectory: support,
+            documentsDirectory: documents,
+            cachesDirectory: caches,
+            bundleIdentifier: nil,
+            activeStoreURL: storeURL
+        )
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        server.accountMembershipLocks["owner"] = AccountMembershipLock(
+            householdID: UUID(),
+            attemptID: UUID(),
+            state: .released,
+            expiresAt: .now,
+            claimBinding: "stale"
+        )
+        transport.accountResetDeletionFailures = 1
+        var coordinator = AccountDataResetCoordinator(
+            transport: transport,
+            localBoundary: StartupFailureAccountDataResetLocalBoundary(
+                localDataResetter: resetter,
+                journal: journal
+            )
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await coordinator.run { _ in },
+            expectedCloudKitCode: .networkFailure
+        )
+        XCTAssertNotNil(try journal.progress())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: storeURL.path))
+
+        coordinator = AccountDataResetCoordinator(
+            transport: transport,
+            localBoundary: StartupFailureAccountDataResetLocalBoundary(
+                localDataResetter: resetter,
+                journal: journal
+            )
+        )
+        try await coordinator.run { _ in }
+
+        XCTAssertNil(server.accountMembershipLocks["owner"])
+        XCTAssertNil(try journal.progress())
+        let repository = try HouseholdRepository(url: storeURL)
+        XCTAssertNil(try repository.session().householdID)
     }
 
     func testRecoveryStateInvokesSameResetCoordinatorAndFreshInstallStaysAtWelcome() async throws {

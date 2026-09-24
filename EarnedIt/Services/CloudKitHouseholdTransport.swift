@@ -118,6 +118,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             let zoneID = CKRecordZone.ID(zoneName: zone.zoneName, ownerName: zone.ownerName)
             guard isEarnedItZone(zoneID) else { throw HouseholdError.permission }
             do {
+                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
                 _ = try await container.privateCloudDatabase.deleteRecordZone(withID: zoneID)
             } catch let error as CKError where [.unknownItem, .zoneNotFound, .userDeletedZone].contains(error.code) {
                 break
@@ -127,6 +128,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             guard isEarnedItZone(zoneID) else { throw HouseholdError.permission }
             let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID)
             do {
+                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
                 _ = try await container.sharedCloudDatabase.deleteRecord(withID: shareID)
             } catch let error as CKError where [.unknownItem, .zoneNotFound, .permissionFailure].contains(error.code) {
                 break
@@ -1508,10 +1510,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     private func requireAccount(_ expectedParticipantID: String, generation: UInt64) async throws {
-        try Task.checkCancellation()
-        guard accountGeneration == generation,
-              try await participantID() == expectedParticipantID else { throw HouseholdError.wrongAccount }
-        try Task.checkCancellation()
+        try await requireAccountForReset(expectedParticipantID, generation: generation)
     }
 
     private func updateAccountMembershipLock(

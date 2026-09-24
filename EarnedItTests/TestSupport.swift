@@ -145,6 +145,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var lifecycleReadCount = 0
     private(set) var invitationAccessCreationCalls = 0
     private(set) var accountResetDeletionAttempts = 0
+    var beforeParticipantIDReturn: (() async -> Void)?
     var beforeAccept: (() async -> Void)?
     var beforeLeave: (() async -> Void)?
     var beforeLeaveSubmission: (() async -> Void)?
@@ -152,6 +153,7 @@ final class TestTransport: HouseholdTransport {
     var beforeAccountLockReleaseSubmission: (() async -> Void)?
     var afterAccountMembershipLockRead: (() async -> Void)?
     var beforeAccountLockAcquireSubmission: (() async -> Void)?
+    var afterAccountLockAcquireSubmission: (() async -> Void)?
     var beforeAccountMembershipValidationTime: (() async -> Void)?
     var beforeAccountLockActivationSubmission: (() async -> Void)?
     var beforeAccountLockReplacementSubmission: (() async -> Void)?
@@ -172,7 +174,11 @@ final class TestTransport: HouseholdTransport {
         self.familyTransitionDiagnostics = familyTransitionDiagnostics ?? FamilyTransitionDiagnostics()
     }
     func accountDidChange() { accountGeneration &+= 1 }
-    func participantID() async throws -> String { account }
+    func participantID() async throws -> String {
+        let participant = account
+        await beforeParticipantIDReturn?()
+        return participant
+    }
     func accountDataResetTargets(
         expectedParticipantID: String,
         expectedAccountGeneration: UInt64
@@ -211,8 +217,7 @@ final class TestTransport: HouseholdTransport {
         expectedParticipantID: String,
         expectedAccountGeneration: UInt64
     ) async throws {
-        guard account == expectedParticipantID,
-              accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+        try await requireAccountForReset(expectedParticipantID, generation: expectedAccountGeneration)
         accountResetDeletionAttempts += 1
         await beforeAccountResetDeletion?()
         guard account == expectedParticipantID,
@@ -307,6 +312,8 @@ final class TestTransport: HouseholdTransport {
                                          claimBinding: nil)
             server.accountMembershipLocks[account] = lock
         }
+        await afterAccountLockAcquireSubmission?()
+        try Task.checkCancellation()
         familyTransitionDiagnostics.record(
             stage: .membershipLockAcquire, outcome: .succeeded, lock: lock,
             participantID: observedParticipantID, accountGenerationStable: accountGeneration == startingGeneration
