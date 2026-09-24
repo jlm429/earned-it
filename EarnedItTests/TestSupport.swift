@@ -678,13 +678,14 @@ final class TestTransport: HouseholdTransport {
     func createInvitationAccess(for location: CloudLocation, title: String,
                                 role: UserRole) async throws -> CloudInvitationAccess {
         invitationAccessCreationCalls += 1
-        guard let zone = server.zones[location.zoneName],
-              zone.owner == account else { throw HouseholdError.invitationOwnerRequired }
-        // Native CloudKit traps at addParticipant when this entitlement value is absent.
-        // The double reports the rejected operation without terminating the test host.
-        guard extendedShareAccess.contains("InProcessOneTimeLinks") else { throw HouseholdError.invitation }
         familyTransitionDiagnostics.record(stage: .shareFetch, outcome: .started,
                                             householdID: location.householdID)
+        guard let zone = server.zones[location.zoneName] else {
+            let error = HouseholdError.cloudUnavailable
+            familyTransitionDiagnostics.record(stage: .shareFetch, outcome: .failed,
+                                                householdID: location.householdID, error: error)
+            throw error
+        }
         if zone.shareExists {
             familyTransitionDiagnostics.record(stage: .shareFetch, outcome: .succeeded,
                                                 householdID: location.householdID)
@@ -697,6 +698,19 @@ final class TestTransport: HouseholdTransport {
             familyTransitionDiagnostics.record(stage: .shareCreate, outcome: .succeeded,
                                                 householdID: location.householdID)
         }
+        familyTransitionDiagnostics.record(stage: .invitationAccessOwnerValidation, outcome: .started,
+                                            householdID: location.householdID)
+        guard zone.owner == account else {
+            familyTransitionDiagnostics.record(stage: .invitationAccessOwnerValidation, outcome: .failed,
+                                                householdID: location.householdID,
+                                                error: HouseholdError.invitationOwnerRequired)
+            throw HouseholdError.invitationOwnerRequired
+        }
+        familyTransitionDiagnostics.record(stage: .invitationAccessOwnerValidation, outcome: .succeeded,
+                                            householdID: location.householdID)
+        // Native CloudKit traps at addParticipant when this entitlement value is absent.
+        // The double reports the rejected operation without terminating the test host.
+        guard extendedShareAccess.contains("InProcessOneTimeLinks") else { throw HouseholdError.invitation }
         familyTransitionDiagnostics.record(stage: .participantCreate, outcome: .started,
                                             householdID: location.householdID)
         if let invitationAccessError {
