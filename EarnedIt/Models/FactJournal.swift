@@ -161,4 +161,5 @@ struct DeviceSession: Codable, Equatable {
     var familyAccessLost: Bool?
     var pendingFamilyDeletion: Bool?
     var familyDeletionNoticeState: FamilyDeletionNoticeState?
+    var accountDataResetProgress: AccountDataResetProgress?
 }

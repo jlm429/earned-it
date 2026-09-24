@@ -9,7 +9,6 @@ struct RootView: View {
     @State private var cloudAccountRevision = 0
     @State private var diagnosticPreflightFinished = false
     @State private var diagnosticPreflightAvailable = false
-    @State private var confirmsStaleOwnerRelease = false
 
     var body: some View {
         @Bindable var store = store
@@ -27,6 +26,25 @@ struct RootView: View {
                 }
                 .accessibilityIdentifier(childRecoveryPreflightMode
                     ? "child-recovery-preflight" : "owner-transition-preflight")
+            } else if store.hasPendingAccountDataReset {
+                ScrollableUnavailableView(
+                    title: "Deleting Earned It Data",
+                    systemImage: "trash.circle",
+                    description: "Cloud cleanup must finish before local family data is removed. Keep this device online, or retry when your connection returns."
+                ) {
+                    if store.isDeletingAllEarnedItData {
+                        ProgressView("Deleting data…")
+                    } else {
+                        Button("Retry Deletion", role: .destructive) {
+                            Task {
+                                do { try await store.deleteAllEarnedItData() }
+                                catch { store.errorMessage = error.localizedDescription }
+                            }
+                        }
+                        .accessibilityIdentifier("retry-delete-all-earned-it-data")
+                    }
+                }
+                .accessibilityIdentifier("account-data-reset-progress")
             } else if store.hasPendingInvitationPackage {
                 ContentUnavailableView {
                     Label("Finish Joining Your Family", systemImage: "person.crop.circle.badge.checkmark")
@@ -53,31 +71,28 @@ struct RootView: View {
                     .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.requiresMembershipRecovery && store.canReleaseStaleOwnerMembership
                 && store.household == nil {
-                ContentUnavailableView {
-                    Label("Your Family Is Not Available", systemImage: "person.crop.circle.badge.exclamationmark")
-                } description: {
-                    Text("Earned It found this iCloud account's owning-parent membership, but its family could not be found. Try again in case iCloud access returns. If this membership is stale, you can release only this account's membership and return to Welcome.")
-                } actions: {
-                    Button("Try Again") {
+                ScrollableUnavailableView(
+                    title: "Your Family Is Not Available",
+                    systemImage: "person.crop.circle.badge.exclamationmark",
+                    description: "Earned It found this iCloud account's owning-parent membership, but its family is unavailable. Try reconnecting, or permanently delete this account's Earned It data and return to Welcome."
+                ) {
+                    Button("Try Reconnecting") {
                         Task {
                             do { try await store.reconcileAccountMembershipLock() }
                             catch { store.errorMessage = error.localizedDescription }
                         }
                     }
                     .accessibilityIdentifier("retry-owner-membership-recovery")
-                    Button("Release My Membership", role: .destructive) {
-                        confirmsStaleOwnerRelease = true
-                    }
-                    .accessibilityIdentifier("release-stale-owner-membership")
+                    DeleteAllEarnedItDataButton()
                 }
                 .accessibilityIdentifier("owner-membership-recovery-required")
                 .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.requiresMembershipRecovery && store.household == nil {
-                ContentUnavailableView {
-                    Label("Reconnect to Your Family", systemImage: "icloud.and.arrow.down")
-                } description: {
-                    Text("Your iCloud membership has been kept. Reconnect to your existing family to continue with your approved profile.")
-                } actions: {
+                ScrollableUnavailableView(
+                    title: "Reconnect to Your Family",
+                    systemImage: "icloud.and.arrow.down",
+                    description: "Your iCloud membership has been kept. Reconnect to your existing family to continue with your approved profile."
+                ) {
                     Button("Try Reconnecting") {
                         Task {
                             do { try await store.reconcileAccountMembershipLock() }
@@ -85,15 +100,16 @@ struct RootView: View {
                         }
                     }
                     .accessibilityIdentifier("retry-membership-recovery")
+                    DeleteAllEarnedItDataButton()
                 }
                 .accessibilityIdentifier("membership-recovery-required")
                 .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.familyAccessLost && store.household != nil {
-                ContentUnavailableView {
-                    Label("Family Access Needs Attention", systemImage: "person.3.fill")
-                } description: {
-                    Text("This device cannot currently access the family in iCloud. Check access to retry. Your saved family stays on this device.")
-                } actions: {
+                ScrollableUnavailableView(
+                    title: "Family Access Needs Attention",
+                    systemImage: "person.3.fill",
+                    description: "This device cannot currently access the family in iCloud. Try reconnecting. Your saved family stays on this device."
+                ) {
                     if store.canFinishDeletingFamily {
                         Button("Finish Deleting Family", role: .destructive) {
                             Task {
@@ -103,12 +119,14 @@ struct RootView: View {
                         }
                         .accessibilityIdentifier("retry-delete-family")
                     }
-                    Button("Check Family Access") {
+                    Button("Try Reconnecting") {
                         Task {
                             do { try await store.synchronize() }
                             catch { store.errorMessage = error.localizedDescription }
                         }
                     }
+                    .accessibilityIdentifier("retry-family-access")
+                    DeleteAllEarnedItDataButton()
                     if store.canRemoveUnavailableFamilyFromDevice {
                         Button("Remove From This Device", role: .destructive) {
                             store.perform { try store.removeUnavailableFamilyFromDevice() }
@@ -141,6 +159,11 @@ struct RootView: View {
                     diagnosticPreflightAvailable = await store.collectOwnerTransitionPreflight() != nil
                 }
                 diagnosticPreflightFinished = true
+                return
+            }
+            if store.hasPendingAccountDataReset {
+                do { try await store.deleteAllEarnedItData() }
+                catch { store.errorMessage = error.localizedDescription }
                 return
             }
             store.refreshDate()
@@ -241,18 +264,6 @@ struct RootView: View {
         } message: {
             Text("This family was permanently deleted. You can create or join another family.")
         }
-        .confirmationDialog("Release This Membership?", isPresented: $confirmsStaleOwnerRelease,
-                            titleVisibility: .visible) {
-            Button("Release My Membership", role: .destructive) {
-                Task {
-                    do { try await store.releaseStaleOwnerMembership() }
-                    catch { store.errorMessage = error.localizedDescription }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This releases only this iCloud account's stale Earned It membership. It does not delete family data or change anyone else's access.")
-        }
     }
 
     private func acceptInvitation() async {
@@ -280,5 +291,49 @@ struct RootView: View {
 
     private var readOnlyPreflightMode: Bool {
         ownerTransitionPreflightMode || childRecoveryPreflightMode
+    }
+}
+
+private struct ScrollableUnavailableView<Actions: View>: View {
+    let title: String
+    let systemImage: String
+    let description: String
+    let actions: Actions
+
+    init(
+        title: String,
+        systemImage: String,
+        description: String,
+        @ViewBuilder actions: () -> Actions
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.description = description
+        self.actions = actions()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 24) {
+                    VStack(spacing: 12) {
+                        Image(systemName: systemImage)
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text(title)
+                            .font(.title.bold())
+                        Text(description)
+                            .foregroundStyle(.secondary)
+                    }
+                    actions
+                }
+                .multilineTextAlignment(.center)
+                .padding(24)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
     }
 }

@@ -15,6 +15,7 @@ final class HouseholdStore {
     private static let pendingInvitationCleanupRetryDelay: TimeInterval = 30
     private let repository: HouseholdRepository
     private let transport: (any HouseholdTransport)?
+    private let accountDataResetCoordinator: AccountDataResetCoordinator?
     private let clock: () -> Date
     private let automaticSync: Bool
     private(set) var snapshot = HouseholdSnapshot()
@@ -28,6 +29,7 @@ final class HouseholdStore {
     private(set) var cloudIsReadOnly = false
     private(set) var isCheckingAccountMembership = false
     private(set) var isJoiningInvitation = false
+    private(set) var isDeletingAllEarnedItData = false
     private(set) var requiresMembershipRecovery = false
     private(set) var canReleaseStaleOwnerMembership = false
     private(set) var rejectedChanges: [UUID: String] = [:]
@@ -41,14 +43,23 @@ final class HouseholdStore {
 
     init(repository: HouseholdRepository, transport: (any HouseholdTransport)? = nil,
          clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
-         performLocalMigrations: Bool = true) throws {
+         performLocalMigrations: Bool = true,
+         localDataResetter: any AccountLocalDataResetting = NoOpAccountLocalDataResetter()) throws {
         self.repository = repository
         self.transport = transport
+        accountDataResetCoordinator = transport.map {
+            AccountDataResetCoordinator(
+                repository: repository,
+                transport: $0,
+                localDataResetter: localDataResetter
+            )
+        }
         self.clock = clock
         self.automaticSync = automaticSync
         session = try repository.session()
         today = clock()
-        isCheckingAccountMembership = transport != nil && session.householdID == nil
+        isCheckingAccountMembership = transport != nil && session.accountDataResetProgress == nil
+            && session.householdID == nil
             && session.pendingInvitationAcceptance == nil && session.pendingInvitationPackage == nil
         cloudIsReadOnly = session.location != nil && session.cloudCanWrite != true
         try reload()
@@ -56,6 +67,7 @@ final class HouseholdStore {
     }
 
     var household: Household? { snapshot.household }
+    var hasPendingAccountDataReset: Bool { session.accountDataResetProgress != nil }
     var hasPendingInvitationPackage: Bool { session.pendingInvitationPackage != nil }
     var lastJoinReceipt: LastJoinReceipt? { session.lastJoinReceipt }
     var hasFamilyDeletionNotice: Bool { session.familyDeletionNoticeState == .pending }
@@ -101,6 +113,44 @@ final class HouseholdStore {
         canReleaseStaleOwnerMembership = false
         staleOwnerMembershipReleaseCandidate = nil
         transport?.accountDidChange()
+    }
+
+    func deleteAllEarnedItData() async throws {
+        guard !isSyncing, activeSync == nil else { throw HouseholdError.pendingChanges }
+        guard let accountDataResetCoordinator else { throw HouseholdError.cloudUnavailable }
+        guard !isDeletingAllEarnedItData else { return }
+        isDeletingAllEarnedItData = true
+        isCheckingAccountMembership = false
+        syncTask?.cancel()
+        invitationCleanupTail?.cancel()
+        syncAgain = false
+        defer { isDeletingAllEarnedItData = false }
+        do {
+            try await accountDataResetCoordinator.run()
+            try resetAfterAccountDataReset()
+        } catch {
+            if let persisted = try? repository.session(), persisted.accountDataResetProgress != nil {
+                session = persisted
+            }
+            throw error
+        }
+    }
+
+    private func resetAfterAccountDataReset() throws {
+        session = try repository.session()
+        facts = []
+        rejectedChanges = [:]
+        snapshot = HouseholdSnapshot()
+        syncMessage = "On this device"
+        lastSyncedAt = nil
+        cloudAccessBlocked = false
+        cloudIsReadOnly = false
+        isCheckingAccountMembership = false
+        requiresMembershipRecovery = false
+        canReleaseStaleOwnerMembership = false
+        staleOwnerMembershipReleaseCandidate = nil
+        transport?.familyTransitionDiagnostics.clearInvitationAttempt()
+        errorMessage = nil
     }
 
     #if DEBUG
@@ -611,7 +661,7 @@ final class HouseholdStore {
             hasCloudLocation: session.location != nil
         )
         do {
-            await collectInvitationDiagnosticPreamble(household: household)
+            try await collectInvitationDiagnosticPreamble(household: household)
             if session.location == nil { _ = await collectOwnerTransitionPreflight() }
             if session.location?.isOwner == true {
                 diagnostics.record(stage: .invitationAccessPruning, outcome: .started,
@@ -732,7 +782,7 @@ final class HouseholdStore {
         }
     }
 
-    private func collectInvitationDiagnosticPreamble(household: Household) async {
+    private func collectInvitationDiagnosticPreamble(household: Household) async throws {
         guard let transport else { return }
         let diagnostics = transport.familyTransitionDiagnostics
         let generation = transport.accountGeneration
@@ -811,6 +861,13 @@ final class HouseholdStore {
                                accountGenerationStable: transport.accountGeneration == generation,
                                error: error)
             diagnostics.recordOwnerBranch(.readOnlyPreambleUnavailable, result: "observed")
+        }
+        guard transport.accountGeneration == generation else {
+            diagnostics.record(stage: .invitationDiagnosticPreamble, outcome: .failed,
+                               householdID: household.id,
+                               accountGenerationStable: false,
+                               error: HouseholdError.wrongAccount)
+            throw HouseholdError.wrongAccount
         }
         diagnostics.record(stage: .invitationDiagnosticPreamble, outcome: .succeeded,
                            householdID: household.id)
@@ -3055,6 +3112,9 @@ final class HouseholdStore {
     }
 
     func synchronize() async throws {
+        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+            throw HouseholdError.pendingChanges
+        }
         if let activeSync { return try await activeSync.value }
         let task = Task { try await performSynchronization() }
         activeSync = task
@@ -3166,7 +3226,8 @@ final class HouseholdStore {
     }
 
     func scheduleSync() {
-        guard automaticSync, session.location != nil else { return }
+        guard automaticSync, session.location != nil,
+              !isDeletingAllEarnedItData, !hasPendingAccountDataReset else { return }
         if isSyncing { syncAgain = true; return }
         syncTask?.cancel()
         syncTask = Task { [weak self] in
@@ -3306,6 +3367,9 @@ final class HouseholdStore {
 
     private func requireWriteAccess() throws {
         today = clock()
+        if isDeletingAllEarnedItData || hasPendingAccountDataReset {
+            throw HouseholdError.pendingChanges
+        }
         if cloudAccessBlocked { throw HouseholdError.cloudUnavailable }
         if cloudIsReadOnly { throw HouseholdError.readOnly }
     }

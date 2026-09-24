@@ -32,7 +32,6 @@ struct UserSelectionView: View {
                     }
                     if store.profiles.isEmpty {
                         invitationAccess
-                        NavigationLink("Device Settings") { HouseholdSettingsView() }
                     }
                     SyncStatusView()
                 }
@@ -43,6 +42,16 @@ struct UserSelectionView: View {
             .refreshable { await refreshFamily() }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("Profiles")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        HouseholdSettingsView()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("profile-settings")
+                }
+            }
             .sheet(isPresented: $scanning) {
                 InvitationScannerSheet { payload in
                     if let credential = InvitationCredential(text: payload) { invitationCode = credential.code }

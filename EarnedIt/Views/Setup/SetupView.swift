@@ -103,6 +103,16 @@ struct SetupView: View {
                 }
             }
             .navigationTitle(store.household == nil ? "Welcome" : "Family Setup")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        HouseholdSettingsView()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("welcome-settings")
+                }
+            }
             .sheet(isPresented: $joiningFamily) { JoinFamilyView() }
             .sheet(isPresented: $addingChild) { FamilyUserFormView(role: .child) }
             .alert("Unable to Create Family", isPresented: Binding(

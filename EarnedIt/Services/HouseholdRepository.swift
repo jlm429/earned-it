@@ -96,6 +96,18 @@ final class HouseholdRepository {
         }
     }
 
+    func completeAccountDataReset() throws {
+        do {
+            try context.fetch(FetchDescriptor<StoredFact>()).forEach(context.delete)
+            try context.fetch(FetchDescriptor<StoredSession>()).forEach(context.delete)
+            context.insert(try StoredSession(DeviceSession()))
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
     func purgeHouseholdData(householdID: UUID, replacementSession: DeviceSession) throws {
         do {
             for stored in try context.fetch(FetchDescriptor<StoredFact>()) where stored.householdID == householdID {

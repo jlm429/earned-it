@@ -25,6 +25,12 @@ struct MainRoleView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        NavigationLink {
+                            HouseholdSettingsView()
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                        Divider()
                         Link("Privacy Policy", destination: AppLinks.privacyPolicy)
                         Link("Support", destination: AppLinks.support)
                     } label: {

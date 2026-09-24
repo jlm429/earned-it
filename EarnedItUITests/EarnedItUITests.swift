@@ -141,7 +141,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.alerts["Family data was deleted"].exists)
     }
 
-    func testOwnerMembershipRecoveryShowsPreciseCopyAndConfirmation() throws {
+    func testOwnerMembershipRecoveryOffersReconnectAndAccountResetConfirmation() throws {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-stale-owner-membership",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
@@ -152,19 +152,21 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS 'owning-parent membership'")
         ).firstMatch.exists)
-        XCTAssertTrue(app.buttons["retry-owner-membership-recovery"].exists)
-        XCTAssertTrue(app.buttons["release-stale-owner-membership"].exists)
+        reveal(app.buttons["retry-owner-membership-recovery"])
+        XCTAssertTrue(app.buttons["retry-owner-membership-recovery"].isHittable)
+        reveal(app.buttons["delete-all-earned-it-data"])
+        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'ask a parent'")).firstMatch.exists)
         keepScreenshot("owner-membership-recovery-largest-text")
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
 
-        tap("release-stale-owner-membership")
-        XCTAssertTrue(app.staticTexts["Release This Membership?"].waitForExistence(timeout: 5))
+        tap("delete-all-earned-it-data")
+        XCTAssertTrue(app.staticTexts["Delete All Earned It Data?"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS 'does not delete family data'")
+            NSPredicate(format: "label == 'This permanently deletes your Earned It family data, membership, invitations, and local app data from iCloud and this device. This cannot be undone.'")
         ).firstMatch.exists)
-        XCTAssertTrue(app.buttons["Release My Membership"].exists)
-        keepScreenshot("owner-membership-release-confirmation")
+        XCTAssertTrue(app.buttons["Delete All Earned It Data"].exists)
+        keepScreenshot("owner-membership-account-reset-confirmation")
     }
 
     func testParentRenamesFamilyFromSettingsAndPersistsIt() {

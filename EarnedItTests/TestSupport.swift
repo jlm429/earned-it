@@ -80,6 +80,7 @@ final class TestCloudServer {
     }
     var zones: [String: Zone] = [:]
     var accountMembershipLocks: [String: AccountMembershipLock] = [:]
+    var privateAccountResetRecords: [String: Set<CloudAccountResetTarget>] = [:]
     var lifecycleAuthorities: [UUID: LifecycleAuthority] = [:]
     var authoritativeTime: Date?
     var createCalls = 0
@@ -123,6 +124,8 @@ final class TestTransport: HouseholdTransport {
     var invitationValidationTimeFailures = 0
     var invitationValidationTimeError: Error?
     var invitationAccessError: Error?
+    var accountResetDiscoveryError: Error?
+    var accountResetDeletionFailures = 0
     private(set) var invitationValidationTimeCalls = 0
     var extendedShareAccess: Set<String> = ["InProcessOneTimeLinks"]
     private(set) var leaveAttempts = 0
@@ -135,6 +138,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var lifecycleMutationEnqueues = 0
     private(set) var lifecycleReadCount = 0
     private(set) var invitationAccessCreationCalls = 0
+    private(set) var accountResetDeletionAttempts = 0
     var beforeAccept: (() async -> Void)?
     var beforeLeave: (() async -> Void)?
     var beforeLeaveSubmission: (() async -> Void)?
@@ -152,6 +156,8 @@ final class TestTransport: HouseholdTransport {
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
     var beforeMembershipLocation: (() async -> Void)?
+    var beforeAccountResetDeletion: (() async -> Void)?
+    var afterAccountResetDeletion: (() async -> Void)?
 
     init(server: TestCloudServer, account: String,
          familyTransitionDiagnostics: FamilyTransitionDiagnostics? = nil) {
@@ -161,6 +167,99 @@ final class TestTransport: HouseholdTransport {
     }
     func accountDidChange() { accountGeneration &+= 1 }
     func participantID() async throws -> String { account }
+    func accountDataResetTargets(
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [CloudAccountResetTarget] {
+        guard account == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+        if let accountResetDiscoveryError { throw accountResetDiscoveryError }
+        var targets = server.zones.compactMap { zoneName, zone -> CloudAccountResetTarget? in
+            guard Self.isEarnedItZoneName(zoneName) else { return nil }
+            let resetZone = CloudResetZone(zoneName: zoneName, ownerName: zone.owner)
+            if zone.owner == account { return .ownedZone(resetZone) }
+            if zone.participants.contains(account) { return .sharedParticipation(resetZone) }
+            return nil
+        }
+        if server.accountMembershipLocks[account] != nil {
+            targets.append(.privateRecord(
+                recordType: "AccountMembershipLock",
+                recordName: "current-membership"
+            ))
+        }
+        targets += server.privateAccountResetRecords[account] ?? []
+        targets += server.lifecycleAuthorities.compactMap { householdID, authority in
+            guard authority.creator == account else { return nil }
+            return .publicRecord(
+                recordType: "FamilyLifecycleAuthority",
+                recordName: AccountMembershipBinding.lifecycleRecordName(householdID: householdID)
+            )
+        }
+        guard account == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+        return CloudAccountResetTarget.ordered(targets)
+    }
+
+    func deleteAccountDataResetTarget(
+        _ target: CloudAccountResetTarget,
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws {
+        guard account == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+        accountResetDeletionAttempts += 1
+        await beforeAccountResetDeletion?()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+        if accountResetDeletionFailures > 0 {
+            accountResetDeletionFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        switch target {
+        case .ownedZone(let zone):
+            guard Self.isEarnedItZoneName(zone.zoneName) else { throw HouseholdError.permission }
+            if let existing = server.zones[zone.zoneName] {
+                guard existing.owner == expectedParticipantID,
+                      existing.owner == zone.ownerName else { throw HouseholdError.permission }
+                server.zones.removeValue(forKey: zone.zoneName)
+            }
+        case .sharedParticipation(let zone):
+            guard Self.isEarnedItZoneName(zone.zoneName) else { throw HouseholdError.permission }
+            if let existing = server.zones[zone.zoneName] {
+                guard existing.owner == zone.ownerName else { throw HouseholdError.permission }
+                server.zones[zone.zoneName]?.participants.remove(expectedParticipantID)
+                let claims = existing.claimedInvitationAccounts.filter {
+                    $0.value == expectedParticipantID
+                }.map(\.key)
+                for claim in claims {
+                    server.zones[zone.zoneName]?.claimedInvitationAccounts.removeValue(forKey: claim)
+                }
+            }
+        case .privateRecord(let recordType, let recordName):
+            if recordType == "AccountMembershipLock", recordName == "current-membership" {
+                server.accountMembershipLocks.removeValue(forKey: expectedParticipantID)
+            }
+            server.privateAccountResetRecords[expectedParticipantID]?.remove(target)
+        case .publicRecord(let recordType, let recordName):
+            guard recordType == "FamilyLifecycleAuthority" else { throw HouseholdError.permission }
+            if let match = server.lifecycleAuthorities.first(where: {
+                AccountMembershipBinding.lifecycleRecordName(householdID: $0.key) == recordName
+            }) {
+                guard match.value.creator == expectedParticipantID else { throw HouseholdError.permission }
+                server.lifecycleAuthorities.removeValue(forKey: match.key)
+            }
+        }
+        await afterAccountResetDeletion?()
+        guard account == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
+    }
+
+    private static func isEarnedItZoneName(_ name: String) -> Bool {
+        let prefix = "EarnedIt-"
+        guard name.hasPrefix(prefix) else { return false }
+        return UUID(uuidString: String(name.dropFirst(prefix.count))) != nil
+    }
+
     func accountMembershipLock() async throws -> AccountMembershipLock? {
         let lock = server.accountMembershipLocks[account]
         await afterAccountMembershipLockRead?()
