@@ -35,6 +35,8 @@ The snapshot reports:
 
 Invitation trace format 2 also records the lifecycle-authority attempt and fetch or save phase. A fetched record is represented only by typed comparisons for record type, format version, recognized lifecycle state, creator presence and current-account match, modifier presence and current-account match, and requested-state match. Internally retried missing-record or record-conflict errors retain only their allow-listed CloudKit codes and retry timing. The trace never includes the public record name, creator or modifier identifiers, or the opaque owner-authority binding.
 
+The September 24, 2026 Production trace showed four exact cycles of an absent initial authority record followed by `CKError.unknownItem` from the redundant post-save verification fetch. Xcode 27 defines that CloudKit error as code 11. Lifecycle mutations now validate the server-returned record in the save result, matching the transport's other confirmed-save paths. The exact record, state, creator, modifier, current-account, and account-generation checks remain unchanged.
+
 An absent or inaccessible value remains unknown rather than being inferred. A lock for another household is the privacy-safe observable for the released Family A candidate when Family A's identity is no longer local.
 
 ## Current physical-device evidence

@@ -1205,16 +1205,24 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     ?? CKRecord(recordType: familyLifecycleRecordType, recordID: recordID)
                 record["formatVersion"] = 1 as CKRecordValue
                 record["state"] = next.rawValue as CKRecordValue
-                var retryPhase = InvitationLifecycleAuthorityPhase.save
                 do {
                     try await requireAccount(expectedParticipantID, generation: expectedGeneration)
-                    try await enqueueModifyRecords(saving: [record], deleting: [], in: database)
+                    let results = try await database.modifyRecords(
+                        saving: [record],
+                        deleting: [],
+                        savePolicy: .ifServerRecordUnchanged,
+                        atomically: true
+                    )
                     try await requireAccount(expectedParticipantID, generation: expectedGeneration)
-                    retryPhase = .verificationFetch
-                    let saved = try await database.record(for: recordID)
-                    let comparison = familyLifecycleAuthorityComparison(
-                        saved,
-                        ownerAuthorityBinding: ownerAuthorityBinding
+                    let comparison = try Self.familyLifecycleAuthoritySaveComparison(
+                        recordID: recordID,
+                        saveResults: results.saveResults,
+                        comparison: { saved in
+                            self.familyLifecycleAuthorityComparison(
+                                saved,
+                                ownerAuthorityBinding: ownerAuthorityBinding
+                            )
+                        }
                     )
                     let stateMatchesRequested = comparison.isAccepted
                         ? comparison.state.map { $0 == next } : nil
@@ -1228,15 +1236,15 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     }
                     familyTransitionDiagnostics.recordLifecycleAuthority(
                         attempt: attempt,
-                        phase: .verificationFetch,
+                        phase: .save,
                         result: result,
                         comparison: comparison,
                         stateMatchesRequested: stateMatchesRequested
                     )
-                    let savedState = try decodeFamilyLifecycleAuthority(comparison)
-                    guard stateMatchesRequested == true else {
-                        throw HouseholdError.accountMembershipConflict
-                    }
+                    let savedState = try Self.confirmFamilyLifecycleAuthoritySave(
+                        comparison,
+                        requestedState: next
+                    )
                     try await requireAccount(expectedParticipantID, generation: expectedGeneration)
                     familyTransitionDiagnostics.record(stage: stage, outcome: .succeeded,
                                                         householdID: householdID)
@@ -1245,7 +1253,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     where Self.shouldRetryLifecycleAuthorityBootstrap(error, recordID: recordID) {
                     familyTransitionDiagnostics.recordLifecycleAuthority(
                         attempt: attempt,
-                        phase: retryPhase,
+                        phase: .save,
                         result: .retryableCloudError,
                         error: error
                     )
@@ -1325,6 +1333,28 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             modifierPresent: modifierParticipantID != nil,
             modifierMatchesCurrentAccount: modifierMatches
         )
+    }
+
+    static func familyLifecycleAuthoritySaveComparison(
+        recordID: CKRecord.ID,
+        saveResults: [CKRecord.ID: Result<CKRecord, Error>],
+        comparison: (CKRecord) -> InvitationLifecycleAuthorityRecordComparison
+    ) throws -> InvitationLifecycleAuthorityRecordComparison {
+        guard let saveResult = saveResults[recordID] else { throw HouseholdError.malformedData }
+        let saved = try saveResult.get()
+        guard saved.recordID == recordID else { throw HouseholdError.accountMembershipConflict }
+        return comparison(saved)
+    }
+
+    static func confirmFamilyLifecycleAuthoritySave(
+        _ comparison: InvitationLifecycleAuthorityRecordComparison,
+        requestedState: FamilyLifecycleState
+    ) throws -> FamilyLifecycleState {
+        guard comparison.isAccepted,
+              comparison.state == requestedState else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        return requestedState
     }
 
     private func readFamilyLifecycleAuthority(
