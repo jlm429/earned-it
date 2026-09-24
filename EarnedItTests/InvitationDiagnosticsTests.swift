@@ -512,6 +512,105 @@ final class InvitationDiagnosticsTests: XCTestCase {
         XCTAssertTrue(rejected.allSatisfy { !$0.isAccepted })
     }
 
+    func testLifecycleAuthorityBootstrapUsesAuthoritativeSaveResultWhenVerificationFetchIsMissing() throws {
+        let recordID = CKRecord.ID(recordName: "expected-lifecycle-authority")
+        let saved = CKRecord(recordType: "FamilyLifecycleAuthority", recordID: recordID)
+        let account = "current-owner-account"
+        let accepted = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+            recordTypeMatches: true,
+            formatVersion: 1,
+            rawState: FamilyLifecycleState.active.rawValue,
+            creatorParticipantID: account,
+            modifierParticipantID: account,
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: account)
+        )
+        let initialFetchError = CKError(.unknownItem)
+        let legacyVerificationFetchError = CKError(.unknownItem)
+
+        XCTAssertEqual(CKError.Code.unknownItem.rawValue, 11)
+        XCTAssertTrue(CloudKitHouseholdTransport.isRecordMissing(initialFetchError, recordID: recordID))
+        XCTAssertTrue(CloudKitHouseholdTransport.shouldRetryLifecycleAuthorityBootstrap(
+            legacyVerificationFetchError,
+            recordID: recordID
+        ))
+
+        let saveResults: [CKRecord.ID: Result<CKRecord, Error>] = [recordID: .success(saved)]
+        let savedComparison = try CloudKitHouseholdTransport.familyLifecycleAuthoritySaveComparison(
+            recordID: recordID,
+            saveResults: saveResults,
+            comparison: { returnedRecord in
+                XCTAssertEqual(returnedRecord.recordID, recordID)
+                return accepted
+            }
+        )
+        let state = try CloudKitHouseholdTransport.confirmFamilyLifecycleAuthoritySave(
+            savedComparison,
+            requestedState: .active
+        )
+
+        XCTAssertEqual(state, .active)
+    }
+
+    func testLifecycleAuthoritySaveResultStillRejectsForeignOrMismatchedAuthority() throws {
+        let recordID = CKRecord.ID(recordName: "expected-lifecycle-authority")
+        let foreignRecordID = CKRecord.ID(recordName: "foreign-lifecycle-authority")
+        let foreignSaved = CKRecord(recordType: "FamilyLifecycleAuthority", recordID: foreignRecordID)
+        let account = "current-owner-account"
+        let ownerAuthorityBinding = AccountMembershipBinding.ownerAuthority(participantID: account)
+        let acceptedDeleting = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+            recordTypeMatches: true,
+            formatVersion: 1,
+            rawState: FamilyLifecycleState.deleting.rawValue,
+            creatorParticipantID: account,
+            modifierParticipantID: account,
+            ownerAuthorityBinding: ownerAuthorityBinding
+        )
+        let foreignModifier = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+            recordTypeMatches: true,
+            formatVersion: 1,
+            rawState: FamilyLifecycleState.active.rawValue,
+            creatorParticipantID: account,
+            modifierParticipantID: "foreign-account",
+            ownerAuthorityBinding: ownerAuthorityBinding
+        )
+
+        XCTAssertThrowsError(try CloudKitHouseholdTransport.familyLifecycleAuthoritySaveComparison(
+            recordID: recordID,
+            saveResults: [foreignRecordID: .success(foreignSaved)],
+            comparison: { _ in acceptedDeleting }
+        )) { error in
+            XCTAssertEqual(error as? HouseholdError, .malformedData)
+        }
+        XCTAssertThrowsError(try CloudKitHouseholdTransport.familyLifecycleAuthoritySaveComparison(
+            recordID: recordID,
+            saveResults: [recordID: .success(foreignSaved)],
+            comparison: { _ in acceptedDeleting }
+        )) { error in
+            XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
+        }
+        XCTAssertThrowsError(try CloudKitHouseholdTransport.confirmFamilyLifecycleAuthoritySave(
+            acceptedDeleting,
+            requestedState: .active
+        )) { error in
+            XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
+        }
+        XCTAssertThrowsError(try CloudKitHouseholdTransport.confirmFamilyLifecycleAuthoritySave(
+            foreignModifier,
+            requestedState: .active
+        )) { error in
+            XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
+        }
+
+        let missingSave = CKError(.unknownItem)
+        XCTAssertThrowsError(try CloudKitHouseholdTransport.familyLifecycleAuthoritySaveComparison(
+            recordID: recordID,
+            saveResults: [recordID: .failure(missingSave)],
+            comparison: { _ in acceptedDeleting }
+        )) { error in
+            XCTAssertEqual((error as? CKError)?.code, .unknownItem)
+        }
+    }
+
     func testLifecycleAuthorityFailureTraceIncludesLoadBearingComparisonWithoutRawIdentity() async throws {
         let server = TestCloudServer()
         let diagnostics = FamilyTransitionDiagnostics()

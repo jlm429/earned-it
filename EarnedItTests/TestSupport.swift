@@ -579,7 +579,7 @@ final class TestTransport: HouseholdTransport {
         )
         familyTransitionDiagnostics.recordLifecycleAuthority(
             attempt: 1,
-            phase: .verificationFetch,
+            phase: .save,
             result: .recordAccepted,
             comparison: comparison,
             stateMatchesRequested: true

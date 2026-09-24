@@ -20,6 +20,8 @@ There are no family names, member names, invitation values, URLs, codes, digests
 
 The app accepts a lifecycle record only when both CloudKit system identities hash to the owner-authority binding retained in the exact private lock. The current account and account generation are checked around every mutation. A mismatched, malformed, or missing record fails closed.
 
+After a lifecycle mutation, the app validates the server-returned saved record directly. It requires the exact requested record ID and lifecycle state plus the same creator and last-modifier ownership checks. It does not depend on a second immediate fetch to confirm a write that CloudKit has already returned.
+
 ## State transitions
 
 `active` is created during owner bootstrap or backfilled while recovering an accessible owner family. It can move only to `deleting`. `deleting` can move only to `deleted`. No path returns a record to `active`.
