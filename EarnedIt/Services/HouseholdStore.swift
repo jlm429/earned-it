@@ -2181,7 +2181,8 @@ final class HouseholdStore {
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try await reconcileAccountMembershipLock(imported: imported, location: location,
-                                                  participant: participant)
+                                                  participant: participant,
+                                                  expectedAccountGeneration: accountGeneration)
     }
 
     /// Local absence is a bootstrap condition, never evidence that the account left its family.
@@ -2582,11 +2583,12 @@ final class HouseholdStore {
     }
 
     private func reconcileAccountMembershipLock(imported: HouseholdSnapshot, location: CloudLocation,
-                                                participant: String) async throws {
+                                                participant: String,
+                                                expectedAccountGeneration: UInt64) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
-        let accountGeneration = transport.accountGeneration
-        guard try await transport.participantID() == participant,
-              transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+        guard transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
         if location.isOwner {
             let lifecycleState = try await transport.ensureFamilyLifecycleAuthority(
                 householdID: location.householdID,
@@ -2595,9 +2597,9 @@ final class HouseholdStore {
             guard lifecycleState == .active else { throw HouseholdError.accountMembershipConflict }
         }
         do {
-            guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+            guard transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
             let currentLock = try await transport.accountMembershipLock()
-            guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
+            guard transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
             guard let binding = try membershipBinding(
                 in: imported,
                 location: location,
@@ -2624,9 +2626,9 @@ final class HouseholdStore {
                         ownerAuthorityBinding: ownerAuthorityBinding(for: location, participant: participant),
                         now: clock()
                     )
-                    guard transport.accountGeneration == accountGeneration,
+                    guard transport.accountGeneration == expectedAccountGeneration,
                           try await transport.participantID() == participant,
-                          transport.accountGeneration == accountGeneration,
+                          transport.accountGeneration == expectedAccountGeneration,
                           session.householdID == location.householdID,
                           session.location == location,
                           session.cloudParticipantID == participant else {
@@ -2679,8 +2681,10 @@ final class HouseholdStore {
         _ lock: AccountMembershipLock?,
         location: CloudLocation
     ) throws {
-        guard let localAttemptID = session.accountMembershipLockAttemptID,
-              let lock else { return }
+        guard let lock else { return }
+        guard let localAttemptID = session.accountMembershipLockAttemptID else {
+            throw HouseholdError.accountMembershipConflict
+        }
         guard lock.householdID == location.householdID,
               lock.attemptID == localAttemptID,
               lock.state != .released else {
@@ -2793,13 +2797,16 @@ final class HouseholdStore {
         }
         do {
             guard session.pendingFamilyDeletion != true else { throw HouseholdError.permission }
+            let accountGeneration = transport.accountGeneration
             let participant = try await transport.participantID()
-            guard participant == session.cloudParticipantID else { throw HouseholdError.wrongAccount }
+            guard participant == session.cloudParticipantID,
+                  transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
             let remote = try await transport.fetch(from: location)
             try validate(remote, householdID: location.householdID)
             let remoteSnapshot = HouseholdSnapshot(facts: remote)
             try await reconcileAccountMembershipLock(imported: remoteSnapshot, location: location,
-                                                      participant: participant)
+                                                      participant: participant,
+                                                      expectedAccountGeneration: accountGeneration)
             cloudIsReadOnly = try await !transport.canWrite(to: location)
             var updated = session
             updated.cloudCanWrite = !cloudIsReadOnly
