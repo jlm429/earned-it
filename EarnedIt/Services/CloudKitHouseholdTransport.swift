@@ -796,6 +796,29 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
+    func recoverInvitationAccess(participantID: String, from location: CloudLocation) async throws
+        -> CloudInvitationAccess {
+        guard location.isOwner, !participantID.isEmpty else { throw HouseholdError.invitationUnavailable }
+        let id = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
+        let share: CKShare
+        do {
+            guard let fetched = try await database(for: location).record(for: id) as? CKShare else {
+                throw HouseholdError.invitationUnavailable
+            }
+            share = fetched
+        } catch let error as CKError where Self.isRecordMissing(error, recordID: id) {
+            throw HouseholdError.invitationUnavailable
+        }
+        guard let participant = share.participants.first(where: { $0.participantID == participantID }),
+              participant.acceptanceStatus == .pending,
+              participant.permission == .readWrite,
+              participant.role == .privateUser,
+              let url = oneTimeURL(in: share, participantID: participant.participantID) else {
+            throw HouseholdError.invitationUnavailable
+        }
+        return CloudInvitationAccess(participantID: participant.participantID, url: url)
+    }
+
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
         let share = try await share(for: location, title: "Earned It Family")
         guard let participant = share.participants.first(where: { $0.participantID == participantID }) else { return }

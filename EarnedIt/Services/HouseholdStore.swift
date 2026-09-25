@@ -715,6 +715,29 @@ final class HouseholdStore {
         }
     }
 
+    func recoverInvitation(_ invitation: FamilyInvitation) async throws -> RecoveredFamilyInvitation {
+        try await withExclusiveCloudMutation {
+            try requireParent()
+            guard snapshot.invitation(invitation.id) == invitation,
+                  snapshot.invitationStatus(invitation, now: clock()) == .available,
+                  let expectedURLDigest = invitation.cloudShareURLDigest,
+                  expectedURLDigest.count == 64,
+                  !invitation.cloudShareParticipantID.isEmpty,
+                  let transport, let location = session.location, location.isOwner else {
+                throw HouseholdError.invitationUnavailable
+            }
+            let access = try await transport.recoverInvitationAccess(
+                participantID: invitation.cloudShareParticipantID,
+                from: location
+            )
+            guard access.participantID == invitation.cloudShareParticipantID,
+                  InvitationCode.shareURLDigest(access.url) == expectedURLDigest else {
+                throw HouseholdError.invitationUnavailable
+            }
+            return RecoveredFamilyInvitation(invitation: invitation, shareURL: access.url)
+        }
+    }
+
     func revokeInvitation(_ invitation: FamilyInvitation) async throws {
         try await withExclusiveCloudMutation {
             try requireParent()
@@ -888,7 +911,7 @@ final class HouseholdStore {
                 bodies.append(.invitation(invitation))
                 diagnostics.record(stage: .invitationAppend, outcome: .started, householdID: household.id,
                                    factCount: bodies.count)
-                try append(bodies)
+                try append(bodies, scheduleSynchronization: false)
                 diagnostics.record(stage: .invitationAppend, outcome: .succeeded, householdID: household.id,
                                    factCount: bodies.count)
                 try await synchronize()
@@ -3686,7 +3709,7 @@ final class HouseholdStore {
         try append([body])
     }
 
-    private func append(_ bodies: [HouseholdFactBody]) throws {
+    private func append(_ bodies: [HouseholdFactBody], scheduleSynchronization: Bool = true) throws {
         guard let householdID = session.householdID else { throw HouseholdError.noHousehold }
         let previousSequence = facts.map(\.sequence).max() ?? 0
         guard bodies.count <= Int64.max - previousSequence else { throw HouseholdError.malformedData }
@@ -3697,7 +3720,7 @@ final class HouseholdStore {
         }
         try repository.commit(facts: appended)
         try reload()
-        scheduleSync()
+        if scheduleSynchronization { scheduleSync() }
     }
 
     private func reload() throws {

@@ -42,7 +42,7 @@ final class InvitationTests: XCTestCase {
         )
     }
 
-    func testScheduledSyncDoesNotInheritCompletedInvitationMutationToken() async throws {
+    func testSlowInvitationUploadDoesNotLaunchCompetingScheduledSync() async throws {
         let server = TestCloudServer()
         let transport = TestTransport(server: server, account: "owner")
         let store = try HouseholdStore(
@@ -56,12 +56,52 @@ final class InvitationTests: XCTestCase {
         try await store.connect()
         try await Task.sleep(for: .milliseconds(500))
         store.errorMessage = nil
+        transport.invitationFactUploadDelay = .milliseconds(500)
 
         _ = try await store.createChildInvitation(memberID: child.id)
-        try await Task.sleep(for: .milliseconds(500))
 
         XCTAssertNil(store.errorMessage)
         XCTAssertEqual(store.syncMessage, "Up to date")
+        XCTAssertEqual(store.pendingCount, 0)
+    }
+
+    func testExistingInvitationRecoveryReturnsDigestMatchedRawAppleURL() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let issued = try await fixture.store.createChildInvitation(memberID: fixture.child.id)
+
+        let recovered = try await fixture.store.recoverInvitation(issued.invitation)
+
+        XCTAssertEqual(recovered.invitation, issued.invitation)
+        XCTAssertEqual(recovered.shareURL, issued.shareURL)
+        XCTAssertEqual(recovered.qrPayload, issued.shareURL.absoluteString)
+        XCTAssertNotEqual(recovered.qrPayload, issued.invitationURL.absoluteString)
+    }
+
+    func testExistingInvitationRecoveryRejectsMismatchedURLParticipantAndMissingAccess() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let issued = try await fixture.store.createChildInvitation(memberID: fixture.child.id)
+
+        fixture.transport.recoveredInvitationURL = URL(string: "https://test.invalid/different")!
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.store.recoverInvitation(issued.invitation),
+            expected: .invitationUnavailable
+        )
+
+        fixture.transport.recoveredInvitationURL = nil
+        fixture.transport.recoveredInvitationParticipantID = "different-participant"
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.store.recoverInvitation(issued.invitation),
+            expected: .invitationUnavailable
+        )
+
+        fixture.transport.recoveredInvitationParticipantID = nil
+        fixture.server.zones[fixture.location.zoneName]?.pendingInvitationParticipants.remove(
+            issued.invitation.cloudShareParticipantID
+        )
+        await XCTAssertThrowsErrorAsync(
+            try await fixture.store.recoverInvitation(issued.invitation),
+            expected: .invitationUnavailable
+        )
     }
 
     func testCleanFirstChildInvitationCreatesAndRetainsOwnerMembership() async throws {

@@ -8,6 +8,7 @@ struct FamilyManagementView: View {
     @State private var archiving: FamilyMember?
     @State private var approving: ProfileRequest?
     @State private var inviting = false
+    @State private var recoveredInvitation: RecoveredFamilyInvitation?
     @State private var revokingInvitation: FamilyInvitation?
     @State private var busy = false
 
@@ -53,6 +54,11 @@ struct FamilyManagementView: View {
                             Text(invitationMember(invitation)).font(.headline)
                             Label(invitationStatusText(invitation), systemImage: invitationStatusSymbol(invitation))
                                 .font(.caption).foregroundStyle(.secondary)
+                            if store.invitationStatus(invitation) == .available {
+                                Button("Show Invitation Again") { recover(invitation) }
+                                    .disabled(busy)
+                                    .accessibilityIdentifier("recover-invitation")
+                            }
                             if store.invitationStatus(invitation) != .revoked {
                                 Button(store.invitationStatus(invitation) == .consumed ? "Remove Device Access" : "Revoke Invitation",
                                        role: .destructive) {
@@ -100,6 +106,9 @@ struct FamilyManagementView: View {
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
         .sheet(isPresented: $inviting) { FamilyInvitationView() }
+        .sheet(item: $recoveredInvitation) { invitation in
+            RecoveredFamilyInvitationView(recovered: invitation)
+        }
         .alert(archiving.map { "Remove \"\($0.displayName)\"?" } ?? "Remove Family Member?", isPresented: Binding(
             get: { archiving != nil }, set: { if !$0 { archiving = nil } }
         )) {
@@ -166,6 +175,15 @@ struct FamilyManagementView: View {
         Task {
             defer { busy = false }
             do { try await action() } catch { store.errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func recover(_ invitation: FamilyInvitation) {
+        busy = true
+        Task {
+            defer { busy = false }
+            do { recoveredInvitation = try await store.recoverInvitation(invitation) }
+            catch { store.errorMessage = error.localizedDescription }
         }
     }
 

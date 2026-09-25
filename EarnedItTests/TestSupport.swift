@@ -130,6 +130,9 @@ final class TestTransport: HouseholdTransport {
     var invitationValidationTimeFailures = 0
     var invitationValidationTimeError: Error?
     var invitationAccessError: Error?
+    var invitationFactUploadDelay: Duration?
+    var recoveredInvitationParticipantID: String?
+    var recoveredInvitationURL: URL?
     var accountResetDiscoveryError: Error?
     var accountResetDeletionFailures = 0
     private(set) var invitationValidationTimeCalls = 0
@@ -799,6 +802,9 @@ final class TestTransport: HouseholdTransport {
         } ? .invitationFactUpload : .journalUpload
         familyTransitionDiagnostics.record(stage: stage, outcome: .started,
                                             householdID: location.householdID, factCount: facts.count)
+        if stage == .invitationFactUpload, let invitationFactUploadDelay {
+            try await Task.sleep(for: invitationFactUploadDelay)
+        }
         guard server.writeAllowed else {
             let error = HouseholdError.readOnly
             familyTransitionDiagnostics.record(stage: stage, outcome: .failed,
@@ -871,6 +877,17 @@ final class TestTransport: HouseholdTransport {
         familyTransitionDiagnostics.record(stage: .participantCreate, outcome: .succeeded,
                                             householdID: location.householdID)
         return CloudInvitationAccess(participantID: participantID, url: url)
+    }
+    func recoverInvitationAccess(participantID: String, from location: CloudLocation) async throws
+        -> CloudInvitationAccess {
+        guard server.zones[location.zoneName]?.owner == account,
+              server.zones[location.zoneName]?.pendingInvitationParticipants.contains(participantID) == true else {
+            throw HouseholdError.invitationUnavailable
+        }
+        let returnedParticipantID = recoveredInvitationParticipantID ?? participantID
+        let url = recoveredInvitationURL
+            ?? URL(string: "https://test.invalid/\(location.zoneName)?invitation=\(participantID)")!
+        return CloudInvitationAccess(participantID: returnedParticipantID, url: url)
     }
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
         server.zones[location.zoneName]?.pendingInvitationParticipants.remove(participantID)

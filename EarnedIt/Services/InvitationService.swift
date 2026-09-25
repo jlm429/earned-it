@@ -37,6 +37,18 @@ struct IssuedFamilyInvitation: Identifiable, Equatable {
     }
 }
 
+struct RecoveredFamilyInvitation: Identifiable, Equatable {
+    let invitation: FamilyInvitation
+    let shareURL: URL
+
+    var id: UUID { invitation.id }
+    var qrPayload: String { shareURL.absoluteString }
+
+    var shareMessage: String {
+        "Join my Earned It family. Open this Apple invitation link or scan its QR code to connect to your approved profile."
+    }
+}
+
 /// Local continuation only. Shared facts never contain a clear invitation code or delivery URL.
 struct PendingInvitationPackage: Codable, Equatable {
     let codeDigest: String
