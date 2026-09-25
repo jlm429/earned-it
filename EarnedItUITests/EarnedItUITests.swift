@@ -112,6 +112,63 @@ final class EarnedItUITests: XCTestCase {
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
     }
 
+    func testInvitationActionsUseDistinctLargeTypeTapTargets() throws {
+        app.terminate()
+        app.launchArguments = [
+            "--ui-test-store",
+            "--ui-test-reset",
+            "--ui-test-invitation-actions",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityXXXL"
+        ]
+        app.launch()
+
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("family-management")
+        XCTAssertTrue(screen("family-management-screen").waitForExistence(timeout: 5))
+        let recover = app.buttons["recover-invitation"]
+        let revoke = app.buttons["revoke-invitation"]
+        reveal(recover)
+        reveal(revoke)
+
+        XCTAssertTrue(recover.isHittable)
+        XCTAssertTrue(revoke.isHittable)
+        XCTAssertGreaterThanOrEqual(recover.frame.height, 44 - 0.01)
+        XCTAssertGreaterThanOrEqual(revoke.frame.height, 44 - 0.01)
+        XCTAssertGreaterThanOrEqual(revoke.frame.minY - recover.frame.maxY, 8)
+        XCTAssertTrue(recover.label.contains("Show invitation again for Hanna"))
+        XCTAssertTrue(revoke.label.contains("Revoke invitation for Hanna"))
+
+        recover.tap()
+        XCTAssertFalse(app.alerts["Revoke this invitation?"].exists)
+        XCTAssertTrue(app.alerts["Unable to Update"].waitForExistence(timeout: 5))
+        tap("OK")
+
+        reveal(revoke)
+        revoke.tap()
+        XCTAssertTrue(app.alerts["Revoke this invitation?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts["Revoke this invitation?"].buttons["Revoke Access"].exists)
+        app.alerts["Revoke this invitation?"].buttons["Cancel"].tap()
+        keepScreenshot("distinct-invitation-actions-largest-text")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion])
+
+        app.terminate()
+        app.launchArguments = [
+            "--ui-test-store",
+            "--ui-test-reset",
+            "--ui-test-invitation-actions",
+            "--ui-test-non-owner-invitation-actions"
+        ]
+        app.launch()
+
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("family-management")
+        XCTAssertTrue(screen("family-management-screen").waitForExistence(timeout: 5))
+        reveal(app.buttons["revoke-invitation"])
+        XCTAssertFalse(app.buttons["recover-invitation"].exists)
+        XCTAssertTrue(app.buttons["revoke-invitation"].exists)
+    }
+
     func testJoinDiagnosticsStayOutOfOnboarding() {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-last-join-receipt"]

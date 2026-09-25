@@ -93,57 +93,17 @@ struct FamilyInvitationView: View {
     }
 
     private func invitationReady(_ issued: IssuedFamilyInvitation) -> some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 52))
-                    .foregroundStyle(.green)
-                    .accessibilityHidden(true)
-                Text(profileDescription(issued.invitation))
-                    .font(.title2.bold())
-                    .multilineTextAlignment(.center)
-                Text("Valid for 24 hours and one installation")
-                    .foregroundStyle(.secondary)
-
-                InvitationQRCode(payload: issued.qrPayload)
-                    .frame(maxWidth: 240, maxHeight: 240)
-                    .padding(16)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 20))
-
-                VStack(spacing: 6) {
-                    Text("Invitation code").font(.caption).foregroundStyle(.secondary)
-                    Text(issued.code)
-                        .font(.title2.monospaced().bold())
-                        .textSelection(.enabled)
-                        .accessibilityIdentifier("issued-invitation-code")
-                }
-
-                ShareLink(item: issued.invitationURL, subject: Text("Earned It family invitation"),
-                          message: Text(issued.shareMessage)) {
-                    Label("Share Invitation", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .accessibilityIdentifier("share-invitation")
-
-                Text("Scan this QR code in Earned It or open the shared invitation. Follow any Apple confirmation, then Earned It finishes connecting to the profile shown above.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(24)
-        }
-        .background(Color(uiColor: .systemGroupedBackground))
+        FamilyInvitationDeliveryView(
+            invitation: issued.invitation,
+            deliveryURL: issued.invitationURL,
+            code: issued.code,
+            shareMessage: issued.shareMessage,
+            validityMessage: "Valid for 24 hours and one installation"
+        )
     }
 
     private var canCreate: Bool {
         role == .child ? childID != nil : !parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func profileDescription(_ invitation: FamilyInvitation) -> String {
-        guard let member = store.snapshot.member(invitation.memberID) else { return invitation.role.title }
-        return "For \(member.displayName), \(member.role.title)"
     }
 
     private func createInvitation() {
@@ -167,5 +127,98 @@ struct FamilyInvitationView: View {
     private func copyDiagnostics() {
         guard let diagnostics = store.latestInvitationDiagnostics else { return }
         UIPasteboard.general.string = diagnostics
+    }
+}
+
+private struct FamilyInvitationDeliveryView: View {
+    @Environment(HouseholdStore.self) private var store
+    let invitation: FamilyInvitation
+    let deliveryURL: URL
+    let code: String?
+    let shareMessage: String
+    let validityMessage: String
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(.green)
+                    .accessibilityHidden(true)
+                Text(profileDescription)
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                Text(validityMessage)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("invitation-validity")
+
+                InvitationQRCode(payload: deliveryURL.absoluteString)
+                    .frame(maxWidth: 240, maxHeight: 240)
+                    .padding(16)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 20))
+
+                if let code {
+                    VStack(spacing: 6) {
+                        Text("Invitation code").font(.caption).foregroundStyle(.secondary)
+                        Text(code)
+                            .font(.title2.monospaced().bold())
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("issued-invitation-code")
+                    }
+                }
+
+                ShareLink(item: deliveryURL, subject: Text("Earned It family invitation"),
+                          message: Text(shareMessage)) {
+                    Label("Share Invitation", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityIdentifier("share-invitation")
+
+                Text(instructions)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    private var profileDescription: String {
+        guard let member = store.snapshot.member(invitation.memberID) else { return invitation.role.title }
+        return "For \(member.displayName), \(member.role.title)"
+    }
+
+    private var instructions: String {
+        if code != nil {
+            return "Scan this QR code in Earned It or open the shared invitation. Follow any Apple confirmation, then Earned It finishes connecting to the profile shown above."
+        }
+        return "Scan this QR code or open the Apple invitation link on the joining device. Apple confirms access, then Earned It connects to the profile shown above."
+    }
+}
+
+struct RecoveredFamilyInvitationView: View {
+    @Environment(\.dismiss) private var dismiss
+    let recovered: RecoveredFamilyInvitation
+
+    var body: some View {
+        NavigationStack {
+            FamilyInvitationDeliveryView(
+                invitation: recovered.invitation,
+                deliveryURL: recovered.shareURL,
+                code: nil,
+                shareMessage: recovered.shareMessage,
+                validityMessage: recovered.validityMessage
+            )
+            .navigationTitle("Invitation Ready")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }

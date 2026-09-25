@@ -52,7 +52,7 @@ struct JoinFamilyView: View {
 
                 Section {
                     Button("Join Family") { redeem() }
-                        .disabled(busy || (InvitationCode.normalized(code) == nil && InvitationCredential(text: invitationLink)?.shareURL == nil))
+                        .disabled(busy || !canJoin)
                         .accessibilityIdentifier("accept-invitation")
                     if busy { ProgressView("Checking invitation…") }
                 }
@@ -80,10 +80,15 @@ struct JoinFamilyView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .sheet(isPresented: $scanning) {
                 InvitationScannerSheet { payload in
-                    guard let credential = InvitationCredential(text: payload) else { return }
-                    code = credential.code
-                    invitationLink = credential.shareURL?.absoluteString ?? ""
-                    run { try await store.redeemInvitation(payload); if store.selectedMember != nil { dismiss() } }
+                    if let credential = InvitationCredential(text: payload) {
+                        code = credential.code
+                        invitationLink = credential.shareURL?.absoluteString ?? ""
+                        run { try await store.redeemInvitation(payload); if store.selectedMember != nil { dismiss() } }
+                    } else if let shareURL = InvitationCredential.rawAppleShareURL(from: payload) {
+                        code = ""
+                        invitationLink = shareURL.absoluteString
+                        run { try await store.openRawAppleInvitation(payload) }
+                    }
                 }
             }
             .alert("Unable to Join", isPresented: Binding(
@@ -103,6 +108,11 @@ struct JoinFamilyView: View {
                     if store.selectedMember != nil { dismiss() }
                     return
                 }
+                if InvitationCode.normalized(code) == nil,
+                   InvitationCredential.rawAppleShareURL(from: invitationLink) != nil {
+                    try await store.openRawAppleInvitation(invitationLink)
+                    return
+                }
                 guard let url = URL(string: invitationLink.trimmingCharacters(in: .whitespacesAndNewlines)) else {
                     throw HouseholdError.invitationNotFound
                 }
@@ -110,6 +120,12 @@ struct JoinFamilyView: View {
             }
             if store.selectedMember != nil { dismiss() }
         }
+    }
+
+    private var canJoin: Bool {
+        InvitationCode.normalized(code) != nil
+            || InvitationCredential(text: invitationLink)?.shareURL != nil
+            || InvitationCredential.rawAppleShareURL(from: invitationLink) != nil
     }
 
     private func run(_ action: @escaping () async throws -> Void) {

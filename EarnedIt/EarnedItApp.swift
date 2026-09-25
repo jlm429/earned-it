@@ -113,6 +113,12 @@ struct EarnedItApp: App {
                 }
                 try initialStore.prepareFamilyAccessLostUITest()
             }
+            if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-invitation-actions") {
+                try initialStore.prepareInvitationActionsUITest(
+                    isOwner: !arguments.contains("--ui-test-non-owner-invitation-actions")
+                )
+            }
             #else
             let initialStore = try HouseholdStore(
                 repository: repository,

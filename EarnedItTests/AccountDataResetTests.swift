@@ -49,6 +49,47 @@ final class TestAccountLocalDataResetter: AccountLocalDataResetting {
 
 @MainActor
 final class AccountDataResetTests: XCTestCase {
+    func testResetDeletesLifecycleAuthorityWithExactCurrentUserSentinelCreator() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: false
+        )
+        let ownedHouseholdID = UUID()
+        let malformedHouseholdID = UUID()
+        let sentinel = CKRecord.ID(recordName: CKCurrentUserDefaultName, zoneID: .default)
+        let malformedSentinel = CKRecord.ID(
+            recordName: CKCurrentUserDefaultName,
+            zoneID: CKRecordZone.ID(zoneName: "foreign-zone", ownerName: CKCurrentUserDefaultName)
+        )
+        server.lifecycleAuthorities[ownedHouseholdID] = .init(
+            state: .deleted,
+            creator: "owner",
+            lastModifier: "owner",
+            creatorRecordID: sentinel
+        )
+        server.lifecycleAuthorities[malformedHouseholdID] = .init(
+            state: .deleted,
+            creator: "owner",
+            lastModifier: "owner",
+            creatorRecordID: malformedSentinel
+        )
+
+        let creatorQueries = CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorRecordIDs(
+            expectedCurrentUserRecordName: "owner"
+        )
+        XCTAssertTrue(creatorQueries.contains { $0.recordName == "owner" })
+        XCTAssertTrue(creatorQueries.contains { $0 == sentinel })
+
+        try await store.deleteAllEarnedItData()
+
+        XCTAssertNil(server.lifecycleAuthorities[ownedHouseholdID])
+        XCTAssertNotNil(server.lifecycleAuthorities[malformedHouseholdID])
+        XCTAssertNil(store.session.accountDataResetProgress)
+    }
+
     func testOwnerResetDeletesEveryEarnedItZoneAccountRecordAndLocalFact() async throws {
         let server = TestCloudServer()
         let resetter = TestAccountLocalDataResetter()

@@ -82,22 +82,28 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         } catch let error as CKError where Self.isRecordMissing(error, recordID: membershipRecordID) {
         }
 
-        let creator = CKRecord.Reference(
-            recordID: CKRecord.ID(recordName: expectedParticipantID),
-            action: .none
-        )
-        let publicRecords = try await resetRecords(
-            recordType: familyLifecycleRecordType,
-            predicate: NSPredicate(
-                format: "%K == %@",
-                CKRecord.SystemFieldKey.creatorUserRecordID,
-                creator
-            ),
-            database: container.publicCloudDatabase,
-            zoneID: .default
-        )
+        var publicRecords: [CKRecord] = []
+        for creatorRecordID in Self.accountResetLifecycleAuthorityCreatorRecordIDs(
+            expectedCurrentUserRecordName: expectedParticipantID
+        ) {
+            let creator = CKRecord.Reference(recordID: creatorRecordID, action: .none)
+            publicRecords += try await resetRecords(
+                recordType: familyLifecycleRecordType,
+                predicate: NSPredicate(
+                    format: "%K == %@",
+                    CKRecord.SystemFieldKey.creatorUserRecordID,
+                    creator
+                ),
+                database: container.publicCloudDatabase,
+                zoneID: .default
+            )
+            try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+        }
         targets += publicRecords.compactMap { record in
-            guard record.creatorUserRecordID?.recordName == expectedParticipantID else { return nil }
+            guard Self.accountResetLifecycleAuthorityCreatorMatches(
+                record.creatorUserRecordID,
+                expectedCurrentUserRecordName: expectedParticipantID
+            ) else { return nil }
             return .publicRecord(
                 recordType: familyLifecycleRecordType,
                 recordName: record.recordID.recordName
@@ -152,7 +158,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             do {
                 let record = try await container.publicCloudDatabase.record(for: recordID)
                 guard record.recordType == recordType,
-                      record.creatorUserRecordID?.recordName == expectedParticipantID else {
+                      Self.accountResetLifecycleAuthorityCreatorMatches(
+                          record.creatorUserRecordID,
+                          expectedCurrentUserRecordName: expectedParticipantID
+                      ) else {
                     throw HouseholdError.permission
                 }
                 try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
@@ -624,7 +633,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             try await requireAccount(expectedParticipantID, generation: expectedGeneration)
             let state = try await readFamilyLifecycleAuthority(
                 householdID: householdID,
-                ownerAuthorityBinding: ownerAuthorityBinding
+                ownerAuthorityBinding: ownerAuthorityBinding,
+                expectedCurrentUserRecordName: expectedParticipantID
             )
             try await requireAccount(expectedParticipantID, generation: expectedGeneration)
             familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck,
@@ -795,6 +805,33 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
+    func recoverInvitationAccess(participantID: String, from location: CloudLocation) async throws
+        -> CloudInvitationAccess {
+        guard location.isOwner, !participantID.isEmpty else { throw HouseholdError.invitationUnavailable }
+        let id = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: zoneID(for: location))
+        let share: CKShare
+        do {
+            guard let fetched = try await database(for: location).record(for: id) as? CKShare else {
+                throw HouseholdError.invitationUnavailable
+            }
+            share = fetched
+        } catch let error as CKError where Self.isRecordMissing(error, recordID: id) {
+            throw HouseholdError.invitationUnavailable
+        }
+        guard let participant = share.participants.first(where: { $0.participantID == participantID }),
+              Self.invitationParticipantMatches(
+                participantID: participant.participantID,
+                expectedParticipantID: participantID,
+                acceptanceStatusMatches: participant.acceptanceStatus == .pending,
+                permission: participant.permission,
+                role: participant.role
+              ),
+              let url = oneTimeURL(in: share, participantID: participant.participantID) else {
+            throw HouseholdError.invitationUnavailable
+        }
+        return CloudInvitationAccess(participantID: participant.participantID, url: url)
+    }
+
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
         let share = try await share(for: location, title: "Earned It Family")
         guard let participant = share.participants.first(where: { $0.participantID == participantID }) else { return }
@@ -802,9 +839,35 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         _ = try await database(for: location).save(share)
     }
 
-    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
+    func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String? {
         let share = try await share(for: location, title: "Earned It Family")
-        return share.currentUserParticipant?.participantID == participantID
+        guard let participant = share.currentUserParticipant,
+              Self.invitationParticipantMatches(
+                  participantID: participant.participantID,
+                  expectedParticipantID: participant.participantID,
+                  acceptanceStatusMatches: participant.acceptanceStatus == .accepted,
+                  permission: participant.permission,
+                  role: participant.role
+              ) else { return nil }
+        return participant.participantID
+    }
+
+    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
+        try await acceptedInvitationParticipantID(in: location) == participantID
+    }
+
+    static func invitationParticipantMatches(
+        participantID: String,
+        expectedParticipantID: String,
+        acceptanceStatusMatches: Bool,
+        permission: CKShare.ParticipantPermission,
+        role: CKShare.ParticipantRole
+    ) -> Bool {
+        !participantID.isEmpty
+            && participantID == expectedParticipantID
+            && acceptanceStatusMatches
+            && permission == .readWrite
+            && role == .privateUser
     }
 
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
@@ -829,13 +892,52 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
-    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
+    private func requireInvitationClaimAuthority(
+        in location: CloudLocation,
+        expectedParticipantID: String,
+        expectedInvitationParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws {
+        guard accountGeneration == expectedAccountGeneration,
+              try await participantID() == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        guard try await hasInvitationAccess(
+            participantID: expectedInvitationParticipantID,
+            in: location
+        ) else {
+            throw HouseholdError.invitationNotFound
+        }
+        guard accountGeneration == expectedAccountGeneration,
+              try await participantID() == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+    }
+
+    func claimInvitation(
+        _ facts: [HouseholdFact],
+        in location: CloudLocation,
+        expectedParticipantID: String,
+        expectedInvitationParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [HouseholdFact] {
         guard facts.count == 2,
-              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+              facts.allSatisfy({
+                  guard case let .invitationClaim(claim) = $0.body else { return false }
+                  return claim.cloudParticipantID == expectedParticipantID
+              }) else {
             throw HouseholdError.malformedData
         }
         let records = try facts.map { try Self.record(for: $0, location: location) }
         let database = database(for: location)
+        try await requireInvitationClaimAuthority(
+            in: location,
+            expectedParticipantID: expectedParticipantID,
+            expectedInvitationParticipantID: expectedInvitationParticipantID,
+            expectedAccountGeneration: expectedAccountGeneration
+        )
         do {
             let results = try await database.modifyRecords(
                 saving: records, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
@@ -862,6 +964,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
             guard !missing.isEmpty else { return facts }
             let missingRecords = try missing.map { try Self.record(for: $0, location: location) }
+            try await requireInvitationClaimAuthority(
+                in: location,
+                expectedParticipantID: expectedParticipantID,
+                expectedInvitationParticipantID: expectedInvitationParticipantID,
+                expectedAccountGeneration: expectedAccountGeneration
+            )
             do {
                 let results = try await database.modifyRecords(
                     saving: missingRecords, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
@@ -943,7 +1051,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             do {
                 snapshot.lifecycleState = try await readFamilyLifecycleAuthority(
                     householdID: targetHouseholdID,
-                    ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: participant)
+                    ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: participant),
+                    expectedCurrentUserRecordName: participant
                 )
             } catch {
                 snapshot.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
@@ -1080,11 +1189,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         result.lockAttemptMatchesLocal = localSession.accountMembershipLockAttemptID.map { $0 == lock.attemptID }
         result.lockBindingMatchesLocal = localSession.accountMembershipClaimBinding.map { $0 == lock.claimBinding }
         result.lockHasOwnerAuthorityBinding = lock.ownerAuthorityBinding != nil
-        if participant != nil, let ownerAuthorityBinding = lock.ownerAuthorityBinding {
+        if let participant, let ownerAuthorityBinding = lock.ownerAuthorityBinding {
             do {
                 result.lifecycleState = try await readFamilyLifecycleAuthority(
                     householdID: lock.householdID,
-                    ownerAuthorityBinding: ownerAuthorityBinding
+                    ownerAuthorityBinding: ownerAuthorityBinding,
+                    expectedCurrentUserRecordName: participant
                 )
             } catch {
                 result.cloudErrors += FamilyTransitionDiagnostics.cloudErrors(from: error)
@@ -1310,7 +1420,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     let record = try await database.record(for: recordID)
                     let comparison = familyLifecycleAuthorityComparison(
                         record,
-                        ownerAuthorityBinding: ownerAuthorityBinding
+                        ownerAuthorityBinding: ownerAuthorityBinding,
+                        expectedCurrentUserRecordName: expectedParticipantID
                     )
                     familyTransitionDiagnostics.recordLifecycleAuthority(
                         attempt: attempt,
@@ -1355,7 +1466,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                         comparison: { saved in
                             self.familyLifecycleAuthorityComparison(
                                 saved,
-                                ownerAuthorityBinding: ownerAuthorityBinding
+                                ownerAuthorityBinding: ownerAuthorityBinding,
+                                expectedCurrentUserRecordName: expectedParticipantID
                             )
                         }
                     )
@@ -1410,11 +1522,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private func decodeFamilyLifecycleAuthority(
         _ record: CKRecord,
-        ownerAuthorityBinding: String
+        ownerAuthorityBinding: String,
+        expectedCurrentUserRecordName: String
     ) throws -> FamilyLifecycleState {
         try decodeFamilyLifecycleAuthority(familyLifecycleAuthorityComparison(
             record,
-            ownerAuthorityBinding: ownerAuthorityBinding
+            ownerAuthorityBinding: ownerAuthorityBinding,
+            expectedCurrentUserRecordName: expectedCurrentUserRecordName
         ))
     }
 
@@ -1429,7 +1543,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private func familyLifecycleAuthorityComparison(
         _ record: CKRecord,
-        ownerAuthorityBinding: String
+        ownerAuthorityBinding: String,
+        expectedCurrentUserRecordName: String
     ) -> InvitationLifecycleAuthorityRecordComparison {
         let formatVersion = (record["formatVersion"] as? NSNumber)?.intValue
             ?? record["formatVersion"] as? Int
@@ -1437,9 +1552,51 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             recordTypeMatches: record.recordType == familyLifecycleRecordType,
             formatVersion: formatVersion,
             rawState: record["state"] as? String,
-            creatorParticipantID: record.creatorUserRecordID?.recordName,
-            modifierParticipantID: record.lastModifiedUserRecordID?.recordName,
+            creatorUserRecordID: record.creatorUserRecordID,
+            modifierUserRecordID: record.lastModifiedUserRecordID,
+            expectedCurrentUserRecordName: expectedCurrentUserRecordName,
             ownerAuthorityBinding: ownerAuthorityBinding
+        )
+    }
+
+    static func familyLifecycleAuthorityComparison(
+        recordTypeMatches: Bool,
+        formatVersion: Int?,
+        rawState: String?,
+        creatorUserRecordID: CKRecord.ID?,
+        modifierUserRecordID: CKRecord.ID?,
+        expectedCurrentUserRecordName: String,
+        ownerAuthorityBinding: String
+    ) -> InvitationLifecycleAuthorityRecordComparison {
+        let creatorMatches = creatorUserRecordID.map {
+            familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
+                $0,
+                expectedCurrentUserRecordName: expectedCurrentUserRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+        }
+        let modifierMatches = modifierUserRecordID.map {
+            familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
+                $0,
+                expectedCurrentUserRecordName: expectedCurrentUserRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+        }
+        let state = rawState.flatMap(FamilyLifecycleState.init(rawValue:))
+        return InvitationLifecycleAuthorityRecordComparison(
+            recordTypeMatches: recordTypeMatches,
+            formatVersionMatches: formatVersion == 1,
+            state: state,
+            stateRecognized: state != nil,
+            creatorPresent: creatorUserRecordID != nil,
+            creatorMatchesOwnerAuthority: creatorMatches,
+            modifierPresent: modifierUserRecordID != nil,
+            modifierMatchesOwnerAuthority: modifierMatches,
+            identityRepresentation: familyLifecycleAuthorityIdentityRepresentation(
+                creatorUserRecordID: creatorUserRecordID,
+                modifierUserRecordID: modifierUserRecordID,
+                expectedCurrentUserRecordName: expectedCurrentUserRecordName
+            )
         )
     }
 
@@ -1449,7 +1606,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         rawState: String?,
         creatorParticipantID: String?,
         modifierParticipantID: String?,
-        ownerAuthorityBinding: String
+        ownerAuthorityBinding: String,
+        identityRepresentation: InvitationLifecycleAuthorityIdentityRepresentation? = nil
     ) -> InvitationLifecycleAuthorityRecordComparison {
         let creatorMatches = creatorParticipantID.map {
             AccountMembershipBinding.ownerAuthority(participantID: $0) == ownerAuthorityBinding
@@ -1464,9 +1622,100 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             state: state,
             stateRecognized: state != nil,
             creatorPresent: creatorParticipantID != nil,
-            creatorMatchesCurrentAccount: creatorMatches,
+            creatorMatchesOwnerAuthority: creatorMatches,
             modifierPresent: modifierParticipantID != nil,
-            modifierMatchesCurrentAccount: modifierMatches
+            modifierMatchesOwnerAuthority: modifierMatches,
+            identityRepresentation: identityRepresentation
+        )
+    }
+
+    private static func familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
+        _ recordID: CKRecord.ID,
+        expectedCurrentUserRecordName: String,
+        ownerAuthorityBinding: String
+    ) -> Bool {
+        if recordID.recordName == CKCurrentUserDefaultName {
+            return recordID.zoneID.zoneName == CKRecordZone.ID.default.zoneName
+                && recordID.zoneID.ownerName == CKCurrentUserDefaultName
+                && AccountMembershipBinding.ownerAuthority(participantID: expectedCurrentUserRecordName)
+                    == ownerAuthorityBinding
+        }
+        return AccountMembershipBinding.ownerAuthority(participantID: recordID.recordName)
+            == ownerAuthorityBinding
+    }
+
+    static func accountResetLifecycleAuthorityCreatorRecordIDs(
+        expectedCurrentUserRecordName: String
+    ) -> [CKRecord.ID] {
+        let sentinel = CKRecord.ID(recordName: CKCurrentUserDefaultName, zoneID: .default)
+        guard expectedCurrentUserRecordName != CKCurrentUserDefaultName else { return [sentinel] }
+        return [
+            CKRecord.ID(recordName: expectedCurrentUserRecordName, zoneID: .default),
+            sentinel
+        ]
+    }
+
+    static func accountResetLifecycleAuthorityCreatorMatches(
+        _ creatorUserRecordID: CKRecord.ID?,
+        expectedCurrentUserRecordName: String
+    ) -> Bool {
+        guard let creatorUserRecordID else { return false }
+        return familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
+            creatorUserRecordID,
+            expectedCurrentUserRecordName: expectedCurrentUserRecordName,
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(
+                participantID: expectedCurrentUserRecordName
+            )
+        )
+    }
+
+    static func familyLifecycleAuthorityIdentityRepresentation(
+        creatorUserRecordID: CKRecord.ID?,
+        modifierUserRecordID: CKRecord.ID?,
+        expectedCurrentUserRecordName: String
+    ) -> InvitationLifecycleAuthorityIdentityRepresentation {
+        let defaultZoneName = CKRecordZone.ID.default.zoneName
+        let creatorModifierRecordNamesMatch: Bool?
+        if let creatorRecordName = creatorUserRecordID?.recordName,
+           let modifierRecordName = modifierUserRecordID?.recordName {
+            creatorModifierRecordNamesMatch = creatorRecordName == modifierRecordName
+        } else {
+            creatorModifierRecordNamesMatch = nil
+        }
+        return InvitationLifecycleAuthorityIdentityRepresentation(
+            expectedCurrentRecordNameIsCurrentUserDefaultName:
+                expectedCurrentUserRecordName == CKCurrentUserDefaultName,
+            creatorRecordNameMatchesExpectedCurrentUser: creatorUserRecordID.map {
+                $0.recordName == expectedCurrentUserRecordName
+            },
+            creatorRecordNameIsCurrentUserDefaultName: creatorUserRecordID.map {
+                $0.recordName == CKCurrentUserDefaultName
+            },
+            modifierRecordNameMatchesExpectedCurrentUser: modifierUserRecordID.map {
+                $0.recordName == expectedCurrentUserRecordName
+            },
+            modifierRecordNameIsCurrentUserDefaultName: modifierUserRecordID.map {
+                $0.recordName == CKCurrentUserDefaultName
+            },
+            creatorModifierRecordNamesMatch: creatorModifierRecordNamesMatch,
+            creatorZoneNameIsDefault: creatorUserRecordID.map {
+                $0.zoneID.zoneName == defaultZoneName
+            },
+            creatorZoneOwnerIsCurrentUserDefaultName: creatorUserRecordID.map {
+                $0.zoneID.ownerName == CKCurrentUserDefaultName
+            },
+            creatorZoneOwnerMatchesExpectedCurrentUser: creatorUserRecordID.map {
+                $0.zoneID.ownerName == expectedCurrentUserRecordName
+            },
+            modifierZoneNameIsDefault: modifierUserRecordID.map {
+                $0.zoneID.zoneName == defaultZoneName
+            },
+            modifierZoneOwnerIsCurrentUserDefaultName: modifierUserRecordID.map {
+                $0.zoneID.ownerName == CKCurrentUserDefaultName
+            },
+            modifierZoneOwnerMatchesExpectedCurrentUser: modifierUserRecordID.map {
+                $0.zoneID.ownerName == expectedCurrentUserRecordName
+            }
         )
     }
 
@@ -1494,12 +1743,17 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private func readFamilyLifecycleAuthority(
         householdID: UUID,
-        ownerAuthorityBinding: String
+        ownerAuthorityBinding: String,
+        expectedCurrentUserRecordName: String
     ) async throws -> FamilyLifecycleState? {
         let recordID = familyLifecycleRecordID(householdID: householdID)
         do {
             let record = try await container.publicCloudDatabase.record(for: recordID)
-            return try decodeFamilyLifecycleAuthority(record, ownerAuthorityBinding: ownerAuthorityBinding)
+            return try decodeFamilyLifecycleAuthority(
+                record,
+                ownerAuthorityBinding: ownerAuthorityBinding,
+                expectedCurrentUserRecordName: expectedCurrentUserRecordName
+            )
         } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
             return nil
         }

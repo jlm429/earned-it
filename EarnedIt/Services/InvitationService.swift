@@ -37,6 +37,24 @@ struct IssuedFamilyInvitation: Identifiable, Equatable {
     }
 }
 
+struct RecoveredFamilyInvitation: Identifiable, Equatable {
+    let invitation: FamilyInvitation
+    let shareURL: URL
+
+    var id: UUID { invitation.id }
+    var qrPayload: String { shareURL.absoluteString }
+
+    var shareMessage: String {
+        "Join my Earned It family. Open this Apple invitation link or scan its QR code to connect to your approved profile."
+    }
+
+    var validityMessage: String {
+        "This is the original invitation. It expires "
+            + invitation.expiresAt.formatted(date: .abbreviated, time: .shortened)
+            + " and works on one installation."
+    }
+}
+
 /// Local continuation only. Shared facts never contain a clear invitation code or delivery URL.
 struct PendingInvitationPackage: Codable, Equatable {
     let codeDigest: String
@@ -101,6 +119,16 @@ struct InvitationCredential: Equatable {
         code = normalized
         shareURL = nil
     }
+
+    static func rawAppleShareURL(from text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              let host = url.host()?.lowercased(),
+              host == "icloud.com" || host.hasSuffix(".icloud.com"),
+              url.pathComponents.dropFirst().first == "share" else { return nil }
+        return url
+    }
 }
 
 enum InvitationLifecycleStatus: Equatable {
@@ -133,6 +161,13 @@ enum InvitationCode {
 
     static func shareURLDigest(_ url: URL) -> String {
         SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func isSHA256Digest(_ value: String?) -> Bool {
+        guard let value, value.utf8.count == 64 else { return false }
+        return value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (97...102).contains(byte)
+        }
     }
 
     static func accountClaimID(householdID: UUID, participantID: String, generationID: UUID) -> UUID {

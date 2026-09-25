@@ -6,6 +6,8 @@ The diagnostic trace covers an owner's first invitation after replacing a delete
 
 Every event contains only stage names, states, counts, equality results, CloudKit error codes, error source, and retry timing. It never logs family, member, device, participant, invitation, record, zone, or attempt identifiers. It never logs names, URLs, codes, digests, payloads, credentials, or secrets.
 
+The invitation failure surface exposes Copy Diagnostics only after an issuance error. The copied trace uses the same typed allow-list and is not shown as a routine debug console. Recipient and lifecycle failures may add equivalent copy actions only when a user can preserve a bounded failure trace without exposing invitation material or CloudKit identity.
+
 The in-memory trace is bounded to 200 events and is also written to unified logging with subsystem `com.jlm429.EarnedIt` and category `FamilyTransition`. No diagnostic receipt is persisted in the family journal or device session. The diagnostic path adds no schema. The deletion correctness fix separately requires the `FamilyLifecycleAuthority` type documented in `docs/family-lifecycle-authority.md`.
 
 ## Read-only preflight contract
@@ -33,9 +35,9 @@ The snapshot reports:
 - Child member, child invitation, child claim, child grant-reference, and internally consistent exact-child recovery-binding counts.
 - Exact `CKError.Code`, top-level or partial-item source, grouped item count, and retry-after seconds when CloudKit supplies it.
 
-Invitation trace format 2 also records the lifecycle-authority attempt and fetch or save phase. A fetched record is represented only by typed comparisons for record type, format version, recognized lifecycle state, creator presence and current-account match, modifier presence and current-account match, and requested-state match. Internally retried missing-record or record-conflict errors retain only their allow-listed CloudKit codes and retry timing. The trace never includes the public record name, creator or modifier identifiers, or the opaque owner-authority binding.
+Invitation trace format 3 also records the lifecycle-authority attempt and fetch or save phase. A fetched record is represented only by typed comparisons for record type, format version, recognized lifecycle state, creator presence and owner-binding match, modifier presence and owner-binding match, sentinel shape, reader-to-owner binding, and requested-state match. Attempt context, owner membership, and lock observations retain only presence, role, state, and equality fields. Internally retried missing-record or record-conflict errors retain only their allow-listed CloudKit codes and retry timing. The trace never includes UUIDs, identity digests, the public record name, creator or modifier identifiers, or the opaque owner-authority binding.
 
-The September 24, 2026 Production trace showed four exact cycles of an absent initial authority record followed by `CKError.unknownItem` from the redundant post-save verification fetch. Xcode 27 defines that CloudKit error as code 11. Lifecycle mutations now validate the server-returned record in the save result, matching the transport's other confirmed-save paths. The exact record, state, creator, modifier, current-account, and account-generation checks remain unchanged.
+The September 24, 2026 Production trace showed four exact cycles of an absent initial authority record followed by `CKError.unknownItem` from the redundant post-save verification fetch. Xcode 27 defines that CloudKit error as code 11. Lifecycle mutations now validate the server-returned record in the save result, matching the transport's other confirmed-save paths. Exact record, state, creator and modifier owner authority, sentinel shape, current account, and account-generation checks remain in place.
 
 An absent or inaccessible value remains unknown rather than being inferred. A lock for another household is the privacy-safe observable for the released Family A candidate when Family A's identity is no longer local.
 

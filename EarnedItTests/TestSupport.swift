@@ -72,6 +72,19 @@ final class TestCloudServer {
         var state: FamilyLifecycleState
         let creator: String
         var lastModifier: String
+        let creatorRecordID: CKRecord.ID?
+
+        init(
+            state: FamilyLifecycleState,
+            creator: String,
+            lastModifier: String,
+            creatorRecordID: CKRecord.ID? = nil
+        ) {
+            self.state = state
+            self.creator = creator
+            self.lastModifier = lastModifier
+            self.creatorRecordID = creatorRecordID
+        }
     }
 
     struct Zone {
@@ -81,6 +94,7 @@ final class TestCloudServer {
         var participants: Set<String> = []
         var pendingInvitationParticipants: Set<String> = []
         var claimedInvitationAccounts: [String: String] = [:]
+        var currentInvitationParticipantByAccount: [String: String] = [:]
         var facts: [UUID: HouseholdFact] = [:]
         var shareExists = false
     }
@@ -107,6 +121,9 @@ final class TestTransport: HouseholdTransport {
     var fetchError: Error?
     var invitationLocationError: Error?
     var invitationAccessVisible = true
+    var invitationAccessStatusAccepted = true
+    var invitationAccessCanWrite = true
+    var invitationAccessRoleIsPrivate = true
     var acceptedParticipantIDTransforms = false
     private(set) var invitationLocationURLs: [URL] = []
     private(set) var acceptedURLs: [URL] = []
@@ -127,9 +144,17 @@ final class TestTransport: HouseholdTransport {
     var claimError: Error?
     var leaveError: Error?
     var acceptErrorAfterHook: Error?
+    var acceptPostCommitError: Error?
     var invitationValidationTimeFailures = 0
     var invitationValidationTimeError: Error?
     var invitationAccessError: Error?
+    var acceptedInvitationParticipantError: Error?
+    var invitationFactUploadDelay: Duration?
+    var recoveredInvitationParticipantID: String?
+    var recoveredInvitationURL: URL?
+    var recoveredInvitationStatusPending = true
+    var recoveredInvitationCanWrite = true
+    var recoveredInvitationRoleIsPrivate = true
     var accountResetDiscoveryError: Error?
     var accountResetDeletionFailures = 0
     private(set) var invitationValidationTimeCalls = 0
@@ -144,6 +169,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var lifecycleMutationEnqueues = 0
     private(set) var lifecycleReadCount = 0
     private(set) var invitationAccessCreationCalls = 0
+    private(set) var acceptedInvitationParticipantReadCalls = 0
     private(set) var accountResetDeletionAttempts = 0
     var beforeParticipantIDReturn: (() async -> Void)?
     var beforeAccept: (() async -> Void)?
@@ -155,7 +181,10 @@ final class TestTransport: HouseholdTransport {
     var beforeAccountLockAcquireSubmission: (() async -> Void)?
     var afterAccountLockAcquireSubmission: (() async -> Void)?
     var beforeAccountMembershipValidationTime: (() async -> Void)?
+    var beforeInvitationValidationTime: (() async -> Void)?
+    var beforeInvitationClaimSubmission: (() async -> Void)?
     var beforeAccountLockActivationSubmission: (() async -> Void)?
+    var afterAccountLockActivationSubmission: (() async -> Void)?
     var beforeAccountLockReplacementSubmission: (() async -> Void)?
     var afterAccountLockReplacementSubmission: (() async -> Void)?
     var beforeDeleteFamilyData: (() async -> Void)?
@@ -201,7 +230,12 @@ final class TestTransport: HouseholdTransport {
         }
         targets += server.privateAccountResetRecords[account] ?? []
         targets += server.lifecycleAuthorities.compactMap { householdID, authority in
-            guard authority.creator == account else { return nil }
+            let creatorRecordID = authority.creatorRecordID
+                ?? CKRecord.ID(recordName: authority.creator, zoneID: .default)
+            guard CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorMatches(
+                creatorRecordID,
+                expectedCurrentUserRecordName: account
+            ) else { return nil }
             return .publicRecord(
                 recordType: "FamilyLifecycleAuthority",
                 recordName: AccountMembershipBinding.lifecycleRecordName(householdID: householdID)
@@ -245,6 +279,9 @@ final class TestTransport: HouseholdTransport {
                 for claim in claims {
                     server.zones[zone.zoneName]?.claimedInvitationAccounts.removeValue(forKey: claim)
                 }
+                server.zones[zone.zoneName]?.currentInvitationParticipantByAccount.removeValue(
+                    forKey: expectedParticipantID
+                )
             }
         case .privateRecord(let recordType, let recordName):
             if recordType == "AccountMembershipLock", recordName == "current-membership" {
@@ -256,7 +293,12 @@ final class TestTransport: HouseholdTransport {
             if let match = server.lifecycleAuthorities.first(where: {
                 AccountMembershipBinding.lifecycleRecordName(householdID: $0.key) == recordName
             }) {
-                guard match.value.creator == expectedParticipantID else { throw HouseholdError.permission }
+                let creatorRecordID = match.value.creatorRecordID
+                    ?? CKRecord.ID(recordName: match.value.creator, zoneID: .default)
+                guard CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorMatches(
+                    creatorRecordID,
+                    expectedCurrentUserRecordName: expectedParticipantID
+                ) else { throw HouseholdError.permission }
                 server.lifecycleAuthorities.removeValue(forKey: match.key)
             }
         }
@@ -447,6 +489,7 @@ final class TestTransport: HouseholdTransport {
                 participantID: observedParticipantID,
                 accountGenerationStable: accountGeneration == startingGeneration
             )
+            await afterAccountLockActivationSubmission?()
             return existing
         } catch {
             familyTransitionDiagnostics.record(
@@ -586,8 +629,10 @@ final class TestTransport: HouseholdTransport {
             guard zone.pendingInvitationParticipants.contains(participantID) else { throw HouseholdError.invitationConsumed }
             server.zones[url.lastPathComponent]?.pendingInvitationParticipants.remove(participantID)
             server.zones[url.lastPathComponent]?.claimedInvitationAccounts[participantID] = account
+            server.zones[url.lastPathComponent]?.currentInvitationParticipantByAccount[account] = participantID
         }
         server.zones[url.lastPathComponent]?.participants.insert(account)
+        if let acceptPostCommitError { throw acceptPostCommitError }
     }
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation { throw HouseholdError.invitation }
     func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws {
@@ -616,6 +661,7 @@ final class TestTransport: HouseholdTransport {
         for participantID in participantIDs {
             server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID)
         }
+        server.zones[location.zoneName]?.currentInvitationParticipantByAccount.removeValue(forKey: account)
     }
     func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws {
         deleteFamilyAttempts += 1
@@ -799,6 +845,9 @@ final class TestTransport: HouseholdTransport {
         } ? .invitationFactUpload : .journalUpload
         familyTransitionDiagnostics.record(stage: stage, outcome: .started,
                                             householdID: location.householdID, factCount: facts.count)
+        if stage == .invitationFactUpload, let invitationFactUploadDelay {
+            try await Task.sleep(for: invitationFactUploadDelay)
+        }
         guard server.writeAllowed else {
             let error = HouseholdError.readOnly
             familyTransitionDiagnostics.record(stage: stage, outcome: .failed,
@@ -872,18 +921,46 @@ final class TestTransport: HouseholdTransport {
                                             householdID: location.householdID)
         return CloudInvitationAccess(participantID: participantID, url: url)
     }
+    func recoverInvitationAccess(participantID: String, from location: CloudLocation) async throws
+        -> CloudInvitationAccess {
+        guard server.zones[location.zoneName]?.owner == account,
+              server.zones[location.zoneName]?.pendingInvitationParticipants.contains(participantID) == true,
+              recoveredInvitationStatusPending,
+              recoveredInvitationCanWrite,
+              recoveredInvitationRoleIsPrivate else {
+            throw HouseholdError.invitationUnavailable
+        }
+        let returnedParticipantID = recoveredInvitationParticipantID ?? participantID
+        let url = recoveredInvitationURL
+            ?? URL(string: "https://test.invalid/\(location.zoneName)?invitation=\(participantID)")!
+        return CloudInvitationAccess(participantID: returnedParticipantID, url: url)
+    }
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
         server.zones[location.zoneName]?.pendingInvitationParticipants.remove(participantID)
         if let account = server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID) {
-            server.zones[location.zoneName]?.participants.remove(account)
+            if server.zones[location.zoneName]?.currentInvitationParticipantByAccount[account] == participantID {
+                server.zones[location.zoneName]?.currentInvitationParticipantByAccount.removeValue(forKey: account)
+            }
+            if server.zones[location.zoneName]?.claimedInvitationAccounts.values.contains(account) != true {
+                server.zones[location.zoneName]?.participants.remove(account)
+            }
         }
     }
+    func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String? {
+        acceptedInvitationParticipantReadCalls += 1
+        if let acceptedInvitationParticipantError { throw acceptedInvitationParticipantError }
+        guard invitationAccessVisible, invitationAccessStatusAccepted, invitationAccessCanWrite,
+              invitationAccessRoleIsPrivate, !acceptedParticipantIDTransforms,
+              let participantID = server.zones[location.zoneName]?.currentInvitationParticipantByAccount[account],
+              server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account else { return nil }
+        return participantID
+    }
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
-        invitationAccessVisible && !acceptedParticipantIDTransforms
-            && server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
+        try await acceptedInvitationParticipantID(in: location) == participantID
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         invitationValidationTimeCalls += 1
+        await beforeInvitationValidationTime?()
         familyTransitionDiagnostics.record(stage: .validationTimeWrite, outcome: .started,
                                             householdID: location.householdID)
         if invitationValidationTimeFailures > 0 {
@@ -897,12 +974,33 @@ final class TestTransport: HouseholdTransport {
                                             householdID: location.householdID)
         return server.authoritativeTime ?? clientTime
     }
-    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
-        if let claimError { throw claimError }
+    func claimInvitation(
+        _ facts: [HouseholdFact],
+        in location: CloudLocation,
+        expectedParticipantID: String,
+        expectedInvitationParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [HouseholdFact] {
         guard server.writeAllowed, facts.count == 2,
-              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+              facts.allSatisfy({
+                  guard case let .invitationClaim(claim) = $0.body else { return false }
+                  return claim.cloudParticipantID == expectedParticipantID
+              }) else {
             throw HouseholdError.readOnly
         }
+        await beforeInvitationClaimSubmission?()
+        guard accountGeneration == expectedAccountGeneration,
+              account == expectedParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
+        guard try await acceptedInvitationParticipantID(in: location) == expectedInvitationParticipantID else {
+            throw HouseholdError.invitationNotFound
+        }
+        guard accountGeneration == expectedAccountGeneration,
+              account == expectedParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
+        if let claimError { throw claimError }
         for fact in facts {
             if let existing = server.zones[location.zoneName]?.facts[fact.id],
                !Self.isSameInvitationClaim(existing, as: fact) {
