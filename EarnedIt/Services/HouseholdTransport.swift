@@ -108,6 +108,7 @@ protocol HouseholdTransport: AccountDataResetCloudBoundary {
     func createInvitationAccess(for location: CloudLocation, title: String, role: UserRole) async throws -> CloudInvitationAccess
     func recoverInvitationAccess(participantID: String, from location: CloudLocation) async throws -> CloudInvitationAccess
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws
+    func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String?
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date
     func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact]

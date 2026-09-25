@@ -83,6 +83,27 @@ final class InvitationDeliveryTests: XCTestCase {
         XCTAssertEqual(decoded.shareURL, nativeURL)
     }
 
+    func testRecoveredInvitationCopyUsesOriginalExpiration() throws {
+        let expiresAt = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-08T15:30:00Z"))
+        let invitation = FamilyInvitation(
+            id: UUID(), householdID: UUID(), claimFactID: UUID(), memberID: UUID(),
+            role: .child, codeDigest: String(repeating: "a", count: 64),
+            createdAt: expiresAt.addingTimeInterval(-23 * 60 * 60), expiresAt: expiresAt,
+            createdByMemberID: UUID(), cloudShareParticipantID: "participant",
+            cloudShareURLDigest: String(repeating: "b", count: 64)
+        )
+        let recovered = RecoveredFamilyInvitation(
+            invitation: invitation,
+            shareURL: try XCTUnwrap(URL(string: "https://www.icloud.com/share/synthetic-only"))
+        )
+
+        XCTAssertTrue(recovered.validityMessage.contains(
+            expiresAt.formatted(date: .abbreviated, time: .shortened)
+        ))
+        XCTAssertFalse(recovered.validityMessage.contains("24 hours"))
+        XCTAssertTrue(recovered.validityMessage.contains("original invitation"))
+    }
+
     func testVerificationOpensUnderlyingURLThenWarmCallbackClaimsOriginalCodeOnly() async throws {
         let (family, issued, transport, recipient, _) = try await pendingRecipient()
         var opened: [URL] = []

@@ -81,6 +81,7 @@ final class TestCloudServer {
         var participants: Set<String> = []
         var pendingInvitationParticipants: Set<String> = []
         var claimedInvitationAccounts: [String: String] = [:]
+        var currentInvitationParticipantByAccount: [String: String] = [:]
         var facts: [UUID: HouseholdFact] = [:]
         var shareExists = false
     }
@@ -153,6 +154,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var lifecycleMutationEnqueues = 0
     private(set) var lifecycleReadCount = 0
     private(set) var invitationAccessCreationCalls = 0
+    private(set) var acceptedInvitationParticipantReadCalls = 0
     private(set) var accountResetDeletionAttempts = 0
     var beforeParticipantIDReturn: (() async -> Void)?
     var beforeAccept: (() async -> Void)?
@@ -256,6 +258,9 @@ final class TestTransport: HouseholdTransport {
                 for claim in claims {
                     server.zones[zone.zoneName]?.claimedInvitationAccounts.removeValue(forKey: claim)
                 }
+                server.zones[zone.zoneName]?.currentInvitationParticipantByAccount.removeValue(
+                    forKey: expectedParticipantID
+                )
             }
         case .privateRecord(let recordType, let recordName):
             if recordType == "AccountMembershipLock", recordName == "current-membership" {
@@ -598,6 +603,7 @@ final class TestTransport: HouseholdTransport {
             guard zone.pendingInvitationParticipants.contains(participantID) else { throw HouseholdError.invitationConsumed }
             server.zones[url.lastPathComponent]?.pendingInvitationParticipants.remove(participantID)
             server.zones[url.lastPathComponent]?.claimedInvitationAccounts[participantID] = account
+            server.zones[url.lastPathComponent]?.currentInvitationParticipantByAccount[account] = participantID
         }
         server.zones[url.lastPathComponent]?.participants.insert(account)
     }
@@ -628,6 +634,7 @@ final class TestTransport: HouseholdTransport {
         for participantID in participantIDs {
             server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID)
         }
+        server.zones[location.zoneName]?.currentInvitationParticipantByAccount.removeValue(forKey: account)
     }
     func deleteFamilyData(at location: CloudLocation, expectedParticipantID: String) async throws {
         deleteFamilyAttempts += 1
@@ -904,13 +911,24 @@ final class TestTransport: HouseholdTransport {
     func revokeInvitationAccess(participantID: String, from location: CloudLocation) async throws {
         server.zones[location.zoneName]?.pendingInvitationParticipants.remove(participantID)
         if let account = server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(forKey: participantID) {
-            server.zones[location.zoneName]?.participants.remove(account)
+            if server.zones[location.zoneName]?.currentInvitationParticipantByAccount[account] == participantID {
+                server.zones[location.zoneName]?.currentInvitationParticipantByAccount.removeValue(forKey: account)
+            }
+            if server.zones[location.zoneName]?.claimedInvitationAccounts.values.contains(account) != true {
+                server.zones[location.zoneName]?.participants.remove(account)
+            }
         }
     }
+    func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String? {
+        acceptedInvitationParticipantReadCalls += 1
+        guard invitationAccessVisible, invitationAccessStatusAccepted, invitationAccessCanWrite,
+              invitationAccessRoleIsPrivate, !acceptedParticipantIDTransforms,
+              let participantID = server.zones[location.zoneName]?.currentInvitationParticipantByAccount[account],
+              server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account else { return nil }
+        return participantID
+    }
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
-        invitationAccessVisible && invitationAccessStatusAccepted && invitationAccessCanWrite
-            && invitationAccessRoleIsPrivate && !acceptedParticipantIDTransforms
-            && server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
+        try await acceptedInvitationParticipantID(in: location) == participantID
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         invitationValidationTimeCalls += 1

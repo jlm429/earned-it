@@ -1554,10 +1554,7 @@ final class HouseholdStore {
     private func acceptSystemInvitationAccess(location: CloudLocation, _ acceptance: () async throws -> Void) async throws {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
-        try await retryInvitationCleanup()
         let participant = try await transport.participantID()
-        if try await resumeAccountMembership(participant: participant, requestedLocation: location,
-                                             invitationCodeDigest: nil) { return }
         let accessExisted = try await transport.hasAcceptedAccess(to: location)
         let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
         recordJoinReceipt { $0.lock = .provisional }
@@ -2569,13 +2566,10 @@ final class HouseholdStore {
             }
             return invitation
         }
-        var matches: [FamilyInvitation] = []
-        for invitation in imported.invitations {
-            if try await transport.hasInvitationAccess(participantID: invitation.cloudShareParticipantID,
-                                                       in: location) {
-                matches.append(invitation)
-            }
-        }
+        let currentParticipantID = try await transport.acceptedInvitationParticipantID(in: location)
+        let matches = currentParticipantID.map { participantID in
+            imported.invitations.filter { $0.cloudShareParticipantID == participantID }
+        } ?? []
         guard matches.count == 1, let invitation = matches.first else {
             let reason: JoinRefusalReason
             if matches.count > 1 {

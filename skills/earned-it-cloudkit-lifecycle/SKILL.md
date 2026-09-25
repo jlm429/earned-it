@@ -24,11 +24,12 @@ Start with the current default branch and the authoritative implementation and d
 
 - Review issuance as a non-atomic workflow. If participant creation or fact upload may already have succeeded, inspect or recover the exact existing participant before creating another one.
 - Trace both recipient inputs: the custom package with clear code plus Apple URL, and a raw recovered Apple URL with no clear code.
-- A raw URL can select an invitation only through the accepted current-user share participant. Require the exact participant ID, accepted status, private-user role, read/write permission, one unique matching journal invitation, authoritative availability, and an atomic one-time claim.
+- A raw URL can select an invitation only through one read of the accepted current-user share participant. Require the exact participant ID, accepted status, private-user role, read/write permission, one unique matching journal invitation, authoritative availability, and an atomic one-time claim before any membership resume or attachment.
 - Keep the custom package bound by both its code digest and Apple URL digest. At the common claim boundary, require its exact current accepted private read/write participant just like the raw path. Neither format may broaden profiles, cross households, revive revoked or expired access, or permit replay.
 - Apply that exact participant check again after awaited claim and lock work, immediately before cleanup, retry, resume, or startup recovery synchronously attaches its profile.
 - Recover an existing unclaimed invitation only after authoritative CloudKit time confirms availability. A device clock may affect display text but must not hide recovery or authorize delivery.
 - Show existing-invitation recovery only at the owner-controlled location that can recover the Apple participant, and only when the row retains a participant ID and valid URL digest.
+- Recovered invitation presentation retains the original expiration. Never describe recovery as starting a fresh 24-hour lifetime.
 - Cancel a queued delayed sync at the exclusive invitation issuance or recovery boundary. If it owned pending facts that remain afterward, schedule their retry when the exclusive operation exits.
 
 ## Verification

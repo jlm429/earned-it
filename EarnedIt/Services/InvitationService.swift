@@ -47,6 +47,12 @@ struct RecoveredFamilyInvitation: Identifiable, Equatable {
     var shareMessage: String {
         "Join my Earned It family. Open this Apple invitation link or scan its QR code to connect to your approved profile."
     }
+
+    var validityMessage: String {
+        "This is the original invitation. It expires "
+            + invitation.expiresAt.formatted(date: .abbreviated, time: .shortened)
+            + " and works on one installation."
+    }
 }
 
 /// Local continuation only. Shared facts never contain a clear invitation code or delivery URL.

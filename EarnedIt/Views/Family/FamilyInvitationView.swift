@@ -97,7 +97,8 @@ struct FamilyInvitationView: View {
             invitation: issued.invitation,
             deliveryURL: issued.invitationURL,
             code: issued.code,
-            shareMessage: issued.shareMessage
+            shareMessage: issued.shareMessage,
+            validityMessage: "Valid for 24 hours and one installation"
         )
     }
 
@@ -135,6 +136,7 @@ private struct FamilyInvitationDeliveryView: View {
     let deliveryURL: URL
     let code: String?
     let shareMessage: String
+    let validityMessage: String
 
     var body: some View {
         ScrollView {
@@ -146,8 +148,9 @@ private struct FamilyInvitationDeliveryView: View {
                 Text(profileDescription)
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
-                Text("Valid for 24 hours and one installation")
+                Text(validityMessage)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("invitation-validity")
 
                 InvitationQRCode(payload: deliveryURL.absoluteString)
                     .frame(maxWidth: 240, maxHeight: 240)
@@ -206,7 +209,8 @@ struct RecoveredFamilyInvitationView: View {
                 invitation: recovered.invitation,
                 deliveryURL: recovered.shareURL,
                 code: nil,
-                shareMessage: recovered.shareMessage
+                shareMessage: recovered.shareMessage,
+                validityMessage: recovered.validityMessage
             )
             .navigationTitle("Invitation Ready")
             .navigationBarTitleDisplayMode(.inline)

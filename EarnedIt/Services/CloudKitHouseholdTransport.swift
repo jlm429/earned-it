@@ -830,16 +830,21 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         _ = try await database(for: location).save(share)
     }
 
-    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
+    func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String? {
         let share = try await share(for: location, title: "Earned It Family")
-        guard let participant = share.currentUserParticipant else { return false }
-        return Self.invitationParticipantMatches(
-            participantID: participant.participantID,
-            expectedParticipantID: participantID,
-            acceptanceStatusMatches: participant.acceptanceStatus == .accepted,
-            permission: participant.permission,
-            role: participant.role
-        )
+        guard let participant = share.currentUserParticipant,
+              Self.invitationParticipantMatches(
+                  participantID: participant.participantID,
+                  expectedParticipantID: participant.participantID,
+                  acceptanceStatusMatches: participant.acceptanceStatus == .accepted,
+                  permission: participant.permission,
+                  role: participant.role
+              ) else { return nil }
+        return participant.participantID
+    }
+
+    func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
+        try await acceptedInvitationParticipantID(in: location) == participantID
     }
 
     static func invitationParticipantMatches(

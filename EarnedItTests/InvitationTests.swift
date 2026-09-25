@@ -2172,6 +2172,70 @@ final class InvitationTests: XCTestCase {
         XCTAssertThrowsError(try joining.selectProfile(family.parent.id))
     }
 
+    func testRawAppleURLRejectsDifferentCommittedSameHouseholdInvitation() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let first = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let recipientTransport = TestTransport(server: server, account: "recipient")
+        let joined = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: recipientTransport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        try await joined.redeemInvitation(first.qrPayload)
+        let second = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let replacement = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: recipientTransport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        let location = try await recipientTransport.invitationLocation(for: second.shareURL)
+        var acceptanceCalls = 0
+
+        await XCTAssertThrowsErrorAsync(
+            try await replacement.acceptSystemInvitation(location: location) {
+                acceptanceCalls += 1
+                try await recipientTransport.accept(url: second.shareURL, expected: location)
+            },
+            expected: .invitationNotFound
+        )
+
+        XCTAssertEqual(acceptanceCalls, 1)
+        XCTAssertNil(replacement.household)
+        XCTAssertNil(replacement.selectedMember)
+        XCTAssertNil(server.zones[location.zoneName]?.facts[second.invitation.claimFactID])
+        XCTAssertEqual(
+            server.zones[location.zoneName]?.currentInvitationParticipantByAccount["recipient"],
+            second.invitation.cloudShareParticipantID
+        )
+    }
+
+    func testRawAppleURLMatchesCurrentParticipantWithBoundedShareReads() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        for _ in 0..<6 {
+            _ = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        }
+        let target = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let transport = TestTransport(server: server, account: "bounded-raw-link")
+        let joining = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        let location = try await transport.invitationLocation(for: target.shareURL)
+
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: target.shareURL, expected: location)
+        }
+
+        XCTAssertEqual(joining.selectedMember?.id, family.alek.id)
+        XCTAssertEqual(transport.acceptedInvitationParticipantReadCalls, 3)
+    }
+
     func testRawAppleURLInterruptedClaimResumesWithoutClearCode() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
@@ -2302,6 +2366,8 @@ final class InvitationTests: XCTestCase {
             server.zones[location.zoneName]?.claimedInvitationAccounts[
                 second.invitation.cloudShareParticipantID
             ] = "recipient"
+            server.zones[location.zoneName]?.currentInvitationParticipantByAccount["recipient"] =
+                second.invitation.cloudShareParticipantID
         }
 
         await XCTAssertThrowsErrorAsync(
