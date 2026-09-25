@@ -72,6 +72,19 @@ final class TestCloudServer {
         var state: FamilyLifecycleState
         let creator: String
         var lastModifier: String
+        let creatorRecordID: CKRecord.ID?
+
+        init(
+            state: FamilyLifecycleState,
+            creator: String,
+            lastModifier: String,
+            creatorRecordID: CKRecord.ID? = nil
+        ) {
+            self.state = state
+            self.creator = creator
+            self.lastModifier = lastModifier
+            self.creatorRecordID = creatorRecordID
+        }
     }
 
     struct Zone {
@@ -131,9 +144,11 @@ final class TestTransport: HouseholdTransport {
     var claimError: Error?
     var leaveError: Error?
     var acceptErrorAfterHook: Error?
+    var acceptPostCommitError: Error?
     var invitationValidationTimeFailures = 0
     var invitationValidationTimeError: Error?
     var invitationAccessError: Error?
+    var acceptedInvitationParticipantError: Error?
     var invitationFactUploadDelay: Duration?
     var recoveredInvitationParticipantID: String?
     var recoveredInvitationURL: URL?
@@ -214,7 +229,12 @@ final class TestTransport: HouseholdTransport {
         }
         targets += server.privateAccountResetRecords[account] ?? []
         targets += server.lifecycleAuthorities.compactMap { householdID, authority in
-            guard authority.creator == account else { return nil }
+            let creatorRecordID = authority.creatorRecordID
+                ?? CKRecord.ID(recordName: authority.creator, zoneID: .default)
+            guard CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorMatches(
+                creatorRecordID,
+                expectedCurrentUserRecordName: account
+            ) else { return nil }
             return .publicRecord(
                 recordType: "FamilyLifecycleAuthority",
                 recordName: AccountMembershipBinding.lifecycleRecordName(householdID: householdID)
@@ -272,7 +292,12 @@ final class TestTransport: HouseholdTransport {
             if let match = server.lifecycleAuthorities.first(where: {
                 AccountMembershipBinding.lifecycleRecordName(householdID: $0.key) == recordName
             }) {
-                guard match.value.creator == expectedParticipantID else { throw HouseholdError.permission }
+                let creatorRecordID = match.value.creatorRecordID
+                    ?? CKRecord.ID(recordName: match.value.creator, zoneID: .default)
+                guard CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorMatches(
+                    creatorRecordID,
+                    expectedCurrentUserRecordName: expectedParticipantID
+                ) else { throw HouseholdError.permission }
                 server.lifecycleAuthorities.removeValue(forKey: match.key)
             }
         }
@@ -606,6 +631,7 @@ final class TestTransport: HouseholdTransport {
             server.zones[url.lastPathComponent]?.currentInvitationParticipantByAccount[account] = participantID
         }
         server.zones[url.lastPathComponent]?.participants.insert(account)
+        if let acceptPostCommitError { throw acceptPostCommitError }
     }
     func accept(metadata: CKShare.Metadata) async throws -> CloudLocation { throw HouseholdError.invitation }
     func accept(metadata: CKShare.Metadata, expected location: CloudLocation) async throws {
@@ -921,6 +947,7 @@ final class TestTransport: HouseholdTransport {
     }
     func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String? {
         acceptedInvitationParticipantReadCalls += 1
+        if let acceptedInvitationParticipantError { throw acceptedInvitationParticipantError }
         guard invitationAccessVisible, invitationAccessStatusAccepted, invitationAccessCanWrite,
               invitationAccessRoleIsPrivate, !acceptedParticipantIDTransforms,
               let participantID = server.zones[location.zoneName]?.currentInvitationParticipantByAccount[account],

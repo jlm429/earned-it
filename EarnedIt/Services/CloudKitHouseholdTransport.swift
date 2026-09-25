@@ -82,22 +82,28 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         } catch let error as CKError where Self.isRecordMissing(error, recordID: membershipRecordID) {
         }
 
-        let creator = CKRecord.Reference(
-            recordID: CKRecord.ID(recordName: expectedParticipantID),
-            action: .none
-        )
-        let publicRecords = try await resetRecords(
-            recordType: familyLifecycleRecordType,
-            predicate: NSPredicate(
-                format: "%K == %@",
-                CKRecord.SystemFieldKey.creatorUserRecordID,
-                creator
-            ),
-            database: container.publicCloudDatabase,
-            zoneID: .default
-        )
+        var publicRecords: [CKRecord] = []
+        for creatorRecordID in Self.accountResetLifecycleAuthorityCreatorRecordIDs(
+            expectedCurrentUserRecordName: expectedParticipantID
+        ) {
+            let creator = CKRecord.Reference(recordID: creatorRecordID, action: .none)
+            publicRecords += try await resetRecords(
+                recordType: familyLifecycleRecordType,
+                predicate: NSPredicate(
+                    format: "%K == %@",
+                    CKRecord.SystemFieldKey.creatorUserRecordID,
+                    creator
+                ),
+                database: container.publicCloudDatabase,
+                zoneID: .default
+            )
+            try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
+        }
         targets += publicRecords.compactMap { record in
-            guard record.creatorUserRecordID?.recordName == expectedParticipantID else { return nil }
+            guard Self.accountResetLifecycleAuthorityCreatorMatches(
+                record.creatorUserRecordID,
+                expectedCurrentUserRecordName: expectedParticipantID
+            ) else { return nil }
             return .publicRecord(
                 recordType: familyLifecycleRecordType,
                 recordName: record.recordID.recordName
@@ -152,7 +158,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             do {
                 let record = try await container.publicCloudDatabase.record(for: recordID)
                 guard record.recordType == recordType,
-                      record.creatorUserRecordID?.recordName == expectedParticipantID else {
+                      Self.accountResetLifecycleAuthorityCreatorMatches(
+                          record.creatorUserRecordID,
+                          expectedCurrentUserRecordName: expectedParticipantID
+                      ) else {
                     throw HouseholdError.permission
                 }
                 try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
@@ -1588,6 +1597,31 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
         return AccountMembershipBinding.ownerAuthority(participantID: recordID.recordName)
             == ownerAuthorityBinding
+    }
+
+    static func accountResetLifecycleAuthorityCreatorRecordIDs(
+        expectedCurrentUserRecordName: String
+    ) -> [CKRecord.ID] {
+        let sentinel = CKRecord.ID(recordName: CKCurrentUserDefaultName, zoneID: .default)
+        guard expectedCurrentUserRecordName != CKCurrentUserDefaultName else { return [sentinel] }
+        return [
+            CKRecord.ID(recordName: expectedCurrentUserRecordName, zoneID: .default),
+            sentinel
+        ]
+    }
+
+    static func accountResetLifecycleAuthorityCreatorMatches(
+        _ creatorUserRecordID: CKRecord.ID?,
+        expectedCurrentUserRecordName: String
+    ) -> Bool {
+        guard let creatorUserRecordID else { return false }
+        return familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
+            creatorUserRecordID,
+            expectedCurrentUserRecordName: expectedCurrentUserRecordName,
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(
+                participantID: expectedCurrentUserRecordName
+            )
+        )
     }
 
     static func familyLifecycleAuthorityIdentityRepresentation(

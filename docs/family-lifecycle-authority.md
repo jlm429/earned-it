@@ -20,6 +20,8 @@ There are no family names, member names, invitation values, URLs, codes, digests
 
 CloudKit can represent creator and modifier metadata as a stable unique record name or as the current-user sentinel. The app accepts each stable unique name only when its derived owner-authority binding matches the exact binding retained in the private lock. It accepts the sentinel only when its record name is `CKCurrentUserDefaultName`, its zone is the default record zone, its zone owner is `CKCurrentUserDefaultName`, and the current reader's derived binding matches the retained owner binding. A missing identity, a foreign unique name, a non-owner reader sentinel, or a sentinel with another zone name or owner fails closed. The current account and account generation are checked around every mutation.
 
+Account-wide deletion discovers creator-owned lifecycle records with both the resolved current-user record ID query and the exact current-user sentinel query. It applies the same shape and owner-binding check when accepting a discovery result and again immediately before deleting that exact public record.
+
 After a lifecycle mutation, the app validates the server-returned saved record directly. It requires the exact requested record ID and lifecycle state plus the same creator and last-modifier ownership checks. It does not depend on a second immediate fetch to confirm a write that CloudKit has already returned.
 
 ## State transitions

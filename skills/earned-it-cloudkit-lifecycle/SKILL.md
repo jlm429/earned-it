@@ -19,12 +19,14 @@ Start with the current default branch and the authoritative implementation and d
 - Never infer permission to reset, delete, recreate, or repair live CloudKit data. A diagnostic reset or nuke path is not a product recovery design and must not ship without explicit product authorization.
 - Never deploy or mutate CloudKit schema from agent work. Compare the repository contract with the human-managed environment and report any mismatch.
 - Preserve exact household, membership-lock attempt, participant, invitation, member, role, and account-generation bindings. Missing, malformed, ambiguous, or foreign authority fails closed.
+- Account-wide reset must query lifecycle creator metadata using both the resolved current-user record ID and the exact current-user sentinel, then apply the same sentinel-shape and owner-binding validation before discovery and deletion.
 
 ## Invitation review
 
 - Review issuance as a non-atomic workflow. If participant creation or fact upload may already have succeeded, inspect or recover the exact existing participant before creating another one.
 - Trace both recipient inputs: the custom package with clear code plus Apple URL, and a raw recovered Apple URL with no clear code.
 - A raw URL can select an invitation only through one read of the accepted current-user share participant. Require the exact participant ID, accepted status, private-user role, read/write permission, one unique matching journal invitation, authoritative availability, and an atomic one-time claim before any membership resume or attachment.
+- Reject a raw callback before native acceptance when an active membership lock makes its intended invitation ambiguous. After a retryable native-acceptance error, probe the exact accepted participant before cleanup, continue redemption when acceptance committed, and retain retryable pending state when the result is uncertain.
 - Keep the custom package bound by both its code digest and Apple URL digest. At the common claim boundary, require its exact current accepted private read/write participant just like the raw path. Neither format may broaden profiles, cross households, revive revoked or expired access, or permit replay.
 - Apply that exact participant check again after awaited claim and lock work, immediately before cleanup, retry, resume, or startup recovery synchronously attaches its profile.
 - Recover an existing unclaimed invitation only after authoritative CloudKit time confirms availability. A device clock may affect display text but must not hide recovery or authorize delivery.

@@ -1555,15 +1555,43 @@ final class HouseholdStore {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
-        let accessExisted = try await transport.hasAcceptedAccess(to: location)
-        let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
-        recordJoinReceipt { $0.lock = .provisional }
-        try beginPendingInvitationAcceptance(location: location, participant: participant,
-                                             accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
+        if let pending = session.pendingInvitationAcceptance {
+            guard pending.location == location,
+                  pending.cloudParticipantID == participant,
+                  pending.phase == .acceptingAccess || pending.phase == .awaitingRedemption else {
+                throw HouseholdError.accountMembershipConflict
+            }
+        } else {
+            let accessExisted = try await transport.hasAcceptedAccess(to: location)
+            let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
+            guard lock.state == .provisional,
+                  lock.householdID == location.householdID,
+                  lock.claimBinding == nil else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            recordJoinReceipt { $0.lock = .provisional }
+            try beginPendingInvitationAcceptance(location: location, participant: participant,
+                                                 accessExistedBeforeAttempt: accessExisted, attemptID: lock.attemptID)
+        }
         do {
-            try await acceptance()
-            recordJoinReceipt { $0.nativeAcceptance = .yes }
-            try confirmPendingInvitationAcceptance(location: location, participant: participant)
+            if session.pendingInvitationAcceptance?.phase == .acceptingAccess {
+                do {
+                    try await acceptance()
+                    recordJoinReceipt { $0.nativeAcceptance = .yes }
+                    try confirmPendingInvitationAcceptance(location: location, participant: participant)
+                } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
+                    let committed: Bool
+                    do {
+                        committed = try await promotePendingNativeAcceptanceIfCommitted(
+                            location: location,
+                            participant: participant
+                        )
+                    } catch {
+                        throw cloudError
+                    }
+                    guard committed else { throw cloudError }
+                }
+            }
             let invitation = try await identifyPendingInvitation(in: location)
             try await redeemInvitation(
                 codeDigest: invitation.codeDigest,
@@ -2490,6 +2518,22 @@ final class HouseholdStore {
         session = updated
     }
 
+    private func promotePendingNativeAcceptanceIfCommitted(
+        location: CloudLocation,
+        participant: String
+    ) async throws -> Bool {
+        guard let pending = session.pendingInvitationAcceptance,
+              pending.location == location,
+              pending.cloudParticipantID == participant,
+              pending.phase == .acceptingAccess,
+              let transport else { return false }
+        guard try await transport.acceptedInvitationParticipantID(in: location) != nil else { return false }
+        guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+        try confirmPendingInvitationAcceptance(location: location, participant: participant)
+        recordJoinReceipt { $0.nativeAcceptance = .yes }
+        return true
+    }
+
     @discardableResult
     private func identifyPendingInvitation(in location: CloudLocation) async throws -> FamilyInvitation {
         guard var pending = session.pendingInvitationAcceptance,
@@ -2764,13 +2808,29 @@ final class HouseholdStore {
             throw HouseholdError.wrongAccount
         }
         try Task.checkCancellation()
-        if pending.accountLockAttemptID == nil {
+        var shouldInspectRemote = true
+        if pending.phase == .acceptingAccess {
+            if try await promotePendingNativeAcceptanceIfCommitted(
+                location: pending.location,
+                participant: pending.cloudParticipantID
+            ) {
+                pending = try requirePendingInvitation(location: pending.location)
+            } else {
+                shouldInspectRemote = false
+            }
+        }
+        if shouldInspectRemote, pending.accountLockAttemptID == nil {
             pending.accountLockAttemptID = try await acquireAccountMembershipLock(
                 householdID: pending.location.householdID
             ).attemptID
             try persistPendingInvitation(pending)
         }
-        let remote = try await accessibleFacts(at: pending.location)
+        let remote: [HouseholdFact]?
+        if shouldInspectRemote {
+            remote = try await accessibleFacts(at: pending.location)
+        } else {
+            remote = nil
+        }
         try Task.checkCancellation()
         if let remote {
             try validate(remote, householdID: pending.location.householdID)
