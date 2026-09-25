@@ -182,6 +182,7 @@ final class TestTransport: HouseholdTransport {
     var afterAccountLockAcquireSubmission: (() async -> Void)?
     var beforeAccountMembershipValidationTime: (() async -> Void)?
     var beforeInvitationValidationTime: (() async -> Void)?
+    var beforeInvitationClaimSubmission: (() async -> Void)?
     var beforeAccountLockActivationSubmission: (() async -> Void)?
     var afterAccountLockActivationSubmission: (() async -> Void)?
     var beforeAccountLockReplacementSubmission: (() async -> Void)?
@@ -973,12 +974,33 @@ final class TestTransport: HouseholdTransport {
                                             householdID: location.householdID)
         return server.authoritativeTime ?? clientTime
     }
-    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
-        if let claimError { throw claimError }
+    func claimInvitation(
+        _ facts: [HouseholdFact],
+        in location: CloudLocation,
+        expectedParticipantID: String,
+        expectedInvitationParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [HouseholdFact] {
         guard server.writeAllowed, facts.count == 2,
-              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+              facts.allSatisfy({
+                  guard case let .invitationClaim(claim) = $0.body else { return false }
+                  return claim.cloudParticipantID == expectedParticipantID
+              }) else {
             throw HouseholdError.readOnly
         }
+        await beforeInvitationClaimSubmission?()
+        guard accountGeneration == expectedAccountGeneration,
+              account == expectedParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
+        guard try await acceptedInvitationParticipantID(in: location) == expectedInvitationParticipantID else {
+            throw HouseholdError.invitationNotFound
+        }
+        guard accountGeneration == expectedAccountGeneration,
+              account == expectedParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
+        if let claimError { throw claimError }
         for fact in facts {
             if let existing = server.zones[location.zoneName]?.facts[fact.id],
                !Self.isSameInvitationClaim(existing, as: fact) {

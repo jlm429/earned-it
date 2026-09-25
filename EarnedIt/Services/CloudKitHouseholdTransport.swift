@@ -892,13 +892,52 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
-    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact] {
+    private func requireInvitationClaimAuthority(
+        in location: CloudLocation,
+        expectedParticipantID: String,
+        expectedInvitationParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws {
+        guard accountGeneration == expectedAccountGeneration,
+              try await participantID() == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        guard try await hasInvitationAccess(
+            participantID: expectedInvitationParticipantID,
+            in: location
+        ) else {
+            throw HouseholdError.invitationNotFound
+        }
+        guard accountGeneration == expectedAccountGeneration,
+              try await participantID() == expectedParticipantID,
+              accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+    }
+
+    func claimInvitation(
+        _ facts: [HouseholdFact],
+        in location: CloudLocation,
+        expectedParticipantID: String,
+        expectedInvitationParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws -> [HouseholdFact] {
         guard facts.count == 2,
-              facts.allSatisfy({ if case .invitationClaim = $0.body { return true }; return false }) else {
+              facts.allSatisfy({
+                  guard case let .invitationClaim(claim) = $0.body else { return false }
+                  return claim.cloudParticipantID == expectedParticipantID
+              }) else {
             throw HouseholdError.malformedData
         }
         let records = try facts.map { try Self.record(for: $0, location: location) }
         let database = database(for: location)
+        try await requireInvitationClaimAuthority(
+            in: location,
+            expectedParticipantID: expectedParticipantID,
+            expectedInvitationParticipantID: expectedInvitationParticipantID,
+            expectedAccountGeneration: expectedAccountGeneration
+        )
         do {
             let results = try await database.modifyRecords(
                 saving: records, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true
@@ -925,6 +964,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
             guard !missing.isEmpty else { return facts }
             let missingRecords = try missing.map { try Self.record(for: $0, location: location) }
+            try await requireInvitationClaimAuthority(
+                in: location,
+                expectedParticipantID: expectedParticipantID,
+                expectedInvitationParticipantID: expectedInvitationParticipantID,
+                expectedAccountGeneration: expectedAccountGeneration
+            )
             do {
                 let results = try await database.modifyRecords(
                     saving: missingRecords, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true

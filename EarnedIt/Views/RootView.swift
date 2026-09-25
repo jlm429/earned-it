@@ -46,18 +46,26 @@ struct RootView: View {
                     }
                 }
                 .accessibilityIdentifier("account-data-reset-progress")
-            } else if store.hasPendingInvitationPackage {
+            } else if store.hasPendingInvitationPackage || store.hasPendingInvitationAcceptance {
                 ScrollableUnavailableView(
                     title: "Finish Joining Your Family",
                     systemImage: "person.crop.circle.badge.checkmark",
-                    description: "Follow any Apple confirmation to connect to your family. Earned It keeps this invitation so you can finish without entering the code again."
+                    description: store.hasPendingInvitationPackage
+                        ? "Follow any Apple confirmation to connect to your family. Earned It keeps this invitation so you can finish without entering the code again."
+                        : "Earned It keeps this invitation attempt so you can finish joining without starting another family."
                 ) {
                     if store.isJoiningInvitation {
                         ProgressView("Connecting to your family…")
                     } else {
                         Button("Continue Joining") {
                             Task {
-                                do { try await store.continuePendingInvitation(allowAppleVerification: true) }
+                                do {
+                                    if store.hasPendingInvitationPackage {
+                                        try await store.continuePendingInvitation(allowAppleVerification: true)
+                                    } else {
+                                        try await store.retryInvitationCleanup()
+                                    }
+                                }
                                 catch { store.errorMessage = error.localizedDescription }
                             }
                         }

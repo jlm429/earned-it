@@ -111,7 +111,9 @@ protocol HouseholdTransport: AccountDataResetCloudBoundary {
     func acceptedInvitationParticipantID(in location: CloudLocation) async throws -> String?
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date
-    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation) async throws -> [HouseholdFact]
+    func claimInvitation(_ facts: [HouseholdFact], in location: CloudLocation,
+                         expectedParticipantID: String, expectedInvitationParticipantID: String,
+                         expectedAccountGeneration: UInt64) async throws -> [HouseholdFact]
     func canWrite(to location: CloudLocation) async throws -> Bool
     func ownerTransitionPreflight(targetHouseholdID: UUID, localSession: DeviceSession,
                                   localFacts: [HouseholdFact], localPendingFactCount: Int) async
