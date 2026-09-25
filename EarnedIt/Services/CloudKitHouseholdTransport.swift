@@ -1461,13 +1461,30 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         expectedCurrentUserRecordName: String,
         ownerAuthorityBinding: String
     ) -> InvitationLifecycleAuthorityRecordComparison {
-        familyLifecycleAuthorityComparison(
+        let creatorMatches = creatorUserRecordID.map {
+            familyLifecycleAuthorityIdentityMatchesCurrentAccount(
+                $0,
+                expectedCurrentUserRecordName: expectedCurrentUserRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+        }
+        let modifierMatches = modifierUserRecordID.map {
+            familyLifecycleAuthorityIdentityMatchesCurrentAccount(
+                $0,
+                expectedCurrentUserRecordName: expectedCurrentUserRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+        }
+        let state = rawState.flatMap(FamilyLifecycleState.init(rawValue:))
+        return InvitationLifecycleAuthorityRecordComparison(
             recordTypeMatches: recordTypeMatches,
-            formatVersion: formatVersion,
-            rawState: rawState,
-            creatorParticipantID: creatorUserRecordID?.recordName,
-            modifierParticipantID: modifierUserRecordID?.recordName,
-            ownerAuthorityBinding: ownerAuthorityBinding,
+            formatVersionMatches: formatVersion == 1,
+            state: state,
+            stateRecognized: state != nil,
+            creatorPresent: creatorUserRecordID != nil,
+            creatorMatchesCurrentAccount: creatorMatches,
+            modifierPresent: modifierUserRecordID != nil,
+            modifierMatchesCurrentAccount: modifierMatches,
             identityRepresentation: familyLifecycleAuthorityIdentityRepresentation(
                 creatorUserRecordID: creatorUserRecordID,
                 modifierUserRecordID: modifierUserRecordID,
@@ -1503,6 +1520,20 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             modifierMatchesCurrentAccount: modifierMatches,
             identityRepresentation: identityRepresentation
         )
+    }
+
+    private static func familyLifecycleAuthorityIdentityMatchesCurrentAccount(
+        _ recordID: CKRecord.ID,
+        expectedCurrentUserRecordName: String,
+        ownerAuthorityBinding: String
+    ) -> Bool {
+        if recordID.recordName == CKCurrentUserDefaultName {
+            return recordID.zoneID.zoneName == CKRecordZone.ID.default.zoneName
+                && recordID.zoneID.ownerName == CKCurrentUserDefaultName
+        }
+        return recordID.recordName == expectedCurrentUserRecordName
+            && AccountMembershipBinding.ownerAuthority(participantID: recordID.recordName)
+                == ownerAuthorityBinding
     }
 
     static func familyLifecycleAuthorityIdentityRepresentation(

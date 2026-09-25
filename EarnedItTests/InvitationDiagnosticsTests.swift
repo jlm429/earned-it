@@ -563,7 +563,9 @@ final class InvitationDiagnosticsTests: XCTestCase {
         )
         let defaultNameIdentity = try XCTUnwrap(defaultNameSystemIDs.identityRepresentation)
 
-        XCTAssertFalse(defaultNameSystemIDs.isAccepted)
+        XCTAssertTrue(defaultNameSystemIDs.isAccepted)
+        XCTAssertEqual(defaultNameSystemIDs.creatorMatchesCurrentAccount, true)
+        XCTAssertEqual(defaultNameSystemIDs.modifierMatchesCurrentAccount, true)
         XCTAssertEqual(defaultNameIdentity.creatorRecordNameMatchesExpectedCurrentUser, false)
         XCTAssertEqual(defaultNameIdentity.creatorRecordNameIsCurrentUserDefaultName, true)
         XCTAssertEqual(defaultNameIdentity.modifierRecordNameMatchesExpectedCurrentUser, false)
@@ -603,13 +605,15 @@ final class InvitationDiagnosticsTests: XCTestCase {
         diagnostics.recordLifecycleAuthority(
             attempt: 1,
             phase: .save,
-            result: .recordRejected,
+            result: .recordAccepted,
             comparison: defaultNameSystemIDs
         )
         diagnostics.finish(outcome: .failed, error: HouseholdError.accountMembershipConflict)
         diagnostics.recordUserFacingErrorConversion(HouseholdError.accountMembershipConflict)
 
         let trace = try XCTUnwrap(diagnostics.latestInvitationTrace)
+        XCTAssertTrue(trace.contains("lifecycle.creatorMatchesCurrentAccount=true"))
+        XCTAssertTrue(trace.contains("lifecycle.modifierMatchesCurrentAccount=true"))
         XCTAssertTrue(trace.contains("lifecycle.expectedCurrentRecordNameIsCurrentUserDefaultName=false"))
         XCTAssertTrue(trace.contains("lifecycle.creatorRecordNameMatchesExpectedCurrentUser=false"))
         XCTAssertTrue(trace.contains("lifecycle.creatorRecordNameIsCurrentUserDefaultName=true"))
@@ -622,8 +626,110 @@ final class InvitationDiagnosticsTests: XCTestCase {
         XCTAssertTrue(trace.contains("lifecycle.modifierZoneNameIsDefault=true"))
         XCTAssertTrue(trace.contains("lifecycle.modifierZoneOwnerIsCurrentUserDefaultName=true"))
         XCTAssertTrue(trace.contains("lifecycle.modifierZoneOwnerMatchesExpectedCurrentUser=false"))
+        XCTAssertTrue(trace.contains("lifecycle.recordAccepted=true"))
         XCTAssertFalse(trace.contains(expectedRecordName))
         XCTAssertFalse(trace.contains(CKCurrentUserDefaultName))
+    }
+
+    func testLifecycleAuthoritySystemIdentityRequiresExpectedNameOrWellFormedCurrentUserSentinel() {
+        let expectedRecordName = "current-owner-record-name"
+        let ownerAuthorityBinding = AccountMembershipBinding.ownerAuthority(participantID: expectedRecordName)
+        let defaultZone = CKRecordZone.ID.default
+        let exactExpected = CKRecord.ID(recordName: expectedRecordName, zoneID: defaultZone)
+        let currentUserSentinel = CKRecord.ID(recordName: CKCurrentUserDefaultName, zoneID: defaultZone)
+        let malformedSentinelZone = CKRecord.ID(
+            recordName: CKCurrentUserDefaultName,
+            zoneID: CKRecordZone.ID(
+                zoneName: "malformed-zone",
+                ownerName: CKCurrentUserDefaultName
+            )
+        )
+        let malformedSentinelOwner = CKRecord.ID(
+            recordName: CKCurrentUserDefaultName,
+            zoneID: CKRecordZone.ID(
+                zoneName: defaultZone.zoneName,
+                ownerName: "foreign-owner"
+            )
+        )
+        let foreign = CKRecord.ID(recordName: "foreign-user-record-name", zoneID: defaultZone)
+
+        let acceptedPairs: [(CKRecord.ID, CKRecord.ID)] = [
+            (exactExpected, exactExpected),
+            (currentUserSentinel, currentUserSentinel),
+            (exactExpected, currentUserSentinel),
+            (currentUserSentinel, exactExpected)
+        ]
+        for (creator, modifier) in acceptedPairs {
+            let comparison = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorUserRecordID: creator,
+                modifierUserRecordID: modifier,
+                expectedCurrentUserRecordName: expectedRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+
+            XCTAssertTrue(comparison.isAccepted)
+            XCTAssertEqual(comparison.creatorMatchesCurrentAccount, true)
+            XCTAssertEqual(comparison.modifierMatchesCurrentAccount, true)
+        }
+
+        let rejectedPairs: [(CKRecord.ID?, CKRecord.ID?)] = [
+            (nil, currentUserSentinel),
+            (currentUserSentinel, nil),
+            (malformedSentinelZone, currentUserSentinel),
+            (currentUserSentinel, malformedSentinelZone),
+            (malformedSentinelOwner, currentUserSentinel),
+            (currentUserSentinel, malformedSentinelOwner),
+            (foreign, currentUserSentinel),
+            (currentUserSentinel, foreign)
+        ]
+        for (creator, modifier) in rejectedPairs {
+            let comparison = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorUserRecordID: creator,
+                modifierUserRecordID: modifier,
+                expectedCurrentUserRecordName: expectedRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+
+            XCTAssertFalse(comparison.isAccepted)
+        }
+
+        let invalidRecords = [
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: false,
+                formatVersion: 1,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorUserRecordID: currentUserSentinel,
+                modifierUserRecordID: currentUserSentinel,
+                expectedCurrentUserRecordName: expectedRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 2,
+                rawState: FamilyLifecycleState.active.rawValue,
+                creatorUserRecordID: currentUserSentinel,
+                modifierUserRecordID: currentUserSentinel,
+                expectedCurrentUserRecordName: expectedRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            ),
+            CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
+                recordTypeMatches: true,
+                formatVersion: 1,
+                rawState: "unknown-state",
+                creatorUserRecordID: currentUserSentinel,
+                modifierUserRecordID: currentUserSentinel,
+                expectedCurrentUserRecordName: expectedRecordName,
+                ownerAuthorityBinding: ownerAuthorityBinding
+            )
+        ]
+
+        XCTAssertTrue(invalidRecords.allSatisfy { !$0.isAccepted })
     }
 
     func testLifecycleAuthorityBootstrapUsesAuthoritativeSaveResultWhenVerificationFetchIsMissing() throws {
