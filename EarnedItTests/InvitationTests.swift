@@ -2296,6 +2296,50 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 0)
     }
 
+    func testRawAppleURLRetryPromotesCommittedAccessBeforeReaccepting() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "raw-callback-retry-child")
+        transport.acceptPostCommitError = CKError(.networkFailure)
+        transport.acceptedInvitationParticipantError = CKError(.networkUnavailable)
+        let joining = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+        var acceptanceCalls = 0
+
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                acceptanceCalls += 1
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The uncertain post-commit result must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .acceptingAccess)
+        XCTAssertEqual(acceptanceCalls, 1)
+
+        transport.acceptPostCommitError = nil
+        transport.acceptedInvitationParticipantError = nil
+        transport.acceptErrorAfterHook = HouseholdError.invitationConsumed
+        try await joining.acceptSystemInvitation(location: location) {
+            acceptanceCalls += 1
+            try await transport.accept(url: invitation.shareURL, expected: location)
+        }
+
+        XCTAssertEqual(acceptanceCalls, 1)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(server.accountMembershipLocks["raw-callback-retry-child"]?.state, .active)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+    }
+
     func testRawAppleURLNetworkErrorBeforeAcceptanceRemainsRetryable() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
@@ -2509,6 +2553,56 @@ final class InvitationTests: XCTestCase {
             in: sharedLocation
         )
         XCTAssertTrue(retryAccessIsCurrent)
+    }
+
+    func testInterruptedCleanupRejectsDifferentCommittedInvitationMembership() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let pendingInvitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let committedInvitation = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let account = "cleanup-invitation-conflict-child"
+        let transport = TestTransport(server: server, account: account)
+        let committedStore = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        try await committedStore.redeemInvitation(committedInvitation.qrPayload)
+        let committedLock = try XCTUnwrap(server.accountMembershipLocks[account])
+        let location = try XCTUnwrap(committedStore.session.location)
+
+        let repository = try HouseholdRepository(inMemory: true)
+        var pendingSession = try repository.session()
+        pendingSession.pendingInvitationAcceptance = PendingInvitationAcceptance(
+            location: location,
+            cloudParticipantID: account,
+            retainedFactIDs: [],
+            accessExistedBeforeAttempt: false,
+            accountLockAttemptID: committedLock.attemptID,
+            invitationID: pendingInvitation.invitation.id,
+            expiresAt: pendingInvitation.invitation.expiresAt,
+            phase: .awaitingRedemption
+        )
+        try repository.commit(facts: [], session: pendingSession)
+        let interrupted = try HouseholdStore(
+            repository: repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await interrupted.retryInvitationCleanup(),
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertNil(interrupted.household)
+        XCTAssertNil(interrupted.selectedMember)
+        XCTAssertEqual(interrupted.session.pendingInvitationAcceptance, pendingSession.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks[account], committedLock)
+        XCTAssertNil(interrupted.snapshot.invitationClaim(pendingInvitation.invitation.id))
+        XCTAssertNotNil(server.zones[location.zoneName]?.facts[committedInvitation.invitation.claimFactID])
     }
 
     func testAttachRejectsParticipantSubstitutedAfterLockActivation() async throws {

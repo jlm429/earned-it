@@ -1555,6 +1555,7 @@ final class HouseholdStore {
         guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let participant = try await transport.participantID()
+        let isResumingAcceptance = session.pendingInvitationAcceptance != nil
         if let pending = session.pendingInvitationAcceptance {
             guard pending.location == location,
                   pending.cloudParticipantID == participant,
@@ -1584,21 +1585,30 @@ final class HouseholdStore {
         }
         do {
             if session.pendingInvitationAcceptance?.phase == .acceptingAccess {
-                do {
-                    try await acceptance()
-                    recordJoinReceipt { $0.nativeAcceptance = .yes }
-                    try confirmPendingInvitationAcceptance(location: location, participant: participant)
-                } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
-                    let committed: Bool
+                var alreadyCommitted = false
+                if isResumingAcceptance {
+                    alreadyCommitted = try await promotePendingNativeAcceptanceIfCommitted(
+                        location: location,
+                        participant: participant
+                    )
+                }
+                if !alreadyCommitted {
                     do {
-                        committed = try await promotePendingNativeAcceptanceIfCommitted(
-                            location: location,
-                            participant: participant
-                        )
-                    } catch {
-                        throw cloudError
+                        try await acceptance()
+                        recordJoinReceipt { $0.nativeAcceptance = .yes }
+                        try confirmPendingInvitationAcceptance(location: location, participant: participant)
+                    } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
+                        let committed: Bool
+                        do {
+                            committed = try await promotePendingNativeAcceptanceIfCommitted(
+                                location: location,
+                                participant: participant
+                            )
+                        } catch {
+                            throw cloudError
+                        }
+                        guard committed else { throw cloudError }
                     }
-                    guard committed else { throw cloudError }
                 }
             }
             let invitation = try await identifyPendingInvitation(in: location)
@@ -2852,6 +2862,10 @@ final class HouseholdStore {
                 participant: pending.cloudParticipantID
             )
             if let membership = evidence.membership {
+                if let invitationID = pending.invitationID,
+                   membership.invitation.id != invitationID {
+                    throw HouseholdError.accountMembershipConflict
+                }
                 let canWrite = try await transport.canWrite(to: pending.location)
                 let lock = try await activateAccountMembershipLock(
                     location: pending.location, claimBinding: AccountMembershipBinding.invitation(membership),
