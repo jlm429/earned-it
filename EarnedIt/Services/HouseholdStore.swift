@@ -291,6 +291,30 @@ final class HouseholdStore {
         cloudAccessBlocked = true
         cloudIsReadOnly = true
     }
+
+    func prepareInvitationActionsUITest() throws {
+        if household == nil {
+            try createFamily(name: "Invitation Test Family", parentName: "Test Parent")
+            let child = try saveMember(name: "Hanna", role: .child, avatar: .flower)
+            try finishSetup()
+            guard let household, let parent = selectedMember else { throw HouseholdError.noHousehold }
+            let shareURL = URL(string: "https://test.invalid/synthetic-invitation")!
+            let invitation = FamilyInvitation(
+                id: UUID(),
+                householdID: household.id,
+                claimFactID: UUID(),
+                memberID: child.id,
+                role: .child,
+                codeDigest: InvitationCode.digest("2345-6789-AB")!,
+                createdAt: clock(),
+                expiresAt: .distantFuture,
+                createdByMemberID: parent.id,
+                cloudShareParticipantID: "synthetic-invitation-participant",
+                cloudShareURLDigest: InvitationCode.shareURLDigest(shareURL)
+            )
+            try append([.invitation(invitation)], scheduleSynchronization: false)
+        }
+    }
     #endif
 
     func dailyList(on date: Date? = nil) -> [DailyChore] {
@@ -1339,6 +1363,18 @@ final class HouseholdStore {
         }
     }
 
+    func openRawAppleInvitation(
+        _ text: String,
+        openShareURL: (URL) async -> Bool = { await UIApplication.shared.open($0) }
+    ) async throws {
+        try requireInvitationIngressAllowed()
+        guard session.householdID == nil else { throw HouseholdError.alreadyHasHousehold }
+        guard let url = InvitationCredential.rawAppleShareURL(from: text) else {
+            throw HouseholdError.invitationNotFound
+        }
+        guard await openShareURL(url) else { throw HouseholdError.invitation }
+    }
+
     /// Retry the same package after cold launch, native callback, or interrupted acceptance.
     /// Opening Apple's URL is conditional on its verification error and explicit user retry.
     @discardableResult
@@ -1501,8 +1537,13 @@ final class HouseholdStore {
             try await acceptance()
             recordJoinReceipt { $0.nativeAcceptance = .yes }
             try confirmPendingInvitationAcceptance(location: location, participant: participant)
-            try await identifyPendingInvitation(in: location)
-            try await importFamily(location, participant: participant, accountLockAttemptID: lock.attemptID)
+            let invitation = try await identifyPendingInvitation(in: location)
+            try await redeemInvitation(
+                codeDigest: invitation.codeDigest,
+                in: location,
+                participant: participant,
+                expectedInvitationID: invitation.id
+            )
         }
         catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) { throw cloudError }
         catch {
@@ -1537,8 +1578,13 @@ final class HouseholdStore {
         }
     }
 
-    private func redeemInvitation(codeDigest: String, in location: CloudLocation, participant: String,
-                                  remote suppliedFacts: [HouseholdFact]? = nil) async throws {
+    private func redeemInvitation(
+        codeDigest: String,
+        in location: CloudLocation,
+        participant: String,
+        remote suppliedFacts: [HouseholdFact]? = nil,
+        expectedInvitationID: UUID? = nil
+    ) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         guard session.householdID == nil || session.householdID == location.householdID else {
             throw HouseholdError.alreadyHasHousehold
@@ -1581,7 +1627,10 @@ final class HouseholdStore {
                        accountLockAttemptID: lock.attemptID)
             return
         }
-        guard let invitation = imported.invitations.first(where: { $0.codeDigest == codeDigest }) else {
+        let invitation = expectedInvitationID.flatMap(imported.invitation)
+            ?? imported.invitations.first(where: { $0.codeDigest == codeDigest })
+        guard let invitation, invitation.codeDigest == codeDigest,
+              expectedInvitationID == nil || invitation.id == expectedInvitationID else {
             recordJoinRefusal(.invitationRecordMissing, stage: .exactInvitation, error: .invitationNotFound)
             throw HouseholdError.invitationNotFound
         }
@@ -2355,7 +2404,8 @@ final class HouseholdStore {
         session = updated
     }
 
-    private func identifyPendingInvitation(in location: CloudLocation) async throws {
+    @discardableResult
+    private func identifyPendingInvitation(in location: CloudLocation) async throws -> FamilyInvitation {
         guard var pending = session.pendingInvitationAcceptance,
               pending.location == location,
               pending.phase == .awaitingRedemption,
@@ -2393,7 +2443,7 @@ final class HouseholdStore {
                 $0.failureCategory = .none
                 $0.refusalReason = .none
             }
-            return
+            return invitation
         case .expired:
             recordJoinRefusal(.expired, stage: .exactInvitation, error: .invitationExpired)
             throw HouseholdError.invitationExpired
@@ -2668,10 +2718,13 @@ final class HouseholdStore {
                    !imported.isInvitationRevoked(invitationID),
                    imported.invitationClaim(invitationID) == nil,
                    validationTime < (pending.expiresAt ?? invitation.expiresAt) {
-                    if session.householdID == nil {
-                        try await importFamily(pending.location, participant: pending.cloudParticipantID,
-                                               accountLockAttemptID: pending.accountLockAttemptID)
-                    }
+                    try await redeemInvitation(
+                        codeDigest: invitation.codeDigest,
+                        in: pending.location,
+                        participant: pending.cloudParticipantID,
+                        remote: remote,
+                        expectedInvitationID: invitation.id
+                    )
                     return
                 }
             }

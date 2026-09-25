@@ -6,6 +6,8 @@ The diagnostic trace covers an owner's first invitation after replacing a delete
 
 Every event contains only stage names, states, counts, equality results, CloudKit error codes, error source, and retry timing. It never logs family, member, device, participant, invitation, record, zone, or attempt identifiers. It never logs names, URLs, codes, digests, payloads, credentials, or secrets.
 
+The invitation failure surface exposes Copy Diagnostics only after an issuance error. The copied trace uses the same typed allow-list and is not shown as a routine debug console. Recipient and lifecycle failures may add equivalent copy actions only when a user can preserve a bounded failure trace without exposing invitation material or CloudKit identity.
+
 The in-memory trace is bounded to 200 events and is also written to unified logging with subsystem `com.jlm429.EarnedIt` and category `FamilyTransition`. No diagnostic receipt is persisted in the family journal or device session. The diagnostic path adds no schema. The deletion correctness fix separately requires the `FamilyLifecycleAuthority` type documented in `docs/family-lifecycle-authority.md`.
 
 ## Read-only preflight contract

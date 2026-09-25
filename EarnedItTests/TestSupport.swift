@@ -107,6 +107,9 @@ final class TestTransport: HouseholdTransport {
     var fetchError: Error?
     var invitationLocationError: Error?
     var invitationAccessVisible = true
+    var invitationAccessStatusAccepted = true
+    var invitationAccessCanWrite = true
+    var invitationAccessRoleIsPrivate = true
     var acceptedParticipantIDTransforms = false
     private(set) var invitationLocationURLs: [URL] = []
     private(set) var acceptedURLs: [URL] = []
@@ -133,6 +136,9 @@ final class TestTransport: HouseholdTransport {
     var invitationFactUploadDelay: Duration?
     var recoveredInvitationParticipantID: String?
     var recoveredInvitationURL: URL?
+    var recoveredInvitationStatusPending = true
+    var recoveredInvitationCanWrite = true
+    var recoveredInvitationRoleIsPrivate = true
     var accountResetDiscoveryError: Error?
     var accountResetDeletionFailures = 0
     private(set) var invitationValidationTimeCalls = 0
@@ -881,7 +887,10 @@ final class TestTransport: HouseholdTransport {
     func recoverInvitationAccess(participantID: String, from location: CloudLocation) async throws
         -> CloudInvitationAccess {
         guard server.zones[location.zoneName]?.owner == account,
-              server.zones[location.zoneName]?.pendingInvitationParticipants.contains(participantID) == true else {
+              server.zones[location.zoneName]?.pendingInvitationParticipants.contains(participantID) == true,
+              recoveredInvitationStatusPending,
+              recoveredInvitationCanWrite,
+              recoveredInvitationRoleIsPrivate else {
             throw HouseholdError.invitationUnavailable
         }
         let returnedParticipantID = recoveredInvitationParticipantID ?? participantID
@@ -896,7 +905,8 @@ final class TestTransport: HouseholdTransport {
         }
     }
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
-        invitationAccessVisible && !acceptedParticipantIDTransforms
+        invitationAccessVisible && invitationAccessStatusAccepted && invitationAccessCanWrite
+            && invitationAccessRoleIsPrivate && !acceptedParticipantIDTransforms
             && server.zones[location.zoneName]?.claimedInvitationAccounts[participantID] == account
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {

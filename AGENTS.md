@@ -49,6 +49,7 @@ Read only the guides relevant to the change:
 - `skills/swiftdata.md` for journal and persistence work
 - `skills/swiftui-ui.md` for interface work
 - `skills/testing.md` for verification
+- `skills/earned-it-cloudkit-lifecycle/SKILL.md` for CloudKit family deletion, membership recovery, and invitation issuance or acceptance
 
 Keep this file compact and useful across future tasks. Point to authoritative code or documentation instead of recording temporary branch history.
 

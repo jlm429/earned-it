@@ -80,6 +80,52 @@ final class NativeInvitationContractTests: XCTestCase {
         XCTAssertEqual(accounts[invitation.invitation.cloudShareParticipantID], "child")
     }
 
+    func testRawParticipantBindingRequiresExactAcceptedPrivateReadWriteSlot() {
+        let participantID = "one-time-participant"
+        XCTAssertTrue(CloudKitHouseholdTransport.invitationParticipantMatches(
+            participantID: participantID,
+            expectedParticipantID: participantID,
+            acceptanceStatusMatches: true,
+            permission: .readWrite,
+            role: .privateUser
+        ))
+        XCTAssertFalse(CloudKitHouseholdTransport.invitationParticipantMatches(
+            participantID: "",
+            expectedParticipantID: "",
+            acceptanceStatusMatches: true,
+            permission: .readWrite,
+            role: .privateUser
+        ))
+        XCTAssertFalse(CloudKitHouseholdTransport.invitationParticipantMatches(
+            participantID: "other-participant",
+            expectedParticipantID: participantID,
+            acceptanceStatusMatches: true,
+            permission: .readWrite,
+            role: .privateUser
+        ))
+        XCTAssertFalse(CloudKitHouseholdTransport.invitationParticipantMatches(
+            participantID: participantID,
+            expectedParticipantID: participantID,
+            acceptanceStatusMatches: false,
+            permission: .readWrite,
+            role: .privateUser
+        ))
+        XCTAssertFalse(CloudKitHouseholdTransport.invitationParticipantMatches(
+            participantID: participantID,
+            expectedParticipantID: participantID,
+            acceptanceStatusMatches: true,
+            permission: .readOnly,
+            role: .privateUser
+        ))
+        XCTAssertFalse(CloudKitHouseholdTransport.invitationParticipantMatches(
+            participantID: participantID,
+            expectedParticipantID: participantID,
+            acceptanceStatusMatches: true,
+            permission: .readWrite,
+            role: .publicUser
+        ))
+    }
+
     func testDeterministicRecordMissingClassifierAcceptsPerRecordUnknownItemOnly() {
         let recordID = CKRecord.ID(recordName: String(repeating: "a", count: 64))
         let otherRecordID = CKRecord.ID(recordName: String(repeating: "b", count: 64))

@@ -4,6 +4,36 @@ import XCTest
 
 @MainActor
 final class InvitationDeliveryTests: XCTestCase {
+    func testRawAppleURLInputOpensOnlyValidatedSystemShareURL() async throws {
+        let store = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                       automaticSync: false)
+        let appleURL = URL(string: "https://www.icloud.com/share/synthetic-only?token=value")!
+        var opened: [URL] = []
+
+        try await store.openRawAppleInvitation(appleURL.absoluteString) {
+            opened.append($0)
+            return true
+        }
+
+        XCTAssertEqual(opened, [appleURL])
+        for rejected in [
+            "http://www.icloud.com/share/synthetic-only",
+            "https://example.com/share/synthetic-only",
+            "https://www.icloud.com/not-share/synthetic-only",
+            "earnedit-invitation://join?code=2345-6789-AB"
+        ] {
+            do {
+                try await store.openRawAppleInvitation(rejected) { _ in
+                    XCTFail("An invalid raw URL must not open")
+                    return true
+                }
+                XCTFail("An invalid raw URL must be rejected")
+            } catch {
+                XCTAssertEqual(error as? HouseholdError, .invitationNotFound)
+            }
+        }
+    }
+
     func testSharedInvitationUsesSamePackageAsGeneratedQR() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

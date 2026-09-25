@@ -113,6 +113,16 @@ struct InvitationCredential: Equatable {
         code = normalized
         shareURL = nil
     }
+
+    static func rawAppleShareURL(from text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              let host = url.host()?.lowercased(),
+              host == "icloud.com" || host.hasSuffix(".icloud.com"),
+              url.pathComponents.dropFirst().first == "share" else { return nil }
+        return url
+    }
 }
 
 enum InvitationLifecycleStatus: Equatable {

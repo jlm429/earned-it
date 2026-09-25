@@ -50,22 +50,49 @@ struct FamilyManagementView: View {
             if !store.familyInvitations.isEmpty {
                 Section("Invitations") {
                     ForEach(store.familyInvitations) { invitation in
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 10) {
                             Text(invitationMember(invitation)).font(.headline)
                             Label(invitationStatusText(invitation), systemImage: invitationStatusSymbol(invitation))
                                 .font(.caption).foregroundStyle(.secondary)
-                            if store.invitationStatus(invitation) == .available {
-                                Button("Show Invitation Again") { recover(invitation) }
+                            VStack(spacing: 12) {
+                                if store.invitationStatus(invitation) == .available {
+                                    Button { recover(invitation) } label: {
+                                        invitationActionLabel(
+                                            "Show Invitation Again",
+                                            systemImage: "qrcode"
+                                        )
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.large)
                                     .disabled(busy)
+                                    .accessibilityLabel(
+                                        "Show invitation again for \(invitationMember(invitation))"
+                                    )
+                                    .accessibilityHint("Opens the existing one-time invitation without creating another.")
                                     .accessibilityIdentifier("recover-invitation")
-                            }
-                            if store.invitationStatus(invitation) != .revoked {
-                                Button(store.invitationStatus(invitation) == .consumed ? "Remove Device Access" : "Revoke Invitation",
-                                       role: .destructive) {
-                                    revokingInvitation = invitation
                                 }
-                                .accessibilityIdentifier("revoke-invitation")
+                                if store.invitationStatus(invitation) != .revoked {
+                                    Button(role: .destructive) {
+                                        revokingInvitation = invitation
+                                    } label: {
+                                        invitationActionLabel(
+                                            store.invitationStatus(invitation) == .consumed
+                                                ? "Remove Device Access" : "Revoke Invitation",
+                                            systemImage: "xmark.shield"
+                                        )
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.large)
+                                    .tint(.red)
+                                    .disabled(busy)
+                                    .accessibilityLabel(
+                                        "\(store.invitationStatus(invitation) == .consumed ? "Remove device access" : "Revoke invitation") for \(invitationMember(invitation))"
+                                    )
+                                    .accessibilityHint("Requires confirmation before removing invitation access.")
+                                    .accessibilityIdentifier("revoke-invitation")
+                                }
                             }
+                            .padding(.top, 4)
                         }
                     }
                 }
@@ -168,6 +195,14 @@ struct FamilyManagementView: View {
         case .revoked: "xmark.shield"
         case .consumed: "checkmark.shield"
         }
+    }
+
+    private func invitationActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func run(_ action: @escaping () async throws -> Void) {

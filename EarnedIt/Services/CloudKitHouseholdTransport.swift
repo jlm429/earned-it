@@ -810,9 +810,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             throw HouseholdError.invitationUnavailable
         }
         guard let participant = share.participants.first(where: { $0.participantID == participantID }),
-              participant.acceptanceStatus == .pending,
-              participant.permission == .readWrite,
-              participant.role == .privateUser,
+              Self.invitationParticipantMatches(
+                participantID: participant.participantID,
+                expectedParticipantID: participantID,
+                acceptanceStatusMatches: participant.acceptanceStatus == .pending,
+                permission: participant.permission,
+                role: participant.role
+              ),
               let url = oneTimeURL(in: share, participantID: participant.participantID) else {
             throw HouseholdError.invitationUnavailable
         }
@@ -828,7 +832,28 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     func hasInvitationAccess(participantID: String, in location: CloudLocation) async throws -> Bool {
         let share = try await share(for: location, title: "Earned It Family")
-        return share.currentUserParticipant?.participantID == participantID
+        guard let participant = share.currentUserParticipant else { return false }
+        return Self.invitationParticipantMatches(
+            participantID: participant.participantID,
+            expectedParticipantID: participantID,
+            acceptanceStatusMatches: participant.acceptanceStatus == .accepted,
+            permission: participant.permission,
+            role: participant.role
+        )
+    }
+
+    static func invitationParticipantMatches(
+        participantID: String,
+        expectedParticipantID: String,
+        acceptanceStatusMatches: Bool,
+        permission: CKShare.ParticipantPermission,
+        role: CKShare.ParticipantRole
+    ) -> Bool {
+        !participantID.isEmpty
+            && participantID == expectedParticipantID
+            && acceptanceStatusMatches
+            && permission == .readWrite
+            && role == .privateUser
     }
 
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {

@@ -95,6 +95,18 @@ final class InvitationTests: XCTestCase {
         )
 
         fixture.transport.recoveredInvitationParticipantID = nil
+        for rejection in ["status", "permission", "role"] {
+            fixture.transport.recoveredInvitationStatusPending = rejection != "status"
+            fixture.transport.recoveredInvitationCanWrite = rejection != "permission"
+            fixture.transport.recoveredInvitationRoleIsPrivate = rejection != "role"
+            await XCTAssertThrowsErrorAsync(
+                try await fixture.store.recoverInvitation(issued.invitation),
+                expected: .invitationUnavailable
+            )
+        }
+        fixture.transport.recoveredInvitationStatusPending = true
+        fixture.transport.recoveredInvitationCanWrite = true
+        fixture.transport.recoveredInvitationRoleIsPrivate = true
         fixture.server.zones[fixture.location.zoneName]?.pendingInvitationParticipants.remove(
             issued.invitation.cloudShareParticipantID
         )
@@ -647,12 +659,18 @@ final class InvitationTests: XCTestCase {
 
         transport.account = "joining-child"
         transport.beforeLeave = { await Task.yield() }
-        async let firstRetry = joining.retryScheduledInvitationCleanup()
-        async let repeatedRetry = joining.retryScheduledInvitationCleanup()
-        let retryResults = try await (firstRetry, repeatedRetry)
+        async let firstRetry: (TimeInterval?, HouseholdError?) = {
+            do { return (try await joining.retryScheduledInvitationCleanup(), nil) }
+            catch { return (nil, error as? HouseholdError) }
+        }()
+        async let repeatedRetry: (TimeInterval?, HouseholdError?) = {
+            do { return (try await joining.retryScheduledInvitationCleanup(), nil) }
+            catch { return (nil, error as? HouseholdError) }
+        }()
+        let retryResults = await (firstRetry, repeatedRetry)
 
-        XCTAssertNil(retryResults.0)
-        XCTAssertNil(retryResults.1)
+        XCTAssertEqual([retryResults.0.1, retryResults.1.1].compactMap { $0 }, [.pendingChanges])
+        XCTAssertEqual([retryResults.0.0, retryResults.1.0].compactMap { $0 }.count, 0)
         XCTAssertEqual(transport.leaveAttempts, 2)
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .released)
@@ -861,7 +879,11 @@ final class InvitationTests: XCTestCase {
             let pending = try? secondRepository.session().pendingInvitationAcceptance
             observedProvisionalState = pending?.phase == .acceptingAccess
                 && pending?.accessExistedBeforeAttempt == false
-            do { try await first.redeemInvitation(invitation.qrPayload) }
+            do {
+                try await Task.detached { @MainActor in
+                    try await first.redeemInvitation(invitation.qrPayload)
+                }.value
+            }
             catch { firstError = error }
         }
         secondTransport.acceptErrorAfterHook = CKError(.networkFailure)
@@ -1435,7 +1457,11 @@ final class InvitationTests: XCTestCase {
                                             automaticSync: false)
         var secondError: Error?
         firstTransport.beforeAccept = {
-            do { try await secondJoin.redeemInvitation(secondInvitation.qrPayload) }
+            do {
+                try await Task.detached { @MainActor in
+                    try await secondJoin.redeemInvitation(secondInvitation.qrPayload)
+                }.value
+            }
             catch { secondError = error }
         }
 
@@ -1918,12 +1944,12 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(server.zones[zoneName]!.facts[invitation.invitation.claimFactID])
     }
 
-    func testSystemAcceptedInvitationRollsBackWhenCodeRedemptionFails() async throws {
+    func testRawAppleURLClaimsExactChildWithoutClearCode() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         let repository = try HouseholdRepository(inMemory: true)
-        let transport = TestTransport(server: server, account: "metadata-child")
+        let transport = TestTransport(server: server, account: "raw-link-child")
         let joining = try HouseholdStore(repository: repository, transport: transport,
                                          clock: { family.clock.now }, automaticSync: false)
 
@@ -1937,18 +1963,227 @@ final class InvitationTests: XCTestCase {
         }
         XCTAssertTrue(observedProvisionalState)
         XCTAssertEqual(joining.household?.id, family.store.household?.id)
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(joining.snapshot.invitationClaim(invitation.invitation.id)?.codeDigest,
+                       invitation.invitation.codeDigest)
+        XCTAssertEqual(server.accountMembershipLocks["raw-link-child"]?.state, .active)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertThrowsError(try joining.selectProfile(family.alek.id))
+        XCTAssertThrowsError(try joining.selectProfile(family.parent.id))
+    }
+
+    func testRawAppleURLInterruptedClaimResumesWithoutClearCode() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "raw-retry-child")
+        transport.claimError = CKError(.networkFailure)
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The interrupted raw-link claim must report its transport error")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+
         XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
         XCTAssertEqual(joining.session.pendingInvitationAcceptance?.invitationID, invitation.invitation.id)
-        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.expiresAt, invitation.invitation.expiresAt)
+        XCTAssertNil(joining.selectedMember)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+
+        transport.claimError = nil
+        try await joining.retryInvitationCleanup()
+
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(server.accountMembershipLocks["raw-retry-child"]?.state, .active)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+    }
+
+    func testRawAppleURLClaimUsesServerTimeDespiteDeviceClockSkew() async throws {
+        for (index, joiningDate) in ["2025-09-07T16:00:00Z", "2027-09-07T16:00:00Z"].enumerated() {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+            server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+            let transport = TestTransport(server: server, account: "skewed-child-\(index)")
+            let joiningClock = TestClock(joiningDate)
+            let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                             transport: transport,
+                                             clock: { joiningClock.now }, automaticSync: false)
+            let location = try await transport.invitationLocation(for: invitation.shareURL)
+
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+
+            XCTAssertEqual(joining.session.selectedMemberID, family.hanna.id)
+            XCTAssertEqual(joining.snapshot.invitationClaim(invitation.invitation.id)?.memberID,
+                           family.hanna.id)
+            XCTAssertEqual(server.accountMembershipLocks["skewed-child-\(index)"]?.state, .active)
+            XCTAssertEqual(transport.invitationValidationTimeCalls, 2)
+            XCTAssertNil(joining.session.pendingInvitationAcceptance)
+            XCTAssertEqual(transport.leaveAttempts, 0)
+        }
+    }
+
+    func testRawAppleURLUsesAuthoritativeExpiryAndRejectsRevocation() async throws {
+        for refusal in [HouseholdError.invitationExpired, .invitationRevoked] {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+            if refusal == .invitationExpired {
+                server.authoritativeTime = invitation.invitation.expiresAt
+            } else {
+                try await family.store.revokeInvitation(invitation.invitation)
+                server.zones[invitation.shareURL.lastPathComponent]?.pendingInvitationParticipants.insert(
+                    invitation.invitation.cloudShareParticipantID
+                )
+            }
+            let account = refusal == .invitationExpired ? "raw-expired" : "raw-revoked"
+            let transport = TestTransport(server: server, account: account)
+            let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                             clock: { family.clock.now }, automaticSync: false)
+            let location = try await transport.invitationLocation(for: invitation.shareURL)
+
+            await XCTAssertThrowsErrorAsync(
+                try await joining.acceptSystemInvitation(location: location) {
+                    try await transport.accept(url: invitation.shareURL, expected: location)
+                },
+                expected: refusal
+            )
+
+            XCTAssertNil(joining.household)
+            XCTAssertNil(joining.selectedMember)
+            XCTAssertEqual(server.accountMembershipLocks[account]?.state, .released)
+            XCTAssertFalse(server.zones[location.zoneName]!.participants.contains(account))
+        }
+    }
+
+    func testRawAppleURLRejectsWrongParticipantStatusPermissionAndRole() async throws {
+        enum Rejection {
+            case participant, status, permission, role
+        }
+        for rejection in [Rejection.participant, .status, .permission, .role] {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+            let account = "raw-rejected-\(rejection)"
+            let transport = TestTransport(server: server, account: account)
+            switch rejection {
+            case .participant: transport.acceptedParticipantIDTransforms = true
+            case .status: transport.invitationAccessStatusAccepted = false
+            case .permission: transport.invitationAccessCanWrite = false
+            case .role: transport.invitationAccessRoleIsPrivate = false
+            }
+            let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                             clock: { family.clock.now }, automaticSync: false)
+            let location = try await transport.invitationLocation(for: invitation.shareURL)
+
+            await XCTAssertThrowsErrorAsync(
+                try await joining.acceptSystemInvitation(location: location) {
+                    try await transport.accept(url: invitation.shareURL, expected: location)
+                },
+                expected: .invitationNotFound
+            )
+
+            XCTAssertNil(joining.household)
+            XCTAssertNil(joining.selectedMember)
+            XCTAssertNil(joining.session.pendingInvitationAcceptance)
+            XCTAssertEqual(server.accountMembershipLocks[account]?.state, .released)
+            XCTAssertFalse(server.zones[location.zoneName]!.participants.contains(account))
+        }
+    }
+
+    func testRawAppleURLInterruptedValidationUsesBoundedCleanupBackoff() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+        let transport = TestTransport(server: server, account: "raw-validation-retry")
+        transport.invitationValidationTimeFailures = 1
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                         clock: { family.clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: invitation.shareURL)
+
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The validation write failure must remain retryable")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+
+        transport.invitationValidationTimeFailures = 1
+        let cleanupDelay = try await joining.pendingInvitationCleanupDelay()
+        XCTAssertEqual(cleanupDelay, 30)
+        transport.invitationValidationTimeFailures = 1
+        let retryDelay = try await joining.retryScheduledInvitationCleanup()
+        XCTAssertEqual(retryDelay, 30)
+
+        try await joining.retryInvitationCleanup()
+
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+    }
+
+    func testRawAppleURLCannotCrossHouseholdsOrReplayForAnotherAccount() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
+        let firstInvitation = try await first.store.createChildInvitation(memberID: first.hanna.id)
+        let second = try TestFamily(transport: TestTransport(server: server, account: "second-owner"))
+        let secondInvitation = try await second.store.createChildInvitation(memberID: second.hanna.id)
+        let crossingTransport = TestTransport(server: server, account: "crossing-child")
+        let crossing = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                          transport: crossingTransport,
+                                          clock: { first.clock.now }, automaticSync: false)
+        let firstLocation = try await crossingTransport.invitationLocation(for: firstInvitation.shareURL)
 
         await XCTAssertThrowsErrorAsync(
-            try await joining.redeemInvitation("2345-6789-AB"),
+            try await crossing.acceptSystemInvitation(location: firstLocation) {
+                try await crossingTransport.accept(url: secondInvitation.shareURL, expected: firstLocation)
+            },
             expected: .invitationNotFound
         )
-        XCTAssertNil(joining.household)
-        XCTAssertNil(joining.session.pendingInvitationAcceptance)
-        XCTAssertTrue(try repository.facts(householdID: invitation.invitation.householdID).isEmpty)
-        XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("metadata-child"))
+        XCTAssertNil(crossing.household)
+        XCTAssertFalse(server.zones[firstInvitation.shareURL.lastPathComponent]!.participants
+            .contains("crossing-child"))
+        XCTAssertFalse(server.zones[secondInvitation.shareURL.lastPathComponent]!.participants
+            .contains("crossing-child"))
+
+        let firstTransport = TestTransport(server: server, account: "first-child")
+        let firstRecipient = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                                transport: firstTransport,
+                                                clock: { first.clock.now }, automaticSync: false)
+        let acceptedLocation = try await firstTransport.invitationLocation(for: firstInvitation.shareURL)
+        try await firstRecipient.acceptSystemInvitation(location: acceptedLocation) {
+            try await firstTransport.accept(url: firstInvitation.shareURL, expected: acceptedLocation)
+        }
+        XCTAssertEqual(firstRecipient.selectedMember?.id, first.hanna.id)
+
+        let replayTransport = TestTransport(server: server, account: "replay-child")
+        let replay = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+                                        transport: replayTransport,
+                                        clock: { first.clock.now }, automaticSync: false)
+        let replayLocation = try await replayTransport.invitationLocation(for: firstInvitation.shareURL)
+        await XCTAssertThrowsErrorAsync(
+            try await replay.acceptSystemInvitation(location: replayLocation) {
+                try await replayTransport.accept(url: firstInvitation.shareURL, expected: replayLocation)
+            },
+            expected: .invitationConsumed
+        )
+        XCTAssertNil(replay.household)
+        XCTAssertNil(replay.selectedMember)
+        XCTAssertFalse(server.zones[replayLocation.zoneName]!.participants.contains("replay-child"))
     }
 
     func testPendingMetadataAcceptanceExpiresAndLeavesAccess() async throws {
@@ -1956,15 +2191,23 @@ final class InvitationTests: XCTestCase {
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         let transport = TestTransport(server: server, account: "metadata-child")
+        transport.claimError = CKError(.networkFailure)
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { family.clock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
 
         family.move(to: "2026-09-08T17:00:01Z")
+        transport.claimError = nil
         try await joining.retryInvitationCleanup()
+
         XCTAssertNil(joining.household)
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertEqual(transport.leaveAttempts, 1)
@@ -1977,17 +2220,24 @@ final class InvitationTests: XCTestCase {
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
         let transport = TestTransport(server: server, account: "ahead-child")
+        transport.claimError = CKError(.networkFailure)
         let joiningClock = TestClock("2027-09-07T16:00:00Z")
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { joiningClock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
 
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
 
         XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
-        XCTAssertEqual(joining.household?.id, family.store.household?.id)
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.location.householdID,
+                       family.store.household?.id)
         XCTAssertEqual(transport.leaveAttempts, 0)
     }
 
@@ -1997,14 +2247,21 @@ final class InvitationTests: XCTestCase {
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
         let transport = TestTransport(server: server, account: "behind-child")
+        transport.claimError = CKError(.networkFailure)
         let joiningClock = TestClock("2025-09-07T16:00:00Z")
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { joiningClock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
         server.authoritativeTime = invitation.invitation.expiresAt.addingTimeInterval(1)
+        transport.claimError = nil
 
         try await joining.retryInvitationCleanup()
 
@@ -2013,44 +2270,31 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(transport.leaveAttempts, 1)
     }
 
-    func testPendingCleanupDelayUsesServerTimeWhenDeviceClockIsAhead() async throws {
-        let server = TestCloudServer()
-        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
-        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
-        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
-        let transport = TestTransport(server: server, account: "ahead-child")
-        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
-                                         clock: { invitation.invitation.expiresAt.addingTimeInterval(365 * 86_400) },
-                                         automaticSync: false)
-        let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+    func testPendingCleanupDelayUsesServerTimeWithDivergentDeviceClocks() async throws {
+        for joiningDate in ["2025-09-07T16:00:00Z", "2027-09-07T16:00:00Z"] {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+            server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
+            let transport = TestTransport(server: server, account: "pending-\(joiningDate)")
+            transport.claimError = CKError(.networkFailure)
+            let joiningClock = TestClock(joiningDate)
+            let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
+                                             clock: { joiningClock.now }, automaticSync: false)
+            let location = try await transport.invitationLocation(for: invitation.shareURL)
+            do {
+                try await joining.acceptSystemInvitation(location: location) {
+                    try await transport.accept(url: invitation.shareURL, expected: location)
+                }
+                XCTFail("The injected claim interruption must remain pending")
+            } catch {
+                XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+            }
+
+            let cleanupDelay = try await joining.pendingInvitationCleanupDelay()
+            XCTAssertEqual(cleanupDelay, InvitationCode.lifetime - 60)
+            XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
         }
-
-        let delay = try await joining.pendingInvitationCleanupDelay()
-
-        XCTAssertEqual(delay, InvitationCode.lifetime - 60)
-        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
-    }
-
-    func testPendingCleanupDelayUsesServerTimeWhenDeviceClockIsBehind() async throws {
-        let server = TestCloudServer()
-        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
-        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
-        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
-        let transport = TestTransport(server: server, account: "behind-child")
-        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
-                                         clock: { invitation.invitation.createdAt.addingTimeInterval(-365 * 86_400) },
-                                         automaticSync: false)
-        let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
-        }
-
-        let delay = try await joining.pendingInvitationCleanupDelay()
-
-        XCTAssertEqual(delay, InvitationCode.lifetime - 60)
-        XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
     }
 
     func testPendingCleanupEarlyWakeRecomputesAuthoritativeDelay() async throws {
@@ -2059,21 +2303,25 @@ final class InvitationTests: XCTestCase {
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
         let transport = TestTransport(server: server, account: "early-child")
+        transport.claimError = CKError(.networkFailure)
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { family.clock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
         let firstDelay = try await joining.pendingInvitationCleanupDelay()
         server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(120)
 
-        let retryDelay = try await joining.retryScheduledInvitationCleanup()
-        let rescheduledDelay = try await joining.pendingInvitationCleanupDelay()
+        let recomputedDelay = try await joining.pendingInvitationCleanupDelay()
 
-        XCTAssertNil(retryDelay)
         XCTAssertEqual(firstDelay, InvitationCode.lifetime - 60)
-        XCTAssertEqual(rescheduledDelay, InvitationCode.lifetime - 120)
+        XCTAssertEqual(recomputedDelay, InvitationCode.lifetime - 120)
         XCTAssertNotNil(joining.session.pendingInvitationAcceptance)
     }
 
@@ -2083,11 +2331,17 @@ final class InvitationTests: XCTestCase {
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
         let transport = TestTransport(server: server, account: "retry-child")
+        transport.claimError = CKError(.networkFailure)
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { family.clock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
         transport.invitationValidationTimeFailures = 1
 
@@ -2106,14 +2360,22 @@ final class InvitationTests: XCTestCase {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        server.authoritativeTime = invitation.invitation.createdAt.addingTimeInterval(60)
         let transport = TestTransport(server: server, account: "expired-child")
+        transport.claimError = CKError(.networkFailure)
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { invitation.invitation.createdAt.addingTimeInterval(-365 * 86_400) },
                                          automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
+        transport.claimError = nil
         server.authoritativeTime = invitation.invitation.expiresAt
 
         let cleanupDelay = try await joining.pendingInvitationCleanupDelay()
@@ -2164,15 +2426,23 @@ final class InvitationTests: XCTestCase {
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         let transport = TestTransport(server: server, account: "metadata-child")
+        transport.claimError = CKError(.networkFailure)
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { family.clock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await joining.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await joining.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The injected claim interruption must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
 
+        transport.claimError = nil
         try await family.store.revokeInvitation(invitation.invitation)
         try await joining.retryInvitationCleanup()
+
         XCTAssertNil(joining.household)
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertFalse(server.zones[location.zoneName]!.participants.contains("metadata-child"))
@@ -2187,23 +2457,25 @@ final class InvitationTests: XCTestCase {
         let transport = TestTransport(server: server, account: "joining-child")
         let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: transport,
                                          clock: { first.clock.now }, automaticSync: false)
-        let firstLocation = try await transport.invitationLocation(for: firstInvitation.shareURL)
-        try await joining.acceptSystemInvitation(location: firstLocation) {
-            try await transport.accept(url: firstInvitation.shareURL, expected: firstLocation)
-        }
-        var components = URLComponents()
-        components.scheme = "earnedit-invitation"
-        components.host = "join"
-        components.queryItems = [
-            URLQueryItem(name: "code", value: firstInvitation.code),
-            URLQueryItem(name: "share", value: secondInvitation.shareURL.absoluteString)
-        ]
+        transport.invitationLocationError = CKError(.participantMayNeedVerification)
+        try await joining.redeemInvitation(firstInvitation.qrPayload) { _ in true }
+        transport.invitationLocationError = nil
+        let secondLocation = try await transport.invitationLocation(for: secondInvitation.shareURL)
+        var acceptanceCalls = 0
 
-        await XCTAssertThrowsErrorAsync(try await joining.redeemInvitation(try XCTUnwrap(components.url).absoluteString),
-                                        expected: .invitationNotFound)
+        await XCTAssertThrowsErrorAsync(
+            try await joining.acceptSystemInvitation(location: secondLocation) { acceptanceCalls += 1 },
+            expected: .invitationNotFound
+        )
+
+        XCTAssertEqual(acceptanceCalls, 0)
         XCTAssertNil(joining.household)
-        XCTAssertFalse(server.zones[firstInvitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
-        XCTAssertFalse(server.zones[secondInvitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
+        XCTAssertEqual(joining.session.pendingInvitationPackage?.codeDigest,
+                       InvitationCode.digest(firstInvitation.code))
+        XCTAssertFalse(server.zones[firstInvitation.shareURL.lastPathComponent]!.participants
+            .contains("joining-child"))
+        XCTAssertFalse(server.zones[secondInvitation.shareURL.lastPathComponent]!.participants
+            .contains("joining-child"))
     }
 
     func testPersistedInvitationContainsDigestButNeverClearTextCode() async throws {
@@ -2311,7 +2583,7 @@ final class MembershipRecoveryTests: XCTestCase {
                            clock: { clock.now }, automaticSync: false)
     }
 
-    func testCodeBeforeAppleAcceptanceThenSystemAcceptanceAndExactChildClaim() async throws {
+    func testCodeBeforeAppleAcceptanceThenRawSystemURLClaimsExactChild() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
@@ -2323,14 +2595,11 @@ final class MembershipRecoveryTests: XCTestCase {
         try await joining.acceptSystemInvitation(location: location) {
             try await transport.accept(url: invitation.shareURL, expected: location)
         }
-        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .provisional)
-        XCTAssertNil(joining.selectedMember)
-        XCTAssertTrue(joining.profiles.isEmpty)
-        XCTAssertThrowsError(try joining.selectProfile(family.parent.id))
-        try await joining.redeemInvitation(invitation.code)
         XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
         XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
         XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertThrowsError(try joining.selectProfile(family.parent.id))
         XCTAssertThrowsError(try joining.selectProfile(family.alek.id))
         XCTAssertThrowsError(try joining.saveMember(name: "Unauthorized", role: .parent, avatar: .sun))
     }
@@ -3271,26 +3540,37 @@ final class MembershipRecoveryTests: XCTestCase {
         }
     }
 
-    func testFreshProvisionalAcceptanceRecoversWithoutAuthorityThenClaimsExactChild() async throws {
+    func testColdRestartResumesInterruptedRawSystemURLClaim() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
         let transport = TestTransport(server: server, account: "child")
-        let original = try fresh(transport, clock: family.clock)
+        transport.claimError = CKError(.networkFailure)
+        let repository = try HouseholdRepository(inMemory: true)
+        let original = try HouseholdStore(repository: repository, transport: transport,
+                                          clock: { family.clock.now }, automaticSync: false)
         let location = try await transport.invitationLocation(for: invitation.shareURL)
-        try await original.acceptSystemInvitation(location: location) {
-            try await transport.accept(url: invitation.shareURL, expected: location)
+        do {
+            try await original.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: invitation.shareURL, expected: location)
+            }
+            XCTFail("The interrupted claim must report its transport error")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
         }
         let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
-        let replacement = try fresh(TestTransport(server: server, account: "child"), clock: family.clock)
-        try await replacement.reconcileAccountMembershipLock()
+        XCTAssertEqual(lock.state, .provisional)
+        transport.claimError = nil
+        let replacement = try HouseholdStore(repository: repository, transport: transport,
+                                             clock: { family.clock.now }, automaticSync: false)
+
+        try await replacement.retryInvitationCleanup()
+
         XCTAssertEqual(replacement.household?.id, family.store.household?.id)
-        XCTAssertEqual(replacement.session.pendingInvitationAcceptance?.accountLockAttemptID, lock.attemptID)
-        XCTAssertTrue(replacement.profiles.isEmpty)
-        XCTAssertNil(replacement.selectedMember)
-        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
-        try await replacement.redeemInvitation(invitation.qrPayload)
         XCTAssertEqual(replacement.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(replacement.profiles.map(\.id), [family.hanna.id])
+        XCTAssertNil(replacement.session.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.attemptID, lock.attemptID)
         XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .active)
     }
 

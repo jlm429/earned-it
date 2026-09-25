@@ -18,7 +18,7 @@ The record is stored in the public database so an authenticated former participa
 
 There are no family names, member names, invitation values, URLs, codes, digests, zone names, participant identifiers, payloads, or journal facts in the record. The private `AccountMembershipLock` payload gains only an optional opaque hash of the exact owner participant. That is an existing Bytes payload and does not add an `AccountMembershipLock` schema field.
 
-The app accepts a lifecycle record only when both CloudKit system identities hash to the owner-authority binding retained in the exact private lock. The current account and account generation are checked around every mutation. A mismatched, malformed, or missing record fails closed.
+CloudKit can represent the current user in creator and modifier metadata in two equivalent forms. The app accepts each identity independently when it is either the exact unique record name returned for the current account or the exact well-formed current-user sentinel. A well-formed sentinel has record name `CKCurrentUserDefaultName`, the default record-zone name, and zone owner `CKCurrentUserDefaultName`. A missing identity, a foreign unique name, or a sentinel with another zone name or owner fails closed. Only an accepted representation is hashed into the owner-authority binding retained in the exact private lock. The current account and account generation are checked around every mutation.
 
 After a lifecycle mutation, the app validates the server-returned saved record directly. It requires the exact requested record ID and lifecycle state plus the same creator and last-modifier ownership checks. It does not depend on a second immediate fetch to confirm a write that CloudKit has already returned.
 
@@ -49,6 +49,8 @@ If terminal deletion cannot be authenticated, a positively classified owner may 
 This change requires a human-reviewed Development schema update and later human promotion to Production. Agent work must not deploy it or modify Production data.
 
 Configure `FamilyLifecycleAuthority` in the public database with only the two application fields above. Permit authenticated users to read and create. Permit updates and deletion only by the record creator. Do not enable public unauthenticated access. Normal lifecycle validation fetches the deterministic record ID directly. Account-wide deletion also queries the CloudKit system creator field so it can find stale records for households absent from the device. Make `creatorUserRecordID` queryable. No application-field query index is required.
+
+The durable Production dependency is therefore the public `FamilyLifecycleAuthority` type, `formatVersion` as Int64, `state` as String, and a queryable system `creatorUserRecordID` metadata field. This repository documents and validates the contract but never deploys the schema.
 
 Before a signed build is distributed, verify in CloudKit Console that the record type, field types, database scope, creator query index, and creator-only write and delete rules match this document. Promote through the existing authorized release process only after Development two-account deletion, revocation, reinstall, and account-switch checks pass. The observed Production deployment finding and captain procedure are in `docs/delete-all-earned-it-data-implementation-report.md`.
 

@@ -113,6 +113,10 @@ struct EarnedItApp: App {
                 }
                 try initialStore.prepareFamilyAccessLostUITest()
             }
+            if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-invitation-actions") {
+                try initialStore.prepareInvitationActionsUITest()
+            }
             #else
             let initialStore = try HouseholdStore(
                 repository: repository,
