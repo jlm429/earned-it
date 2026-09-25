@@ -297,7 +297,7 @@ final class HouseholdStore {
         cloudIsReadOnly = true
     }
 
-    func prepareInvitationActionsUITest() throws {
+    func prepareInvitationActionsUITest(isOwner: Bool) throws {
         if household == nil {
             try createFamily(name: "Invitation Test Family", parentName: "Test Parent")
             let child = try saveMember(name: "Hanna", role: .child, avatar: .flower)
@@ -318,6 +318,16 @@ final class HouseholdStore {
                 cloudShareURLDigest: InvitationCode.shareURLDigest(shareURL)
             )
             try append([.invitation(invitation)], scheduleSynchronization: false)
+            var updated = session
+            updated.location = CloudLocation(
+                householdID: household.id,
+                zoneName: "EarnedIt-\(household.id.uuidString)",
+                ownerName: "synthetic-owner",
+                isOwner: isOwner
+            )
+            updated.cloudParticipantID = isOwner ? "synthetic-owner" : "synthetic-invited-parent"
+            try repository.commit(facts: [], session: updated)
+            session = updated
         }
     }
     #endif
@@ -719,7 +729,9 @@ final class HouseholdStore {
     }
 
     func canRecoverInvitation(_ invitation: FamilyInvitation) -> Bool {
-        snapshot.invitation(invitation.id) == invitation
+        session.location?.isOwner == true
+            && session.location?.householdID == invitation.householdID
+            && snapshot.invitation(invitation.id) == invitation
             && snapshot.invitationClaim(invitation.id) == nil
             && !snapshot.isInvitationRevoked(invitation.id)
     }
@@ -1310,8 +1322,11 @@ final class HouseholdStore {
         if binding == nil, try await transport.hasAcceptedAccess(to: location) {
             let remote = try await transport.fetch(from: location)
             try validate(remote, householdID: location.householdID)
-            binding = try membershipBinding(in: HouseholdSnapshot(facts: remote), location: location,
-                                              participant: participant)
+            binding = try await membershipEvidence(
+                in: HouseholdSnapshot(facts: remote),
+                location: location,
+                participant: participant
+            ).binding
         }
         let lock = try await acquireAccountMembershipLock(householdID: location.householdID,
                                                           attemptID: session.accountMembershipLockAttemptID,
@@ -1619,20 +1634,18 @@ final class HouseholdStore {
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
         try validateCompleteFamily(imported, householdID: location.householdID)
-        if let membership = try imported.committedAccountMembership(participantID: participant) {
+        let existingEvidence = try await membershipEvidence(
+            in: imported,
+            location: location,
+            participant: participant
+        )
+        if let membership = existingEvidence.membership {
             recordJoinReceipt {
                 $0.claim = .committed
                 $0.exactMembership = .yes
             }
             guard codeDigest == membership.claim.codeDigest else {
                 throw HouseholdError.accountMembershipConflict
-            }
-            guard try await transport.hasInvitationAccess(
-                participantID: membership.invitation.cloudShareParticipantID,
-                in: location
-            ) else {
-                recordJoinRefusal(.participantSlotMismatch, stage: .exactInvitation, error: .invitationNotFound)
-                throw HouseholdError.invitationNotFound
             }
             let canWrite = try await transport.canWrite(to: location)
             guard canWrite else { throw HouseholdError.readOnly }
@@ -1748,12 +1761,14 @@ final class HouseholdStore {
             let refreshed = try await transport.fetch(from: location)
             try validate(refreshed, householdID: location.householdID)
             let refreshedSnapshot = HouseholdSnapshot(facts: refreshed)
-            if let membership = try refreshedSnapshot.committedAccountMembership(participantID: participant),
+            let refreshedEvidence = try await membershipEvidence(
+                in: refreshedSnapshot,
+                location: location,
+                participant: participant
+            )
+            if let membership = refreshedEvidence.membership,
                membership.claim.codeDigest == invitation.codeDigest,
-               try await transport.hasInvitationAccess(
-                   participantID: membership.invitation.cloudShareParticipantID,
-                   in: location
-               ) {
+               membership.invitation.id == invitation.id {
                 let canWrite = try await transport.canWrite(to: location)
                 let lock = try await activateAccountMembershipLock(
                     location: location, claimBinding: AccountMembershipBinding.invitation(membership),
@@ -2027,7 +2042,11 @@ final class HouseholdStore {
         let remote = try await transport.fetch(from: location)
         try validate(remote, householdID: location.householdID)
         let imported = HouseholdSnapshot(facts: remote)
-        guard let current = try membershipBinding(in: imported, location: location, participant: participant),
+        guard let current = try await membershipEvidence(
+            in: imported,
+            location: location,
+            participant: participant
+        ).binding,
               current == lock.claimBinding else { throw HouseholdError.accountMembershipConflict }
         throw HouseholdError.accountMembershipConflict
     }
@@ -2054,8 +2073,11 @@ final class HouseholdStore {
         do {
             try validate(remote, householdID: location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
-            if let binding = try membershipBinding(in: imported, location: location,
-                                                   participant: participant) {
+            if let binding = try await membershipEvidence(
+                in: imported,
+                location: location,
+                participant: participant
+            ).binding {
                 _ = try await transport.activateAccountMembershipLock(householdID: lock.householdID,
                                                                        attemptID: lock.attemptID,
                                                                        claimBinding: binding,
@@ -2072,20 +2094,37 @@ final class HouseholdStore {
         throw HouseholdError.accountMembershipConflict
     }
 
-    private func membershipBinding(in imported: HouseholdSnapshot, location: CloudLocation,
-                                   participant: String) throws -> String? {
-        guard imported.household?.id == location.householdID else { return nil }
-        if location.isOwner { return AccountMembershipBinding.owner(householdID: location.householdID) }
+    private func membershipEvidence(
+        in imported: HouseholdSnapshot,
+        location: CloudLocation,
+        participant: String
+    ) async throws -> (binding: String?, membership: AccountFamilyMembership?) {
+        guard imported.household?.id == location.householdID else { return (nil, nil) }
+        if location.isOwner {
+            return (AccountMembershipBinding.owner(householdID: location.householdID), nil)
+        }
         if let membership = try imported.committedAccountMembership(participantID: participant) {
-            return AccountMembershipBinding.invitation(membership)
+            guard let transport,
+                  try await transport.hasInvitationAccess(
+                      participantID: membership.invitation.cloudShareParticipantID,
+                      in: location
+                  ) else {
+                throw HouseholdError.invitationNotFound
+            }
+            return (AccountMembershipBinding.invitation(membership), membership)
         }
         if imported.grants.contains(where: { grant in
             grant.cloudParticipantID == participant && grant.memberIDs.contains { imported.member($0) != nil }
         }) {
-            return AccountMembershipBinding.legacyShared(householdID: location.householdID,
-                                                         participantID: participant)
+            return (
+                AccountMembershipBinding.legacyShared(
+                    householdID: location.householdID,
+                    participantID: participant
+                ),
+                nil
+            )
         }
-        return nil
+        return (nil, nil)
     }
 
     private func ownerAuthorityBinding(for location: CloudLocation, participant: String) -> String {
@@ -2665,6 +2704,9 @@ final class HouseholdStore {
             return nil
         } catch let error as CKError where Self.isRetryableInvitationError(error) {
             return Self.pendingInvitationCleanupRetryDelay
+        } catch HouseholdError.invitationNotFound
+            where session.pendingInvitationAcceptance?.phase == .awaitingRedemption {
+            return Self.pendingInvitationCleanupRetryDelay
         }
     }
 
@@ -2705,9 +2747,12 @@ final class HouseholdStore {
             try validate(remote, householdID: pending.location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
             try validateCompleteFamily(imported, householdID: pending.location.householdID)
-            if let membership = try imported.committedAccountMembership(
-                participantID: pending.cloudParticipantID
-            ) {
+            let evidence = try await membershipEvidence(
+                in: imported,
+                location: pending.location,
+                participant: pending.cloudParticipantID
+            )
+            if let membership = evidence.membership {
                 let canWrite = try await transport.canWrite(to: pending.location)
                 let lock = try await activateAccountMembershipLock(
                     location: pending.location, claimBinding: AccountMembershipBinding.invitation(membership),
@@ -2981,8 +3026,13 @@ final class HouseholdStore {
             let imported = HouseholdSnapshot(facts: remote)
             guard imported.household?.id == lock.householdID else { throw HouseholdError.familyStillSyncing }
             if !location.isOwner { try validateCompleteFamily(imported, householdID: lock.householdID) }
-            let membership = try imported.committedAccountMembership(participantID: participant)
-            let binding = try membershipBinding(in: imported, location: location, participant: participant)
+            let evidence = try await membershipEvidence(
+                in: imported,
+                location: location,
+                participant: participant
+            )
+            let membership = evidence.membership
+            let binding = evidence.binding
             if lock.state == .active {
                 guard let binding, binding == lock.claimBinding else { throw HouseholdError.accountMembershipConflict }
             } else {
@@ -3178,11 +3228,15 @@ final class HouseholdStore {
                try imported.committedAccountMembership(participantID: participant) == nil {
                 continue
             }
-            guard let binding = try membershipBinding(in: imported, location: family.location,
-                                                      participant: participant) else { continue }
+            let evidence = try await membershipEvidence(
+                in: imported,
+                location: family.location,
+                participant: participant
+            )
+            guard let binding = evidence.binding else { continue }
             if family.location.isOwner {
                 guard ownerRecoveryMember(in: imported) != nil else { throw HouseholdError.accountMembershipConflict }
-            } else if try imported.committedAccountMembership(participantID: participant) == nil {
+            } else if evidence.membership == nil {
                 let validationTime = try await transport.accountMembershipValidationTime(clientTime: clock())
                 guard legacyRecoveryMember(in: imported, participant: participant, now: validationTime) != nil else {
                     throw HouseholdError.accountMembershipConflict
@@ -3289,11 +3343,11 @@ final class HouseholdStore {
                 expectedOwnerAuthorityBinding: expectedOwnerAuthorityBinding,
                 localAttemptID: session.accountMembershipLockAttemptID
             )
-            guard let binding = try membershipBinding(
+            guard let binding = try await membershipEvidence(
                 in: imported,
                 location: location,
                 participant: participant
-            ) else {
+            ).binding else {
                 diagnostics.recordOwnerBranch(.noDerivedMembershipBindingValidateRetainedAttempt,
                                               result: "selected")
                 try validateRetainedMembershipAttempt(currentLock, location: location)
@@ -3459,7 +3513,12 @@ final class HouseholdStore {
             try validate(remote, householdID: family.location.householdID)
             let imported = HouseholdSnapshot(facts: remote)
             try validateCompleteFamily(imported, householdID: family.location.householdID)
-            if let membership = try imported.committedAccountMembership(participantID: participant) {
+            let evidence = try await membershipEvidence(
+                in: imported,
+                location: family.location,
+                participant: participant
+            )
+            if let membership = evidence.membership {
                 located.append((family.location, remote, membership))
             }
         }

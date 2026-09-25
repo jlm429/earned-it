@@ -152,6 +152,34 @@ final class InvitationTests: XCTestCase {
         }
     }
 
+    func testExistingInvitationRecoveryRequiresOwnerLocation() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let issued = try await fixture.store.createChildInvitation(memberID: fixture.child.id)
+
+        XCTAssertTrue(fixture.store.canRecoverInvitation(issued.invitation))
+
+        var sharedSession = fixture.store.session
+        sharedSession.location = CloudLocation(
+            householdID: fixture.location.householdID,
+            zoneName: fixture.location.zoneName,
+            ownerName: fixture.location.ownerName,
+            isOwner: false
+        )
+        try fixture.repository.commit(facts: [], session: sharedSession)
+        let invitedParent = try HouseholdStore(
+            repository: fixture.repository,
+            transport: fixture.transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        XCTAssertFalse(invitedParent.canRecoverInvitation(issued.invitation))
+        await XCTAssertThrowsErrorAsync(
+            try await invitedParent.recoverInvitation(issued.invitation),
+            expected: .invitationUnavailable
+        )
+    }
+
     func testCleanFirstChildInvitationCreatesAndRetainsOwnerMembership() async throws {
         let server = TestCloudServer()
         let transport = TestTransport(server: server, account: "owner")
@@ -2041,6 +2069,78 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(server.accountMembershipLocks["raw-retry-child"]?.state, .active)
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
         XCTAssertEqual(transport.leaveAttempts, 0)
+    }
+
+    func testInterruptedCleanupRejectsCommittedMembershipThroughDifferentParticipantSlot() async throws {
+        let server = TestCloudServer()
+        let ownerTransport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: ownerTransport)
+        let first = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let recipientTransport = TestTransport(server: server, account: "recipient")
+        let firstStore = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: recipientTransport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        try await firstStore.redeemInvitation(first.qrPayload)
+        let firstLock = try XCTUnwrap(server.accountMembershipLocks["recipient"])
+        let ownerLocation = try XCTUnwrap(family.store.session.location)
+        try await ownerTransport.revokeInvitationAccess(
+            participantID: first.invitation.cloudShareParticipantID,
+            from: ownerLocation
+        )
+
+        let second = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let sharedLocation = try await recipientTransport.invitationLocation(for: second.shareURL)
+        try await recipientTransport.accept(url: second.shareURL, expected: sharedLocation)
+        let firstAccessRemains = try await recipientTransport.hasInvitationAccess(
+            participantID: first.invitation.cloudShareParticipantID,
+            in: sharedLocation
+        )
+        let secondAccessIsCurrent = try await recipientTransport.hasInvitationAccess(
+            participantID: second.invitation.cloudShareParticipantID,
+            in: sharedLocation
+        )
+        XCTAssertFalse(firstAccessRemains)
+        XCTAssertTrue(secondAccessIsCurrent)
+
+        let repository = try HouseholdRepository(inMemory: true)
+        var pendingSession = try repository.session()
+        pendingSession.pendingInvitationAcceptance = PendingInvitationAcceptance(
+            location: sharedLocation,
+            cloudParticipantID: "recipient",
+            retainedFactIDs: [],
+            accessExistedBeforeAttempt: false,
+            accountLockAttemptID: UUID(),
+            invitationID: second.invitation.id,
+            expiresAt: second.invitation.expiresAt,
+            phase: .awaitingRedemption
+        )
+        try repository.commit(facts: [], session: pendingSession)
+        let interrupted = try HouseholdStore(
+            repository: repository,
+            transport: recipientTransport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await interrupted.retryInvitationCleanup(),
+            expected: .invitationNotFound
+        )
+        let retryDelay = try await interrupted.retryScheduledInvitationCleanup()
+
+        XCTAssertNil(interrupted.household)
+        XCTAssertNil(interrupted.selectedMember)
+        XCTAssertEqual(interrupted.session.pendingInvitationAcceptance, pendingSession.pendingInvitationAcceptance)
+        XCTAssertEqual(server.accountMembershipLocks["recipient"], firstLock)
+        XCTAssertEqual(retryDelay, 30)
+        let retryAccessIsCurrent = try await recipientTransport.hasInvitationAccess(
+            participantID: second.invitation.cloudShareParticipantID,
+            in: sharedLocation
+        )
+        XCTAssertTrue(retryAccessIsCurrent)
     }
 
     func testRawAppleURLClaimUsesServerTimeDespiteDeviceClockSkew() async throws {

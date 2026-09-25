@@ -151,6 +151,22 @@ final class EarnedItUITests: XCTestCase {
         app.alerts["Revoke this invitation?"].buttons["Cancel"].tap()
         keepScreenshot("distinct-invitation-actions-largest-text")
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion])
+
+        app.terminate()
+        app.launchArguments = [
+            "--ui-test-store",
+            "--ui-test-reset",
+            "--ui-test-invitation-actions",
+            "--ui-test-non-owner-invitation-actions"
+        ]
+        app.launch()
+
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("family-management")
+        XCTAssertTrue(screen("family-management-screen").waitForExistence(timeout: 5))
+        reveal(app.buttons["revoke-invitation"])
+        XCTAssertFalse(app.buttons["recover-invitation"].exists)
+        XCTAssertTrue(app.buttons["revoke-invitation"].exists)
     }
 
     func testJoinDiagnosticsStayOutOfOnboarding() {

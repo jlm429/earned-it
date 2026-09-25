@@ -26,7 +26,9 @@ Start with the current default branch and the authoritative implementation and d
 - Trace both recipient inputs: the custom package with clear code plus Apple URL, and a raw recovered Apple URL with no clear code.
 - A raw URL can select an invitation only through the accepted current-user share participant. Require the exact participant ID, accepted status, private-user role, read/write permission, one unique matching journal invitation, authoritative availability, and an atomic one-time claim.
 - Keep the custom package bound by both its code digest and Apple URL digest. At the common claim boundary, require its exact current accepted private read/write participant just like the raw path. Neither format may broaden profiles, cross households, revive revoked or expired access, or permit replay.
+- Apply that exact participant check again before cleanup, retry, resume, or startup recovery activates an invitation membership lock or attaches its profile.
 - Recover an existing unclaimed invitation only after authoritative CloudKit time confirms availability. A device clock may affect display text but must not hide recovery or authorize delivery.
+- Show existing-invitation recovery only at the owner-controlled location that can recover the Apple participant.
 
 ## Verification
 

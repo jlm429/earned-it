@@ -36,7 +36,9 @@ Cancel an already queued delayed sync when foreground invitation issuance takes 
 
 Recover an existing invitation only after server-authoritative validation time confirms it is still unclaimed, unrevoked, and unexpired. Local clock status must not hide the recovery action or authorize delivery.
 
-For recipients, a custom `earnedit-invitation://join` package proves the code and URL digests together. A raw Apple URL has no recoverable clear code, so it must bind through the current accepted participant to exactly one persisted invitation and use that invitation's digest for the atomic claim. In both paths, revalidate household, member, role, revocation, authoritative expiry, write access, one-time claim absence, and account membership lock before attaching the exact profile.
+For recipients, a custom `earnedit-invitation://join` package proves the code and URL digests together. A raw Apple URL has no recoverable clear code, so it must bind through the current accepted participant to exactly one persisted invitation and use that invitation's digest for the atomic claim. In both paths, revalidate household, member, role, revocation, authoritative expiry, write access, one-time claim absence, and account membership lock before attaching the exact profile. Cleanup, resume, retry, and startup recovery must revalidate that the committed membership's invitation participant is still the exact current accepted private read/write participant before lock activation or attachment.
+
+Existing-invitation recovery is an owner participant-management action. Non-owner parents do not see the action, even though their app role still permits ordinary family management.
 
 ## Privacy-safe diagnostics
 
