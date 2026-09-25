@@ -1563,6 +1563,15 @@ final class HouseholdStore {
             }
         } else {
             let accessExisted = try await transport.hasAcceptedAccess(to: location)
+            let acceptedParticipantBeforeAttempt: String?
+            if accessExisted {
+                acceptedParticipantBeforeAttempt = try await transport.acceptedInvitationParticipantID(in: location)
+            } else {
+                acceptedParticipantBeforeAttempt = nil
+            }
+            guard !accessExisted, acceptedParticipantBeforeAttempt == nil else {
+                throw HouseholdError.accountMembershipConflict
+            }
             let lock = try await acquireAccountMembershipLock(householdID: location.householdID)
             guard lock.state == .provisional,
                   lock.householdID == location.householdID,
@@ -2526,6 +2535,7 @@ final class HouseholdStore {
               pending.location == location,
               pending.cloudParticipantID == participant,
               pending.phase == .acceptingAccess,
+              pending.accessExistedBeforeAttempt == false,
               let transport else { return false }
         guard try await transport.acceptedInvitationParticipantID(in: location) != nil else { return false }
         guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }

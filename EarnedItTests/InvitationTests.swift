@@ -2331,6 +2331,56 @@ final class InvitationTests: XCTestCase {
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
     }
 
+    func testRawAppleURLRejectsPreexistingParticipantBeforeDifferentCallback() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let first = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let second = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let account = "preexisting-raw-child"
+        let transport = TestTransport(server: server, account: account)
+        let location = try await transport.invitationLocation(for: second.shareURL)
+        try await transport.accept(url: first.shareURL, expected: location)
+        let existingLock = AccountMembershipLock(
+            householdID: location.householdID,
+            attemptID: UUID(),
+            state: .provisional,
+            expiresAt: family.clock.now.addingTimeInterval(InvitationCode.lifetime),
+            claimBinding: nil
+        )
+        server.accountMembershipLocks[account] = existingLock
+        transport.acceptErrorAfterHook = CKError(.networkFailure)
+        let joining = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        var acceptanceCalls = 0
+
+        await XCTAssertThrowsErrorAsync(
+            try await joining.acceptSystemInvitation(location: location) {
+                acceptanceCalls += 1
+                try await transport.accept(url: second.shareURL, expected: location)
+            },
+            expected: .accountMembershipConflict
+        )
+
+        XCTAssertEqual(acceptanceCalls, 0)
+        XCTAssertNil(joining.household)
+        XCTAssertNil(joining.selectedMember)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertNil(server.zones[location.zoneName]?.facts[first.invitation.claimFactID])
+        XCTAssertNil(server.zones[location.zoneName]?.facts[second.invitation.claimFactID])
+        XCTAssertEqual(server.accountMembershipLocks[account], existingLock)
+        XCTAssertEqual(
+            server.zones[location.zoneName]?.currentInvitationParticipantByAccount[account],
+            first.invitation.cloudShareParticipantID
+        )
+        XCTAssertTrue(server.zones[location.zoneName]?.pendingInvitationParticipants.contains(
+            second.invitation.cloudShareParticipantID
+        ) == true)
+    }
+
     func testRawAppleURLMatchesCurrentParticipantWithBoundedShareReads() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
