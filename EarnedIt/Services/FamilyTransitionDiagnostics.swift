@@ -182,6 +182,7 @@ struct InvitationLifecycleAuthorityRecordComparison: Equatable {
     let creatorMatchesCurrentAccount: Bool?
     let modifierPresent: Bool
     let modifierMatchesCurrentAccount: Bool?
+    let identityRepresentation: InvitationLifecycleAuthorityIdentityRepresentation?
 
     var isAccepted: Bool {
         recordTypeMatches
@@ -190,6 +191,21 @@ struct InvitationLifecycleAuthorityRecordComparison: Equatable {
             && creatorMatchesCurrentAccount == true
             && modifierMatchesCurrentAccount == true
     }
+}
+
+struct InvitationLifecycleAuthorityIdentityRepresentation: Equatable {
+    let expectedCurrentRecordNameIsCurrentUserDefaultName: Bool
+    let creatorRecordNameMatchesExpectedCurrentUser: Bool?
+    let creatorRecordNameIsCurrentUserDefaultName: Bool?
+    let modifierRecordNameMatchesExpectedCurrentUser: Bool?
+    let modifierRecordNameIsCurrentUserDefaultName: Bool?
+    let creatorModifierRecordNamesMatch: Bool?
+    let creatorZoneNameIsDefault: Bool?
+    let creatorZoneOwnerIsCurrentUserDefaultName: Bool?
+    let creatorZoneOwnerMatchesExpectedCurrentUser: Bool?
+    let modifierZoneNameIsDefault: Bool?
+    let modifierZoneOwnerIsCurrentUserDefaultName: Bool?
+    let modifierZoneOwnerMatchesExpectedCurrentUser: Bool?
 }
 
 struct InvitationLifecycleAuthorityObservation: Equatable {
@@ -870,6 +886,7 @@ final class FamilyTransitionDiagnostics {
                 "lifecycle.stateMatchesRequested=\(value(observation.stateMatchesRequested))"
             ]
             if let comparison = observation.comparison {
+                let identity = comparison.identityRepresentation
                 fields += [
                     "lifecycle.recordTypeMatches=\(comparison.recordTypeMatches)",
                     "lifecycle.formatVersionMatches=\(comparison.formatVersionMatches)",
@@ -881,6 +898,30 @@ final class FamilyTransitionDiagnostics {
                     "lifecycle.modifierPresent=\(comparison.modifierPresent)",
                     "lifecycle.modifierMatchesCurrentAccount="
                         + "\(value(comparison.modifierMatchesCurrentAccount))",
+                    "lifecycle.expectedCurrentRecordNameIsCurrentUserDefaultName="
+                        + "\(value(identity?.expectedCurrentRecordNameIsCurrentUserDefaultName))",
+                    "lifecycle.creatorRecordNameMatchesExpectedCurrentUser="
+                        + "\(value(identity?.creatorRecordNameMatchesExpectedCurrentUser))",
+                    "lifecycle.creatorRecordNameIsCurrentUserDefaultName="
+                        + "\(value(identity?.creatorRecordNameIsCurrentUserDefaultName))",
+                    "lifecycle.modifierRecordNameMatchesExpectedCurrentUser="
+                        + "\(value(identity?.modifierRecordNameMatchesExpectedCurrentUser))",
+                    "lifecycle.modifierRecordNameIsCurrentUserDefaultName="
+                        + "\(value(identity?.modifierRecordNameIsCurrentUserDefaultName))",
+                    "lifecycle.creatorModifierRecordNamesMatch="
+                        + "\(value(identity?.creatorModifierRecordNamesMatch))",
+                    "lifecycle.creatorZoneNameIsDefault="
+                        + "\(value(identity?.creatorZoneNameIsDefault))",
+                    "lifecycle.creatorZoneOwnerIsCurrentUserDefaultName="
+                        + "\(value(identity?.creatorZoneOwnerIsCurrentUserDefaultName))",
+                    "lifecycle.creatorZoneOwnerMatchesExpectedCurrentUser="
+                        + "\(value(identity?.creatorZoneOwnerMatchesExpectedCurrentUser))",
+                    "lifecycle.modifierZoneNameIsDefault="
+                        + "\(value(identity?.modifierZoneNameIsDefault))",
+                    "lifecycle.modifierZoneOwnerIsCurrentUserDefaultName="
+                        + "\(value(identity?.modifierZoneOwnerIsCurrentUserDefaultName))",
+                    "lifecycle.modifierZoneOwnerMatchesExpectedCurrentUser="
+                        + "\(value(identity?.modifierZoneOwnerMatchesExpectedCurrentUser))",
                     "lifecycle.recordAccepted=\(comparison.isAccepted)"
                 ]
             }
