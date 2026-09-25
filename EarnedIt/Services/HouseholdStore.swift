@@ -215,6 +215,7 @@ final class HouseholdStore {
 
     private func withExclusiveCloudMutation<T>(
         allowPendingReset: Bool = false,
+        cancelScheduledSync: Bool = false,
         _ operation: @MainActor () async throws -> T
     ) async throws -> T {
         if let token = Self.cloudMutationToken {
@@ -228,6 +229,10 @@ final class HouseholdStore {
         }
         let token = UUID()
         activeCloudMutationToken = token
+        if cancelScheduledSync {
+            syncTask?.cancel()
+            syncTask = nil
+        }
         defer {
             if activeCloudMutationToken == token { activeCloudMutationToken = nil }
         }
@@ -713,8 +718,14 @@ final class HouseholdStore {
         snapshot.invitationStatus(invitation, now: clock())
     }
 
+    func canRecoverInvitation(_ invitation: FamilyInvitation) -> Bool {
+        snapshot.invitation(invitation.id) == invitation
+            && snapshot.invitationClaim(invitation.id) == nil
+            && !snapshot.isInvitationRevoked(invitation.id)
+    }
+
     func createChildInvitation(memberID: UUID) async throws -> IssuedFamilyInvitation {
-        try await withExclusiveCloudMutation {
+        try await withExclusiveCloudMutation(cancelScheduledSync: true) {
             transport?.familyTransitionDiagnostics.clearInvitationAttempt()
             try requireParent()
             guard let member = snapshot.member(memberID), member.role == .child,
@@ -724,7 +735,7 @@ final class HouseholdStore {
     }
 
     func createParentInvitation(name: String, avatar: AvatarOption) async throws -> IssuedFamilyInvitation {
-        try await withExclusiveCloudMutation {
+        try await withExclusiveCloudMutation(cancelScheduledSync: true) {
             transport?.familyTransitionDiagnostics.clearInvitationAttempt()
             try requireParent()
             guard let household else { throw HouseholdError.noHousehold }
@@ -743,11 +754,17 @@ final class HouseholdStore {
         try await withExclusiveCloudMutation {
             try requireParent()
             guard snapshot.invitation(invitation.id) == invitation,
-                  snapshot.invitationStatus(invitation, now: clock()) == .available,
                   let expectedURLDigest = invitation.cloudShareURLDigest,
                   expectedURLDigest.count == 64,
                   !invitation.cloudShareParticipantID.isEmpty,
                   let transport, let location = session.location, location.isOwner else {
+                throw HouseholdError.invitationUnavailable
+            }
+            let validationTime = try await transport.invitationValidationTime(
+                in: location,
+                clientTime: clock()
+            )
+            guard snapshot.invitationStatus(invitation, now: validationTime) == .available else {
                 throw HouseholdError.invitationUnavailable
             }
             let access = try await transport.recoverInvitationAccess(
@@ -837,12 +854,9 @@ final class HouseholdStore {
         let diagnostics = transport.familyTransitionDiagnostics
         diagnostics.beginInvitation(
             householdID: household.id,
-            currentParentMemberID: selectedMember?.id,
-            targetMemberID: member.id,
             targetRole: member.role,
             localAttemptID: session.accountMembershipLockAttemptID,
             localParticipantID: session.cloudParticipantID,
-            accountGeneration: transport.accountGeneration,
             hasCloudLocation: session.location != nil
         )
         do {
@@ -982,7 +996,6 @@ final class HouseholdStore {
             participant = currentParticipant
             diagnostics.recordAccountIdentity(
                 participantID: currentParticipant,
-                generation: transport.accountGeneration,
                 stable: transport.accountGeneration == generation
             )
             diagnostics.record(stage: .invitationDiagnosticIdentityRead, outcome: .succeeded,
@@ -1019,8 +1032,7 @@ final class HouseholdStore {
                 lock,
                 expectedOwnerBinding: expectedOwnerBinding,
                 expectedOwnerAuthorityBinding: expectedOwnerAuthorityBinding,
-                localAttemptID: session.accountMembershipLockAttemptID,
-                accountGeneration: transport.accountGeneration
+                localAttemptID: session.accountMembershipLockAttemptID
             )
             if let location = session.location, let participant {
                 let comparison = ownerMembershipComparison(
@@ -1078,7 +1090,6 @@ final class HouseholdStore {
             transport.familyTransitionDiagnostics.expect(participantID: participant)
             transport.familyTransitionDiagnostics.recordAccountIdentity(
                 participantID: participant,
-                generation: transport.accountGeneration,
                 stable: true
             )
             transport.familyTransitionDiagnostics.record(stage: .participantLookup, outcome: .succeeded,
@@ -1616,6 +1627,13 @@ final class HouseholdStore {
             guard codeDigest == membership.claim.codeDigest else {
                 throw HouseholdError.accountMembershipConflict
             }
+            guard try await transport.hasInvitationAccess(
+                participantID: membership.invitation.cloudShareParticipantID,
+                in: location
+            ) else {
+                recordJoinRefusal(.participantSlotMismatch, stage: .exactInvitation, error: .invitationNotFound)
+                throw HouseholdError.invitationNotFound
+            }
             let canWrite = try await transport.canWrite(to: location)
             guard canWrite else { throw HouseholdError.readOnly }
             let lock = try await activateAccountMembershipLock(
@@ -1654,17 +1672,10 @@ final class HouseholdStore {
             recordJoinRefusal(.revoked, stage: .exactInvitation, error: .invitationRevoked)
             throw HouseholdError.invitationRevoked
         }
-        let hasExactAccess: Bool
-        if let package = session.pendingInvitationPackage,
-           package.codeDigest == invitation.codeDigest,
-           invitation.cloudShareURLDigest == InvitationCode.shareURLDigest(package.shareURL),
-           session.pendingInvitationAcceptance?.invitationID == invitation.id {
-            hasExactAccess = try await transport.hasAcceptedAccess(to: location)
-        } else {
-            hasExactAccess = try await transport.hasInvitationAccess(
-                participantID: invitation.cloudShareParticipantID, in: location
-            )
-        }
+        let hasExactAccess = try await transport.hasInvitationAccess(
+            participantID: invitation.cloudShareParticipantID,
+            in: location
+        )
         guard hasExactAccess else {
             recordJoinRefusal(.participantSlotMismatch, stage: .exactInvitation, error: .invitationNotFound)
             throw HouseholdError.invitationNotFound
@@ -1738,7 +1749,11 @@ final class HouseholdStore {
             try validate(refreshed, householdID: location.householdID)
             let refreshedSnapshot = HouseholdSnapshot(facts: refreshed)
             if let membership = try refreshedSnapshot.committedAccountMembership(participantID: participant),
-               membership.claim.codeDigest == invitation.codeDigest {
+               membership.claim.codeDigest == invitation.codeDigest,
+               try await transport.hasInvitationAccess(
+                   participantID: membership.invitation.cloudShareParticipantID,
+                   in: location
+               ) {
                 let canWrite = try await transport.canWrite(to: location)
                 let lock = try await activateAccountMembershipLock(
                     location: location, claimBinding: AccountMembershipBinding.invitation(membership),
@@ -3221,7 +3236,6 @@ final class HouseholdStore {
         do {
             diagnostics.recordAccountIdentity(
                 participantID: participant,
-                generation: expectedAccountGeneration,
                 stable: transport.accountGeneration == expectedAccountGeneration
             )
             diagnostics.recordExpectedOwnerMembership(
@@ -3273,8 +3287,7 @@ final class HouseholdStore {
                 currentLock,
                 expectedOwnerBinding: expectedOwnerBinding,
                 expectedOwnerAuthorityBinding: expectedOwnerAuthorityBinding,
-                localAttemptID: session.accountMembershipLockAttemptID,
-                accountGeneration: expectedAccountGeneration
+                localAttemptID: session.accountMembershipLockAttemptID
             )
             guard let binding = try membershipBinding(
                 in: imported,
@@ -3603,7 +3616,10 @@ final class HouseholdStore {
             await Self.$cloudMutationToken.withValue(nil) {
                 do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
                 guard let self else { return }
-                do { try await self.synchronize() } catch { self.errorMessage = error.localizedDescription }
+                do { try await self.synchronize() } catch {
+                    guard !Task.isCancelled else { return }
+                    self.errorMessage = error.localizedDescription
+                }
             }
         }
     }

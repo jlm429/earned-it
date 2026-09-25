@@ -55,7 +55,7 @@ struct FamilyManagementView: View {
                             Label(invitationStatusText(invitation), systemImage: invitationStatusSymbol(invitation))
                                 .font(.caption).foregroundStyle(.secondary)
                             VStack(spacing: 12) {
-                                if store.invitationStatus(invitation) == .available {
+                                if store.canRecoverInvitation(invitation) {
                                     Button { recover(invitation) } label: {
                                         invitationActionLabel(
                                             "Show Invitation Again",

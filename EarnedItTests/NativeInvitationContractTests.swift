@@ -53,7 +53,7 @@ final class NativeInvitationContractTests: XCTestCase {
             .contains(invitation.invitation.cloudShareParticipantID))
     }
 
-    func testAcceptedOneTimeURLClaimsExactInvitationWhenParticipantIdentityTransforms() async throws {
+    func testCustomPackageRejectsAcceptedParticipantIdentityMismatch() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
         let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
@@ -61,23 +61,15 @@ final class NativeInvitationContractTests: XCTestCase {
         child.acceptedParticipantIDTransforms = true
         let recipient = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: child,
                                            clock: { family.clock.now }, automaticSync: false)
-        try await recipient.redeemInvitation(invitation.qrPayload)
-        let location = try XCTUnwrap(recipient.session.location)
-        let hasAccess = try await child.hasInvitationAccess(
-            participantID: invitation.invitation.cloudShareParticipantID, in: location
-        )
-        XCTAssertFalse(hasAccess)
-        XCTAssertEqual(recipient.selectedMember?.id, family.hanna.id)
-        XCTAssertEqual(recipient.snapshot.invitationClaim(invitation.id)?.cloudParticipantID, "child")
-        let other = TestTransport(server: server, account: "other")
         do {
-            _ = try await other.accept(url: invitation.shareURL)
-            XCTFail("Expected a claimed private link to reject an uninvited account")
+            _ = try await recipient.redeemInvitation(invitation.qrPayload)
+            XCTFail("Expected the mismatched participant to be rejected")
         } catch {
-            XCTAssertEqual(error as? HouseholdError, .invitationConsumed)
+            XCTAssertEqual(error as? HouseholdError, .invitationNotFound)
         }
-        let accounts = try XCTUnwrap(server.zones[location.zoneName]?.claimedInvitationAccounts)
-        XCTAssertEqual(accounts[invitation.invitation.cloudShareParticipantID], "child")
+        XCTAssertNil(recipient.selectedMember)
+        XCTAssertNil(server.zones[invitation.shareURL.lastPathComponent]?
+            .facts[invitation.invitation.claimFactID])
     }
 
     func testRawParticipantBindingRequiresExactAcceptedPrivateReadWriteSlot() {

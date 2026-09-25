@@ -1510,14 +1510,14 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         ownerAuthorityBinding: String
     ) -> InvitationLifecycleAuthorityRecordComparison {
         let creatorMatches = creatorUserRecordID.map {
-            familyLifecycleAuthorityIdentityMatchesCurrentAccount(
+            familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
                 $0,
                 expectedCurrentUserRecordName: expectedCurrentUserRecordName,
                 ownerAuthorityBinding: ownerAuthorityBinding
             )
         }
         let modifierMatches = modifierUserRecordID.map {
-            familyLifecycleAuthorityIdentityMatchesCurrentAccount(
+            familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
                 $0,
                 expectedCurrentUserRecordName: expectedCurrentUserRecordName,
                 ownerAuthorityBinding: ownerAuthorityBinding
@@ -1530,9 +1530,9 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             state: state,
             stateRecognized: state != nil,
             creatorPresent: creatorUserRecordID != nil,
-            creatorMatchesCurrentAccount: creatorMatches,
+            creatorMatchesOwnerAuthority: creatorMatches,
             modifierPresent: modifierUserRecordID != nil,
-            modifierMatchesCurrentAccount: modifierMatches,
+            modifierMatchesOwnerAuthority: modifierMatches,
             identityRepresentation: familyLifecycleAuthorityIdentityRepresentation(
                 creatorUserRecordID: creatorUserRecordID,
                 modifierUserRecordID: modifierUserRecordID,
@@ -1563,14 +1563,14 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             state: state,
             stateRecognized: state != nil,
             creatorPresent: creatorParticipantID != nil,
-            creatorMatchesCurrentAccount: creatorMatches,
+            creatorMatchesOwnerAuthority: creatorMatches,
             modifierPresent: modifierParticipantID != nil,
-            modifierMatchesCurrentAccount: modifierMatches,
+            modifierMatchesOwnerAuthority: modifierMatches,
             identityRepresentation: identityRepresentation
         )
     }
 
-    private static func familyLifecycleAuthorityIdentityMatchesCurrentAccount(
+    private static func familyLifecycleAuthorityIdentityMatchesOwnerAuthority(
         _ recordID: CKRecord.ID,
         expectedCurrentUserRecordName: String,
         ownerAuthorityBinding: String
@@ -1578,10 +1578,11 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         if recordID.recordName == CKCurrentUserDefaultName {
             return recordID.zoneID.zoneName == CKRecordZone.ID.default.zoneName
                 && recordID.zoneID.ownerName == CKCurrentUserDefaultName
+                && AccountMembershipBinding.ownerAuthority(participantID: expectedCurrentUserRecordName)
+                    == ownerAuthorityBinding
         }
-        return recordID.recordName == expectedCurrentUserRecordName
-            && AccountMembershipBinding.ownerAuthority(participantID: recordID.recordName)
-                == ownerAuthorityBinding
+        return AccountMembershipBinding.ownerAuthority(participantID: recordID.recordName)
+            == ownerAuthorityBinding
     }
 
     static func familyLifecycleAuthorityIdentityRepresentation(

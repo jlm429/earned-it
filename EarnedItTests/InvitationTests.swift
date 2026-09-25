@@ -57,6 +57,7 @@ final class InvitationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(500))
         store.errorMessage = nil
         transport.invitationFactUploadDelay = .milliseconds(500)
+        store.refreshDate()
 
         _ = try await store.createChildInvitation(memberID: child.id)
 
@@ -114,6 +115,41 @@ final class InvitationTests: XCTestCase {
             try await fixture.store.recoverInvitation(issued.invitation),
             expected: .invitationUnavailable
         )
+    }
+
+    func testExistingInvitationRecoveryUsesAuthoritativeTimeDespiteDeviceClockSkew() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        let issued = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let validationCallsAfterIssuance = transport.invitationValidationTimeCalls
+
+        server.authoritativeTime = issued.invitation.createdAt.addingTimeInterval(60)
+        family.move(to: "2027-09-07T16:00:00Z")
+
+        XCTAssertEqual(family.store.invitationStatus(issued.invitation), .expired)
+        XCTAssertTrue(family.store.canRecoverInvitation(issued.invitation))
+        let recovered = try await family.store.recoverInvitation(issued.invitation)
+        XCTAssertEqual(recovered.shareURL, issued.shareURL)
+        XCTAssertEqual(transport.invitationValidationTimeCalls, validationCallsAfterIssuance + 1)
+
+        server.authoritativeTime = issued.invitation.expiresAt
+        family.move(to: "2026-09-07T16:00:00Z")
+        XCTAssertTrue(family.store.canRecoverInvitation(issued.invitation))
+        await XCTAssertThrowsErrorAsync(
+            try await family.store.recoverInvitation(issued.invitation),
+            expected: .invitationUnavailable
+        )
+
+        server.authoritativeTime = nil
+        transport.invitationValidationTimeFailures = 1
+        transport.invitationValidationTimeError = CKError(.networkFailure)
+        do {
+            _ = try await family.store.recoverInvitation(issued.invitation)
+            XCTFail("Recovery must fail when authoritative time is unavailable")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
     }
 
     func testCleanFirstChildInvitationCreatesAndRetainsOwnerMembership() async throws {

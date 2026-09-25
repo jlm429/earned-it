@@ -1,5 +1,4 @@
 import CloudKit
-import CryptoKit
 import Foundation
 import OSLog
 
@@ -77,20 +76,15 @@ enum InvitationDiagnosticRelationship: String, Equatable {
 }
 
 struct InvitationDiagnosticContext: Equatable {
-    let correlationID: UUID
-    let householdID: UUID
-    let currentParentMemberID: UUID?
-    let targetMemberID: UUID
     let targetRole: UserRole
     let startedWithCloudLocation: Bool
     let localAcquisitionNoncePresent: Bool
-    var cloudKitUserRecordNameSHA256: String?
-    var accountGeneration: UInt64
+    var cloudAccountIdentityKnown: Bool
 }
 
 struct InvitationExpectedOwnerMembership: Equatable {
-    let householdID: UUID
-    let memberID: UUID?
+    let householdMatchesTarget: Bool?
+    let memberProfilePresent: Bool
     let role: UserRole?
     let ownerLocation: Bool
     let claimBindingKind: String
@@ -99,9 +93,8 @@ struct InvitationExpectedOwnerMembership: Equatable {
 
 struct InvitationMembershipLockSnapshot: Equatable {
     let present: Bool
-    let householdID: UUID?
+    let householdMatchesTarget: Bool?
     let state: AccountMembershipLockState?
-    let accountGeneration: UInt64
     let claimBindingPresent: Bool
     let claimBindingMatchesExpectedOwner: Bool?
     let ownerAuthorityBindingPresent: Bool
@@ -179,17 +172,17 @@ struct InvitationLifecycleAuthorityRecordComparison: Equatable {
     let state: FamilyLifecycleState?
     let stateRecognized: Bool
     let creatorPresent: Bool
-    let creatorMatchesCurrentAccount: Bool?
+    let creatorMatchesOwnerAuthority: Bool?
     let modifierPresent: Bool
-    let modifierMatchesCurrentAccount: Bool?
+    let modifierMatchesOwnerAuthority: Bool?
     let identityRepresentation: InvitationLifecycleAuthorityIdentityRepresentation?
 
     var isAccepted: Bool {
         recordTypeMatches
             && formatVersionMatches
             && stateRecognized
-            && creatorMatchesCurrentAccount == true
-            && modifierMatchesCurrentAccount == true
+            && creatorMatchesOwnerAuthority == true
+            && modifierMatchesOwnerAuthority == true
     }
 }
 
@@ -236,7 +229,7 @@ struct InvitationInternalErrorComponent: Equatable {
 
 enum InvitationDiagnosticDetail: Equatable {
     case context
-    case accountIdentity(digest: String, generation: UInt64, stable: Bool?)
+    case accountIdentity(known: Bool, stable: Bool?)
     case expectedOwnerMembership(InvitationExpectedOwnerMembership)
     case membershipLock(InvitationMembershipLockSnapshot)
     case ownerComparison(InvitationOwnerMembershipComparison)
@@ -390,12 +383,9 @@ final class FamilyTransitionDiagnostics {
 
     func beginInvitation(
         householdID: UUID,
-        currentParentMemberID: UUID?,
-        targetMemberID: UUID,
         targetRole: UserRole,
         localAttemptID: UUID?,
         localParticipantID: String?,
-        accountGeneration: UInt64,
         hasCloudLocation: Bool
     ) {
         events.removeAll(keepingCapacity: true)
@@ -403,15 +393,10 @@ final class FamilyTransitionDiagnostics {
         expectedAttemptID = localAttemptID
         expectedParticipantID = localParticipantID
         invitationContext = InvitationDiagnosticContext(
-            correlationID: UUID(),
-            householdID: householdID,
-            currentParentMemberID: currentParentMemberID,
-            targetMemberID: targetMemberID,
             targetRole: targetRole,
             startedWithCloudLocation: hasCloudLocation,
             localAcquisitionNoncePresent: localAttemptID != nil,
-            cloudKitUserRecordNameSHA256: localParticipantID.map(Self.digest),
-            accountGeneration: accountGeneration
+            cloudAccountIdentityKnown: localParticipantID?.isEmpty == false
         )
         latestInvitationTrace = nil
         append(event(stage: .invitationStart, outcome: .started, detail: .context))
@@ -422,17 +407,15 @@ final class FamilyTransitionDiagnostics {
         if let participantID { expectedParticipantID = participantID }
     }
 
-    func recordAccountIdentity(participantID: String, generation: UInt64, stable: Bool? = nil) {
+    func recordAccountIdentity(participantID: String, stable: Bool? = nil) {
         guard isActive, var context = invitationContext else { return }
-        let digest = Self.digest(participantID)
-        context.cloudKitUserRecordNameSHA256 = digest
-        context.accountGeneration = generation
+        context.cloudAccountIdentityKnown = !participantID.isEmpty
         invitationContext = context
         append(event(
             stage: .cloudAccountIdentity,
             outcome: .observed,
             accountGenerationStable: stable,
-            detail: .accountIdentity(digest: digest, generation: generation, stable: stable)
+            detail: .accountIdentity(known: !participantID.isEmpty, stable: stable)
         ))
     }
 
@@ -448,8 +431,8 @@ final class FamilyTransitionDiagnostics {
             stage: .ownerMembershipValidation,
             outcome: .observed,
             detail: .expectedOwnerMembership(InvitationExpectedOwnerMembership(
-                householdID: householdID,
-                memberID: memberID,
+                householdMatchesTarget: equality(householdID, targetHouseholdID),
+                memberProfilePresent: memberID != nil,
                 role: role,
                 ownerLocation: locationIsOwner,
                 claimBindingKind: "deterministicOwnerHouseholdBinding",
@@ -462,8 +445,7 @@ final class FamilyTransitionDiagnostics {
         _ lock: AccountMembershipLock?,
         expectedOwnerBinding: String,
         expectedOwnerAuthorityBinding: String?,
-        localAttemptID: UUID?,
-        accountGeneration: UInt64
+        localAttemptID: UUID?
     ) {
         guard isActive, invitationContext != nil else { return }
         let nonceRelationship: InvitationDiagnosticRelationship
@@ -476,9 +458,8 @@ final class FamilyTransitionDiagnostics {
         }
         let snapshot = InvitationMembershipLockSnapshot(
             present: lock != nil,
-            householdID: lock?.householdID,
+            householdMatchesTarget: equality(lock?.householdID, targetHouseholdID),
             state: lock?.state,
-            accountGeneration: accountGeneration,
             claimBindingPresent: lock?.claimBinding != nil,
             claimBindingMatchesExpectedOwner: lock.map { $0.claimBinding == expectedOwnerBinding },
             ownerAuthorityBindingPresent: lock?.ownerAuthorityBinding != nil,
@@ -750,17 +731,12 @@ final class FamilyTransitionDiagnostics {
         let firstFailure = causalFailure ?? completedFailure
         var lines = [
             "Earned It Production Invitation Issuance Trace",
-            "traceFormat=EarnedItInvitationIssuance/2",
+            "traceFormat=EarnedItInvitationIssuance/3",
             "sanitizer=allowListedTypedFields",
-            "correlationID=\(context.correlationID.uuidString)",
-            "householdID=\(context.householdID.uuidString)",
-            "currentParentMemberID=\(context.currentParentMemberID?.uuidString ?? "unavailable")",
-            "targetMemberID=\(context.targetMemberID.uuidString)",
             "targetRole=\(context.targetRole.rawValue)",
             "startedWithCloudLocation=\(context.startedWithCloudLocation)",
             "localAcquisitionNoncePresent=\(context.localAcquisitionNoncePresent)",
-            "cloudKitUserRecordNameSHA256=\(context.cloudKitUserRecordNameSHA256 ?? "unavailable")",
-            "accountGeneration=\(context.accountGeneration)",
+            "cloudAccountIdentityKnown=\(context.cloudAccountIdentityKnown)",
             "firstFailureSequence=\(firstFailure.map { String($0.sequence) } ?? "none")",
             "firstFailureStage=\(firstFailure?.stage.rawValue ?? "none")",
             "firstFailureOperation=\(firstFailure.map { Self.operation(for: $0.stage) } ?? "none")",
@@ -807,18 +783,17 @@ final class FamilyTransitionDiagnostics {
         switch detail {
         case .context:
             return ["detail=attemptContext"]
-        case .accountIdentity(let digest, let generation, let stable):
+        case .accountIdentity(let known, let stable):
             return [
                 "detail=cloudAccountIdentity",
-                "cloudKitUserRecordNameSHA256=\(digest)",
-                "accountGeneration=\(generation)",
+                "cloudAccountIdentityKnown=\(known)",
                 "accountGenerationStable=\(value(stable))"
             ]
         case .expectedOwnerMembership(let expected):
             return [
                 "detail=expectedOwnerMembership",
-                "expected.householdID=\(expected.householdID.uuidString)",
-                "expected.memberProfileID=\(expected.memberID?.uuidString ?? "unavailable")",
+                "expected.householdMatchesTarget=\(value(expected.householdMatchesTarget))",
+                "expected.memberProfilePresent=\(expected.memberProfilePresent)",
                 "expected.role=\(expected.role?.rawValue ?? "unavailable")",
                 "expected.ownerLocation=\(expected.ownerLocation)",
                 "expected.claimBindingKind=\(expected.claimBindingKind)",
@@ -829,11 +804,8 @@ final class FamilyTransitionDiagnostics {
             return [
                 "detail=existingAccountMembershipLock",
                 "lock.present=\(lock.present)",
-                "lock.householdID=\(lock.householdID?.uuidString ?? "none")",
-                "lock.memberProfileID=notStored",
-                "lock.role=notStored",
+                "lock.householdMatchesTarget=\(value(lock.householdMatchesTarget))",
                 "lock.state=\(lock.state?.rawValue ?? "none")",
-                "lock.accountGeneration=\(lock.accountGeneration)",
                 "lock.claimBindingPresent=\(lock.claimBindingPresent)",
                 "lock.claimBindingMatchesExpectedOwner=\(value(lock.claimBindingMatchesExpectedOwner))",
                 "lock.ownerAuthorityBindingPresent=\(lock.ownerAuthorityBindingPresent)",
@@ -893,11 +865,11 @@ final class FamilyTransitionDiagnostics {
                     "lifecycle.state=\(comparison.state?.rawValue ?? "unknown")",
                     "lifecycle.stateRecognized=\(comparison.stateRecognized)",
                     "lifecycle.creatorPresent=\(comparison.creatorPresent)",
-                    "lifecycle.creatorMatchesCurrentAccount="
-                        + "\(value(comparison.creatorMatchesCurrentAccount))",
+                    "lifecycle.creatorMatchesOwnerAuthority="
+                        + "\(value(comparison.creatorMatchesOwnerAuthority))",
                     "lifecycle.modifierPresent=\(comparison.modifierPresent)",
-                    "lifecycle.modifierMatchesCurrentAccount="
-                        + "\(value(comparison.modifierMatchesCurrentAccount))",
+                    "lifecycle.modifierMatchesOwnerAuthority="
+                        + "\(value(comparison.modifierMatchesOwnerAuthority))",
                     "lifecycle.expectedCurrentRecordNameIsCurrentUserDefaultName="
                         + "\(value(identity?.expectedCurrentRecordNameIsCurrentUserDefaultName))",
                     "lifecycle.creatorRecordNameMatchesExpectedCurrentUser="
@@ -1037,10 +1009,6 @@ final class FamilyTransitionDiagnostics {
         case .malformedData: "malformedData"
         case .familyStillSyncing: "familyStillSyncing"
         }
-    }
-
-    private static func digest(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func operation(for stage: FamilyTransitionDiagnosticStage) -> String {

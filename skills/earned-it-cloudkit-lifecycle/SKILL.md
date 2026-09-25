@@ -25,7 +25,8 @@ Start with the current default branch and the authoritative implementation and d
 - Review issuance as a non-atomic workflow. If participant creation or fact upload may already have succeeded, inspect or recover the exact existing participant before creating another one.
 - Trace both recipient inputs: the custom package with clear code plus Apple URL, and a raw recovered Apple URL with no clear code.
 - A raw URL can select an invitation only through the accepted current-user share participant. Require the exact participant ID, accepted status, private-user role, read/write permission, one unique matching journal invitation, authoritative availability, and an atomic one-time claim.
-- Keep the custom package bound by both its code digest and Apple URL digest. Neither format may broaden profiles, cross households, revive revoked or expired access, or permit replay.
+- Keep the custom package bound by both its code digest and Apple URL digest. At the common claim boundary, require its exact current accepted private read/write participant just like the raw path. Neither format may broaden profiles, cross households, revive revoked or expired access, or permit replay.
+- Recover an existing unclaimed invitation only after authoritative CloudKit time confirms availability. A device clock may affect display text but must not hide recovery or authorize delivery.
 
 ## Verification
 

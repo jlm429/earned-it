@@ -176,6 +176,40 @@ final class InvitationDeliveryTests: XCTestCase {
         XCTAssertEqual(recipient.selectedMember?.id, family.hanna.id)
     }
 
+    func testPendingPackageRejectsDifferentAcceptedParticipantInSameHousehold() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let intended = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let other = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let transport = TestTransport(server: server, account: "recipient")
+        let recipient = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        transport.invitationLocationError = CKError(.participantMayNeedVerification)
+        try await recipient.redeemInvitation(intended.qrPayload) { _ in true }
+        transport.invitationLocationError = nil
+        let location = try await transport.invitationLocation(for: other.shareURL)
+
+        do {
+            _ = try await recipient.acceptSystemInvitation(location: location) {
+                try await transport.accept(url: other.shareURL, expected: location)
+            }
+            XCTFail("Expected the unintended participant to be rejected")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitationNotFound)
+        }
+
+        XCTAssertNil(recipient.selectedMember)
+        XCTAssertTrue(recipient.profiles.isEmpty)
+        XCTAssertNil(server.zones[location.zoneName]?.facts[intended.invitation.claimFactID])
+        XCTAssertNil(server.zones[location.zoneName]?.facts[other.invitation.claimFactID])
+        XCTAssertEqual(server.accountMembershipLocks["recipient"]?.state, .released)
+        XCTAssertFalse(server.zones[location.zoneName]?.participants.contains("recipient") == true)
+    }
+
     func testPendingPackageRefusesChangedAccountAndDifferentCodeThenRetriesOriginalAccount() async throws {
         let (family, issued, transport, recipient, _) = try await pendingRecipient()
         transport.invitationLocationError = CKError(.participantMayNeedVerification)
@@ -246,14 +280,19 @@ final class InvitationDeliveryTests: XCTestCase {
         }
     }
 
-    func testExactBoundPackageSurvivesStaleParticipantSlotVisibility() async throws {
-        let (family, issued, transport, recipient, _) = try await pendingRecipient()
+    func testExactBoundPackageRejectsUnverifiableParticipantSlot() async throws {
+        let (_, issued, transport, recipient, _) = try await pendingRecipient()
         transport.invitationAccessVisible = false
-        try await recipient.redeemInvitation(issued.qrPayload)
-        XCTAssertEqual(recipient.selectedMember?.id, family.hanna.id)
-        XCTAssertEqual(recipient.profiles.map(\.id), [family.hanna.id])
+        do {
+            _ = try await recipient.redeemInvitation(issued.qrPayload)
+            XCTFail("Expected an unverifiable participant slot to be rejected")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitationNotFound)
+        }
+        XCTAssertNil(recipient.selectedMember)
+        XCTAssertTrue(recipient.profiles.isEmpty)
         XCTAssertFalse(recipient.hasPendingInvitationPackage)
-        XCTAssertEqual(transport.leaveAttempts, 0)
+        XCTAssertEqual(transport.leaveAttempts, 1)
         XCTAssertEqual(transport.acceptedURLs, [issued.shareURL])
     }
 
