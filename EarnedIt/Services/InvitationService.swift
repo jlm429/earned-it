@@ -157,6 +157,13 @@ enum InvitationCode {
         SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    static func isSHA256Digest(_ value: String?) -> Bool {
+        guard let value, value.utf8.count == 64 else { return false }
+        return value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (97...102).contains(byte)
+        }
+    }
+
     static func accountClaimID(householdID: UUID, participantID: String, generationID: UUID) -> UUID {
         let digest = SHA256.hash(
             data: Data("\(householdID.uuidString)/\(participantID)/\(generationID.uuidString)".utf8)

@@ -66,6 +66,43 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(store.pendingCount, 0)
     }
 
+    func testFailedInvitationPreflightRestoresInterruptedPendingSync() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: true
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+        try await Task.sleep(for: .milliseconds(500))
+
+        try store.renameFamily("Pending Family Name")
+        transport.invitationValidationTimeFailures = 1
+        transport.invitationValidationTimeError = CKError(.networkFailure)
+
+        do {
+            _ = try await store.createChildInvitation(memberID: child.id)
+            XCTFail("Invitation preflight must report its transport failure")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertEqual(store.pendingCount, 0)
+        XCTAssertNil(store.errorMessage)
+        let location = try XCTUnwrap(store.session.location)
+        let uploadedNames = server.zones[location.zoneName]?.facts.values.compactMap { fact -> String? in
+            if case .household(let household) = fact.body { return household.name }
+            return nil
+        }
+        XCTAssertTrue(uploadedNames?.contains("Pending Family Name") == true)
+    }
+
     func testExistingInvitationRecoveryReturnsDigestMatchedRawAppleURL() async throws {
         let fixture = try await connectedOwnerFixture()
         let issued = try await fixture.store.createChildInvitation(memberID: fixture.child.id)
@@ -152,6 +189,42 @@ final class InvitationTests: XCTestCase {
         }
     }
 
+    func testExistingInvitationRecoveryDefersAndRestoresQueuedPendingSync() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let store = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            automaticSync: true
+        )
+        try store.createFamily(name: "Test Family", parentName: "Test Parent")
+        let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try store.finishSetup()
+        try await store.connect()
+        try await Task.sleep(for: .milliseconds(500))
+        let issued = try await store.createChildInvitation(memberID: child.id)
+        try store.renameFamily("Pending Recovery Name")
+        store.errorMessage = nil
+        let gate = TestSuspensionGate()
+        transport.beforeInvitationValidationTime = {
+            transport.beforeInvitationValidationTime = nil
+            await gate.wait()
+        }
+
+        let recovery = Task { try await store.recoverInvitation(issued.invitation) }
+        while !gate.isWaiting { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertNil(store.errorMessage)
+
+        gate.resume()
+        let recovered = try await recovery.value
+        XCTAssertEqual(recovered.shareURL, issued.shareURL)
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(store.pendingCount, 0)
+        XCTAssertNil(store.errorMessage)
+    }
+
     func testExistingInvitationRecoveryRequiresOwnerLocation() async throws {
         let fixture = try await connectedOwnerFixture()
         let issued = try await fixture.store.createChildInvitation(memberID: fixture.child.id)
@@ -178,6 +251,68 @@ final class InvitationTests: XCTestCase {
             try await invitedParent.recoverInvitation(issued.invitation),
             expected: .invitationUnavailable
         )
+    }
+
+    func testExistingInvitationRecoveryHidesStructurallyUnrecoverableRows() async throws {
+        let fixture = try await connectedOwnerFixture()
+        let createdAt = TestClock().now
+        let legacy = FamilyInvitation(
+            id: UUID(),
+            householdID: fixture.householdID,
+            claimFactID: UUID(),
+            memberID: fixture.child.id,
+            role: .child,
+            codeDigest: String(repeating: "a", count: 64),
+            createdAt: createdAt,
+            expiresAt: createdAt.addingTimeInterval(InvitationCode.lifetime),
+            createdByMemberID: fixture.parent.id,
+            cloudShareParticipantID: "legacy-participant",
+            cloudShareURLDigest: nil
+        )
+        let malformed = FamilyInvitation(
+            id: UUID(),
+            householdID: fixture.householdID,
+            claimFactID: UUID(),
+            memberID: fixture.child.id,
+            role: .child,
+            codeDigest: String(repeating: "b", count: 64),
+            createdAt: createdAt,
+            expiresAt: createdAt.addingTimeInterval(InvitationCode.lifetime),
+            createdByMemberID: fixture.parent.id,
+            cloudShareParticipantID: "malformed-participant",
+            cloudShareURLDigest: String(repeating: "z", count: 64)
+        )
+        let deviceID = fixture.store.session.deviceID
+        try fixture.repository.commit(
+            facts: [
+                HouseholdFact(
+                    id: legacy.id,
+                    householdID: fixture.householdID,
+                    sequence: 10_000,
+                    authorDeviceID: deviceID,
+                    authorMemberID: fixture.parent.id,
+                    body: .invitation(legacy)
+                ),
+                HouseholdFact(
+                    id: malformed.id,
+                    householdID: fixture.householdID,
+                    sequence: 10_001,
+                    authorDeviceID: deviceID,
+                    authorMemberID: fixture.parent.id,
+                    body: .invitation(malformed)
+                )
+            ],
+            uploaded: true
+        )
+        let reopened = try HouseholdStore(
+            repository: fixture.repository,
+            transport: fixture.transport,
+            clock: { TestClock().now },
+            automaticSync: false
+        )
+
+        XCTAssertFalse(reopened.canRecoverInvitation(legacy))
+        XCTAssertFalse(reopened.canRecoverInvitation(malformed))
     }
 
     func testCleanFirstChildInvitationCreatesAndRetainsOwnerMembership() async throws {
@@ -2141,6 +2276,51 @@ final class InvitationTests: XCTestCase {
             in: sharedLocation
         )
         XCTAssertTrue(retryAccessIsCurrent)
+    }
+
+    func testAttachRejectsParticipantSubstitutedAfterLockActivation() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let first = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let second = try await family.store.createChildInvitation(memberID: family.alek.id)
+        let recipientTransport = TestTransport(server: server, account: "recipient")
+        let joining = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: recipientTransport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        let location = try await recipientTransport.invitationLocation(for: first.shareURL)
+        recipientTransport.afterAccountLockActivationSubmission = {
+            recipientTransport.afterAccountLockActivationSubmission = nil
+            server.zones[location.zoneName]?.claimedInvitationAccounts.removeValue(
+                forKey: first.invitation.cloudShareParticipantID
+            )
+            server.zones[location.zoneName]?.pendingInvitationParticipants.remove(
+                second.invitation.cloudShareParticipantID
+            )
+            server.zones[location.zoneName]?.claimedInvitationAccounts[
+                second.invitation.cloudShareParticipantID
+            ] = "recipient"
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await joining.redeemInvitation(first.qrPayload),
+            expected: .invitationNotFound
+        )
+
+        XCTAssertNil(joining.household)
+        XCTAssertNil(joining.selectedMember)
+        let firstAccessRemains = try await recipientTransport.hasInvitationAccess(
+            participantID: first.invitation.cloudShareParticipantID,
+            in: location
+        )
+        let secondAccessIsCurrent = try await recipientTransport.hasInvitationAccess(
+            participantID: second.invitation.cloudShareParticipantID,
+            in: location
+        )
+        XCTAssertFalse(firstAccessRemains)
+        XCTAssertTrue(secondAccessIsCurrent)
     }
 
     func testRawAppleURLClaimUsesServerTimeDespiteDeviceClockSkew() async throws {

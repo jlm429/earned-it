@@ -164,7 +164,9 @@ final class TestTransport: HouseholdTransport {
     var beforeAccountLockAcquireSubmission: (() async -> Void)?
     var afterAccountLockAcquireSubmission: (() async -> Void)?
     var beforeAccountMembershipValidationTime: (() async -> Void)?
+    var beforeInvitationValidationTime: (() async -> Void)?
     var beforeAccountLockActivationSubmission: (() async -> Void)?
+    var afterAccountLockActivationSubmission: (() async -> Void)?
     var beforeAccountLockReplacementSubmission: (() async -> Void)?
     var afterAccountLockReplacementSubmission: (() async -> Void)?
     var beforeDeleteFamilyData: (() async -> Void)?
@@ -456,6 +458,7 @@ final class TestTransport: HouseholdTransport {
                 participantID: observedParticipantID,
                 accountGenerationStable: accountGeneration == startingGeneration
             )
+            await afterAccountLockActivationSubmission?()
             return existing
         } catch {
             familyTransitionDiagnostics.record(
@@ -911,6 +914,7 @@ final class TestTransport: HouseholdTransport {
     }
     func invitationValidationTime(in location: CloudLocation, clientTime: Date) async throws -> Date {
         invitationValidationTimeCalls += 1
+        await beforeInvitationValidationTime?()
         familyTransitionDiagnostics.record(stage: .validationTimeWrite, outcome: .started,
                                             householdID: location.householdID)
         if invitationValidationTimeFailures > 0 {
