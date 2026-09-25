@@ -2503,6 +2503,7 @@ final class HouseholdStore {
     private func prepareInvitationAcceptance(location: CloudLocation, participant: String,
                                              acceptance: () async throws -> Void) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        let isResumingAcceptance = session.pendingInvitationAcceptance != nil
         if let pending = session.pendingInvitationAcceptance, hasPendingInvitationPackage {
             guard pending.location == location, pending.cloudParticipantID == participant,
                   pending.phase != .cleanupRequired else { throw HouseholdError.invitationNotFound }
@@ -2521,18 +2522,40 @@ final class HouseholdStore {
         }
         do {
             if session.pendingInvitationAcceptance?.phase == .acceptingAccess {
-                do {
-                    try await acceptance()
-                    recordJoinReceipt { $0.nativeAcceptance = .yes }
-                } catch {
-                    let stage: JoinFailureStage = (error as? CKError)?.code == .participantMayNeedVerification
-                        ? .metadata : .nativeAcceptance
-                    recordJoinFailure(stage: stage, error: error)
-                    throw error
+                var alreadyCommitted = false
+                if isResumingAcceptance {
+                    alreadyCommitted = try await promotePendingNativeAcceptanceIfCommitted(
+                        location: location,
+                        participant: participant
+                    )
                 }
-                try Task.checkCancellation()
-                guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
-                try confirmPendingInvitationAcceptance(location: location, participant: participant)
+                if !alreadyCommitted {
+                    do {
+                        try await acceptance()
+                        recordJoinReceipt { $0.nativeAcceptance = .yes }
+                        try Task.checkCancellation()
+                        guard try await transport.participantID() == participant else {
+                            throw HouseholdError.wrongAccount
+                        }
+                        try confirmPendingInvitationAcceptance(location: location, participant: participant)
+                    } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError) {
+                        let committed: Bool
+                        do {
+                            committed = try await promotePendingNativeAcceptanceIfCommitted(
+                                location: location,
+                                participant: participant
+                            )
+                        } catch {
+                            throw cloudError
+                        }
+                        guard committed else { throw cloudError }
+                    } catch {
+                        let stage: JoinFailureStage = (error as? CKError)?.code == .participantMayNeedVerification
+                            ? .metadata : .nativeAcceptance
+                        recordJoinFailure(stage: stage, error: error)
+                        throw error
+                    }
+                }
             }
             try await identifyPendingInvitation(in: location)
         } catch let cloudError as CKError where Self.isRetryableInvitationError(cloudError)
@@ -3018,6 +3041,9 @@ final class HouseholdStore {
         try Task.checkCancellation()
         var updated = session
         updated.pendingInvitationAcceptance = nil
+        updated.accountMembershipLockAttemptID = nil
+        updated.accountMembershipClaimBinding = nil
+        updated.ownerConnectionBootstrap = nil
         try repository.commit(facts: [], session: updated)
         session = updated
     }

@@ -836,6 +836,49 @@ final class InvitationTests: XCTestCase {
         XCTAssertFalse(server.zones[invitation.shareURL.lastPathComponent]!.participants.contains("joining-child"))
     }
 
+    func testTerminalInvitationCleanupClearsReleasedAttemptBeforeCreatingFamily() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "joining-child")
+        let original = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        try await original.join(url: invitation.shareURL)
+        let releasedAttemptID = try XCTUnwrap(original.session.accountMembershipLockAttemptID)
+        let repository = try HouseholdRepository(inMemory: true)
+        let recovered = try HouseholdStore(
+            repository: repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+
+        try await recovered.reconcileAccountMembershipLock()
+        XCTAssertEqual(recovered.session.pendingInvitationAcceptance?.phase, .awaitingRedemption)
+        XCTAssertEqual(recovered.session.accountMembershipLockAttemptID, releasedAttemptID)
+
+        try await family.store.revokeInvitation(invitation.invitation)
+        try await recovered.retryInvitationCleanup()
+
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .released)
+        XCTAssertNil(recovered.session.pendingInvitationAcceptance)
+        XCTAssertNil(recovered.session.accountMembershipLockAttemptID)
+        XCTAssertNil(recovered.household)
+
+        try recovered.createFamily(name: "New Family", parentName: "New Parent")
+        _ = try recovered.saveMember(name: "New Child", role: .child, avatar: .flower)
+        try recovered.finishSetup()
+        try await recovered.connect()
+
+        XCTAssertFalse(recovered.familyAccessLost)
+        XCTAssertNotEqual(recovered.session.accountMembershipLockAttemptID, releasedAttemptID)
+        XCTAssertEqual(server.accountMembershipLocks["joining-child"]?.state, .active)
+    }
+
     func testAccountChangeResumesCleanupAndRepeatedAttemptsConverge() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
@@ -2337,6 +2380,45 @@ final class InvitationTests: XCTestCase {
         XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
         XCTAssertEqual(server.accountMembershipLocks["raw-callback-retry-child"]?.state, .active)
         XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertEqual(transport.leaveAttempts, 0)
+    }
+
+    func testPackagedInvitationRetryPromotesCommittedAccessBeforeReaccepting() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let transport = TestTransport(server: server, account: "package-retry-child")
+        transport.acceptPostCommitError = CKError(.networkFailure)
+        transport.acceptedInvitationParticipantError = CKError(.networkUnavailable)
+        let joining = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+
+        do {
+            try await joining.redeemInvitation(invitation.qrPayload)
+            XCTFail("The uncertain post-commit result must remain pending")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+        XCTAssertEqual(joining.session.pendingInvitationAcceptance?.phase, .acceptingAccess)
+        XCTAssertNotNil(joining.session.pendingInvitationPackage)
+        XCTAssertEqual(transport.acceptedURLs, [invitation.shareURL])
+
+        transport.acceptPostCommitError = nil
+        transport.acceptedInvitationParticipantError = nil
+        transport.acceptErrorAfterHook = HouseholdError.invitationConsumed
+        let completed = try await joining.continuePendingInvitation()
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(transport.acceptedURLs, [invitation.shareURL])
+        XCTAssertEqual(joining.selectedMember?.id, family.hanna.id)
+        XCTAssertEqual(joining.profiles.map(\.id), [family.hanna.id])
+        XCTAssertEqual(server.accountMembershipLocks["package-retry-child"]?.state, .active)
+        XCTAssertNil(joining.session.pendingInvitationAcceptance)
+        XCTAssertNil(joining.session.pendingInvitationPackage)
         XCTAssertEqual(transport.leaveAttempts, 0)
     }
 
