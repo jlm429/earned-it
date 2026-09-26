@@ -4,9 +4,7 @@
 
 # Earned It
 
-A simple shared chore app for families.
-
-**Free. No ads. No tracking.**
+Private family chore tracking, built around iCloud. No accounts to create, no ads, no tracking, and your family data stays in your family’s iCloud.
 
 Earned It keeps everyday responsibilities clear. Families can organize chores, let children mark their own work, and celebrate progress together in one simple app.
 
