@@ -4,6 +4,88 @@ import CloudKit
 
 @MainActor
 final class SharingTests: XCTestCase {
+    func testAutomaticRefreshWaitsForMembershipReconciliationWithNoPendingFacts() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let reopened = try HouseholdStore(
+            repository: family.repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: true
+        )
+        let fetchCallsBeforeRefresh = transport.fetchCalls
+        let gate = TestSuspensionGate()
+        transport.beforeFetch = {
+            transport.beforeFetch = nil
+            await gate.wait()
+        }
+
+        reopened.refreshDate()
+        let reconciliation = Task {
+            try await reopened.reconcileAccountMembershipLockAutomatically()
+        }
+        while !gate.isWaiting { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertEqual(reopened.pendingCount, 0)
+        XCTAssertFalse(reopened.cloudAccessBlocked)
+        XCTAssertFalse(reopened.cloudIsReadOnly)
+
+        reopened.refreshDate()
+        reopened.refreshDate()
+        try await Task.sleep(for: .milliseconds(500))
+        gate.resume()
+        try await reconciliation.value
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertNotNil(reopened.lastSyncedAt)
+        XCTAssertEqual(reopened.syncMessage, "Up to date")
+        XCTAssertEqual(transport.fetchCalls, fetchCallsBeforeRefresh + 2)
+    }
+
+    func testAutomaticPendingUploadWaitsForMembershipReconciliation() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        _ = try family.chore()
+        let reopened = try HouseholdStore(
+            repository: family.repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: true
+        )
+        let gate = TestSuspensionGate()
+        transport.beforeFetch = {
+            transport.beforeFetch = nil
+            await gate.wait()
+        }
+
+        reopened.refreshDate()
+        let reconciliation = Task {
+            try await reopened.reconcileAccountMembershipLockAutomatically()
+        }
+        while !gate.isWaiting { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertEqual(reopened.pendingCount, 1)
+        XCTAssertFalse(reopened.cloudAccessBlocked)
+        XCTAssertFalse(reopened.cloudIsReadOnly)
+
+        gate.resume()
+        try await reconciliation.value
+        try await Task.sleep(for: .milliseconds(500))
+
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertEqual(reopened.pendingCount, 0)
+        XCTAssertEqual(reopened.syncMessage, "Up to date")
+    }
+
     func testParentOnlyFamilyRenameUsesJournalAndConvergesWithoutShareMutation() async throws {
         let server = TestCloudServer()
         let ownerTransport = TestTransport(server: server, account: "owner")

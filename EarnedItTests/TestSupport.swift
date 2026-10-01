@@ -171,6 +171,7 @@ final class TestTransport: HouseholdTransport {
     private(set) var invitationAccessCreationCalls = 0
     private(set) var acceptedInvitationParticipantReadCalls = 0
     private(set) var accountResetDeletionAttempts = 0
+    private(set) var fetchCalls = 0
     var beforeParticipantIDReturn: (() async -> Void)?
     var beforeAccept: (() async -> Void)?
     var beforeLeave: (() async -> Void)?
@@ -813,6 +814,7 @@ final class TestTransport: HouseholdTransport {
         return authority.state
     }
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
+        fetchCalls += 1
         familyTransitionDiagnostics.record(stage: .journalFetch, outcome: .started,
                                             householdID: location.householdID)
         await beforeFetch?()
