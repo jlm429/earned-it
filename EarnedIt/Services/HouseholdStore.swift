@@ -3819,7 +3819,7 @@ final class HouseholdStore {
     }
 
     func synchronize() async throws {
-        try await synchronize(deferWhenCloudMutationActive: false)
+        try await synchronize(deferWhenCloudMutationActive: true)
     }
 
     private func synchronize(deferWhenCloudMutationActive: Bool) async throws {
