@@ -10,6 +10,8 @@ struct ResponsibilityRow: View {
     var body: some View {
         SectionCard {
             VStack(alignment: .leading, spacing: 8) {
+                CategoryBadge(category: chore.configuration.category)
+                    .accessibilityIdentifier("category-\(chore.configuration.title.accessibilitySlug)")
                 ChoreFlowLayout {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(chore.configuration.title).font(.headline)
@@ -94,17 +96,31 @@ struct ResponsibilityRow: View {
         let canChange = !store.cloudIsReadOnly && !store.cloudAccessBlocked
             && PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: nextState)
         if canChange {
-            Button { update(member, state: nextState) } label: {
-                memberLabel(member, state: state)
+            HStack(spacing: 6) {
+                Button { update(member, state: nextState) } label: {
+                    memberLabel(member, state: state)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
+                .accessibilityValue(state.rawValue)
+                .accessibilityHint(state == .done ? "Tap to undo completion." : "Tap to mark done.")
+                .accessibilityAddTraits(state == .done ? .isSelected : [])
+                .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+                .contextMenu { stateActions(for: member, excluding: state) }
+                .accessibilityActions { stateActions(for: member, excluding: state) }
+                Menu {
+                    stateActions(for: member, excluding: state)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .frame(width: 44, height: 44)
+                        .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("More states for \(member.displayName), \(chore.configuration.title)")
+                .accessibilityHint("Choose another chore state.")
+                .accessibilityIdentifier("state-menu-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
-            .accessibilityValue(state.rawValue)
-            .accessibilityHint(state == .done ? "Tap to undo completion. More states in Actions." : "Tap to mark done. More states in Actions.")
-            .accessibilityAddTraits(state == .done ? .isSelected : [])
-            .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
-            .contextMenu { stateActions(for: member) }
-            .accessibilityActions { stateActions(for: member) }
         } else {
             memberLabel(member, state: state)
                 .accessibilityElement(children: .ignore)
@@ -117,7 +133,7 @@ struct ResponsibilityRow: View {
     private func memberLabel(_ member: FamilyMember, state: DailyStateKind) -> some View {
         HStack(spacing: 6) {
             Image(systemName: state.symbolName)
-                .foregroundStyle(state == .done ? Color.primary : state.tint)
+                .foregroundStyle(state.tint)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(member.displayName).font(.subheadline.weight(.medium))
@@ -150,10 +166,10 @@ struct ResponsibilityRow: View {
     }
 
     @ViewBuilder
-    private func stateActions(for member: FamilyMember) -> some View {
-        ForEach(DailyStateKind.allCases.filter {
-            $0 != .notNeeded
-                && PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: $0)
+    private func stateActions(for member: FamilyMember, excluding currentState: DailyStateKind) -> some View {
+        ForEach(DailyStateKind.allCases.filter { state in
+            state != .notNeeded && state != currentState
+                && PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: state)
         }) { state in
             Button(state.rawValue, systemImage: state.symbolName) { update(member, state: state) }
         }
@@ -252,14 +268,6 @@ struct SharedDailyList: View {
                 }
             } else {
                 ForEach(chores) { chore in ResponsibilityRow(chore: chore, actor: actor) }
-                if !store.cloudIsReadOnly && !store.cloudAccessBlocked && chores.contains(where: { chore in
-                    chore.eligibleMembers.contains { member in
-                        PermissionService.canSetState(actor: actor, target: member.id, chore: chore, state: .done)
-                    }
-                }) {
-                    Text("Tap a name to mark done or undo. Touch and hold for other states.")
-                        .font(.caption).foregroundStyle(.primary.opacity(0.7))
-                }
             }
         }
     }

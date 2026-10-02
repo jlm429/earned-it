@@ -699,6 +699,48 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot("manage-family-pull-to-refresh")
     }
 
+    func testWeeklyAllowancePolishAtLargeType() throws {
+        let parentHeader = screen("parent-profile-header")
+        XCTAssertTrue(parentHeader.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(parentHeader.frame.minX, app.frame.minX)
+        XCTAssertLessThanOrEqual(parentHeader.frame.maxX, app.frame.maxX)
+
+        let category = screen("category-water-plants")
+        reveal(category)
+        XCTAssertEqual(category.label, "Home")
+
+        let stateMenu = app.buttons["state-menu-water-plants-alek"]
+        reveal(stateMenu)
+        XCTAssertGreaterThanOrEqual(stateMenu.frame.width, 44 - 0.01)
+        XCTAssertGreaterThanOrEqual(stateMenu.frame.height, 44 - 0.01)
+        stateMenu.tap()
+        XCTAssertTrue(app.buttons["Missed"].waitForExistence(timeout: 5))
+        app.buttons["Missed"].tap()
+        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-alek"], containing: "Missed"))
+
+        let parentProgress = screen("parent-weekly-progress-alek")
+        reveal(parentProgress)
+        XCTAssertTrue(parentProgress.label.contains("required items accounted for this week"))
+
+        tap("parent-child-hanna")
+        let details = app.buttons["weekly-progress-details"]
+        reveal(details)
+        details.tap()
+        XCTAssertTrue(app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS 'Weeks run Monday through Sunday'")
+        ).firstMatch.waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        tap("switch-user")
+        tap("user-card-hanna")
+        let childHeader = screen("child-profile-header")
+        XCTAssertTrue(childHeader.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(childHeader.frame.minX, app.frame.minX)
+        XCTAssertLessThanOrEqual(childHeader.frame.maxX, app.frame.maxX)
+        keepScreenshot("ui-polish-parent-child-largest-text")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
         tap("parent-child-hanna")
         tap("edit-allowance")

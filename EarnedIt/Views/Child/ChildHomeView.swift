@@ -13,13 +13,12 @@ struct ChildHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
-                    AvatarView(user: child, size: 62)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Hi, \(child.displayName)!").font(.title.bold())
-                        Text("A little effort, every day.").foregroundStyle(.primary.opacity(0.7))
-                    }
-                }
+                ProfileHeader(
+                    user: child,
+                    title: "Hi, \(child.displayName)!",
+                    subtitle: "A little effort, every day.",
+                    accessibilityIdentifier: "child-profile-header"
+                )
                 SectionCard {
                     VStack(alignment: .leading, spacing: 14) {
                         AllowanceWeekCard(week: current)
