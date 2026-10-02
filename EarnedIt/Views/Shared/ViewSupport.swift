@@ -18,7 +18,7 @@ extension ProgressStatus {
     var tint: Color {
         switch self {
         case .green: .green
-        case .yellow: .yellow
+        case .yellow: .orange
         case .red: .red
         case .neutral: .secondary
         }
@@ -38,7 +38,7 @@ extension DayStatus {
     var tint: Color {
         switch self {
         case .green: .green
-        case .yellow: .yellow
+        case .yellow: .orange
         case .red: .red
         case .excused: .blue
         case .neutral, .future: .secondary
@@ -53,6 +53,17 @@ extension DayStatus {
         case .excused: "heart.fill"
         case .neutral: "minus"
         case .future: "circle"
+        }
+    }
+}
+
+extension ResponsibilityCategory {
+    var tint: Color {
+        switch self {
+        case .home: .teal
+        case .school: .indigo
+        case .activities: .orange
+        case .personal: .purple
         }
     }
 }
@@ -90,6 +101,53 @@ struct AvatarView: View {
     }
 }
 
+struct ProfileHeader: View {
+    let user: FamilyMember
+    let title: String
+    let subtitle: String
+    var accessibilityIdentifier: String
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                AvatarView(user: user, size: 58)
+                titleStack
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                AvatarView(user: user, size: 58)
+                titleStack
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    private var titleStack: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.title2.bold())
+                .fixedSize(horizontal: false, vertical: true)
+            Text(subtitle)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct CategoryBadge: View {
+    let category: ResponsibilityCategory
+
+    var body: some View {
+        Label(category.rawValue, systemImage: category.symbolName)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(category.tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(category.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityElement(children: .combine)
+    }
+}
+
 struct StatusBadge: View {
     let status: ProgressStatus
 
@@ -102,7 +160,8 @@ struct StatusBadge: View {
             .font(.subheadline.weight(.semibold))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(status.tint.opacity(0.12), in: Capsule())
+            .fixedSize(horizontal: false, vertical: true)
+            .background(status.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
             .accessibilityLabel("Weekly status: \(status.rawValue)")
     }
 }

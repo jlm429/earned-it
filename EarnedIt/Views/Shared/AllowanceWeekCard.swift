@@ -6,12 +6,24 @@ struct WeekHeading: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(week.isFinished ? "Finished week" : "Current allowance week")
+            Text(week.isFinished ? "Finished week" : "Current week")
                 .font(.caption.weight(.semibold)).foregroundStyle(.primary.opacity(0.7))
-            Text("Week of \(label(week.start))").font(.headline)
-            Text("\(label(week.start)) – \(label(week.end))")
-                .font(.subheadline).foregroundStyle(.primary.opacity(0.7))
+            Text(dateRange)
+                .font(.headline)
+                .accessibilityLabel("Week of \(label(week.start)) through \(label(week.end))")
         }
+    }
+
+    private var dateRange: String {
+        let formatter = DateIntervalFormatter()
+        formatter.calendar = store.calendar
+        formatter.timeZone = store.calendar.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(
+            from: week.start.date(in: store.calendar),
+            to: week.end.date(in: store.calendar)
+        )
     }
 
     private func label(_ day: CivilDay) -> String {
@@ -29,8 +41,12 @@ struct AllowanceWeekCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WeekHeading(week: week)
-            Text(week.amount.map { "\($0.formatted()) weekly allowance" } ?? "Allowance amount not set")
-                .font(.subheadline.weight(.medium))
+            Label(
+                week.amount.map { "\($0.formatted()) weekly allowance" } ?? "Allowance not set",
+                systemImage: "banknote"
+            )
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(week.amount == nil ? .secondary : .primary)
             if week.earned {
                 Label { Text("Earned It").foregroundStyle(.primary) } icon: {
                     Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
@@ -39,29 +55,86 @@ struct AllowanceWeekCard: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Earned It. Every required item accounted for.")
                     .accessibilityIdentifier("earned-it-badge")
-                Text("Every required item accounted for. Allowance eligible.").font(.subheadline)
             } else if week.items.isEmpty {
                 Label("No required items", systemImage: "minus.circle")
-                Text("No allowance earned for a week without required items.")
-                    .font(.footnote).foregroundStyle(.primary.opacity(0.7))
             } else {
                 StatusBadge(status: week.status)
                 if week.isFinished { Text("Allowance not yet earned").font(.subheadline.weight(.medium)) }
-                Text("\(week.accountedCount) of \(week.dueCount) required items accounted for\(week.isFinished ? "" : " so far")")
-                    .accessibilityIdentifier("parent-weekly-count")
                 if !week.missing.isEmpty {
                     Label("\(week.missing.count) missing \(week.missing.count == 1 ? "item" : "items")", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
                 }
             }
+            if !week.items.isEmpty {
+                WeeklyProgressBar(week: week, accessibilityIdentifier: "parent-weekly-count")
+            }
             if !week.isFinished {
-                Text("\(week.dueToday.count) left today · \(week.scheduled.count) scheduled later")
-                    .font(.subheadline).foregroundStyle(.primary.opacity(0.7))
-                Text("A fresh week starts every Monday. All required items (100%) must be accounted for after Sunday.")
-                    .font(.footnote).foregroundStyle(.primary.opacity(0.7))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { timingLabels }
+                    VStack(alignment: .leading, spacing: 8) { timingLabels }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            if !week.items.isEmpty {
+                DisclosureGroup {
+                    Text("Weeks run Monday through Sunday. Done and legacy per-child Not Needed count toward the result. Current Not Needed Today occurrences are excluded from both the completed and required totals. Every included required chore must be accounted for to earn the week.")
+                        .padding(.top, 4)
+                } label: {
+                    Label("How weekly progress works", systemImage: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("weekly-progress-details")
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var timingLabels: some View {
+        Label("\(week.dueToday.count) left today", systemImage: "sun.max")
+        Label("\(week.scheduled.count) later", systemImage: "calendar")
+    }
+
+}
+
+struct WeeklyProgressBar: View {
+    let week: AllowanceWeek
+    let accessibilityIdentifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    progressLabel
+                    Spacer(minLength: 12)
+                    percentageLabel
+                }
+                progressLabel
+            }
+            ProgressView(value: Double(week.accountedCount), total: Double(max(week.items.count, 1)))
+                .tint(week.earned ? .green : week.status.tint)
+        }
+        .font(.subheadline.weight(.medium))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(week.accountedCount) of \(week.items.count) required items accounted for this week")
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    private var progressLabel: some View {
+        Text("\(week.accountedCount) of \(week.items.count) this week")
+    }
+
+    private var percentageLabel: some View {
+        Text(progressPercentage, format: .percent.precision(.fractionLength(0)))
+            .foregroundStyle(.secondary)
+    }
+
+    private var progressPercentage: Double {
+        guard !week.items.isEmpty else { return 0 }
+        return Double(week.accountedCount) / Double(week.items.count)
     }
 }
 

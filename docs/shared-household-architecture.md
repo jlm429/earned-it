@@ -127,7 +127,7 @@ For alternating chores, that same dated projection exposes only the derived owne
 
 Existing persisted or imported join dates remain authoritative. The prior journal recorded a join date, not a separate creation timestamp, so moving an older future join date backward would invent a creation date. This change does not subtract a day, infer from import time, or migrate actual stores. Explicit future joins and future chore starts stay future. Archives retain their existing next-day boundary and historical assignment evidence.
 
-`ResponsibilityRow` keeps the native card and semantic-color language while wrapping the chore title and all child controls within available width. Done, Unmarked, legacy Not Needed, and Missed have distinct symbols in retained history. Current Not Needed Today is a parent occurrence action, not a child completion state. Touch targets are at least 44 points. Children see sibling states as read-only; centralized store checks remain authoritative on every mutation, including stale-date and cloud-access checks.
+`ResponsibilityRow` keeps the native card and semantic-color language while wrapping the chore title and all child controls within available width. Each chore shows its category with text and a symbol. Done, Unmarked, legacy Not Needed, and Missed have distinct symbols in retained history. Current Not Needed Today is a parent occurrence action, not a child completion state. A visible 44-point menu exposes permitted alternate states; context menus and VoiceOver actions remain available. Children see sibling states as read-only; centralized store checks remain authoritative on every mutation, including stale-date and cloud-access checks.
 
 ## Weekly milestone verification
 
