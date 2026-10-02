@@ -28,9 +28,10 @@ struct AccountMembershipLock: Codable, Equatable {
     var ownerAuthorityBinding: String? = nil
 }
 
-enum AccountMembershipLockReleaseReason {
+enum AccountMembershipLockReleaseReason: Equatable {
     case expiredProvisional
     case confirmedFamilyDeletion
+    case confirmedMembershipRevocation
     case ownerSelfRelease
 }
 
@@ -102,6 +103,11 @@ protocol HouseholdTransport: AccountDataResetCloudBoundary {
     func finalizeFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws
     func familyLifecycleState(householdID: UUID, ownerAuthorityBinding: String,
                               expectedParticipantID: String) async throws -> FamilyLifecycleState?
+    func publishMembershipRevocation(householdID: UUID, claimBinding: String,
+                                     expectedParticipantID: String) async throws
+    func membershipRevocationIsAuthoritative(householdID: UUID, claimBinding: String,
+                                             ownerAuthorityBinding: String,
+                                             expectedParticipantID: String) async throws -> Bool
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact]
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws
     func share(for location: CloudLocation, title: String) async throws -> CKShare

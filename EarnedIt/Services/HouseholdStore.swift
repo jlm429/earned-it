@@ -24,6 +24,7 @@ final class HouseholdStore {
     private let repository: HouseholdRepository
     private let transport: (any HouseholdTransport)?
     private let accountDataResetCoordinator: AccountDataResetCoordinator?
+    private let localDataResetter: any AccountLocalDataResetting
     private let clock: () -> Date
     private let automaticSync: Bool
     private(set) var snapshot = HouseholdSnapshot()
@@ -62,6 +63,7 @@ final class HouseholdStore {
          accountDataResetJournal: FileAccountDataResetJournal? = nil) throws {
         self.repository = repository
         self.transport = transport
+        self.localDataResetter = localDataResetter
         let resetBoundary: (any AccountDataResetCloudBoundary)?
         if let accountDataResetCloudBoundary {
             resetBoundary = accountDataResetCloudBoundary
@@ -99,6 +101,8 @@ final class HouseholdStore {
     var hasPendingInvitationAcceptance: Bool { session.pendingInvitationAcceptance != nil }
     var lastJoinReceipt: LastJoinReceipt? { session.lastJoinReceipt }
     var hasFamilyDeletionNotice: Bool { session.familyDeletionNoticeState == .pending }
+    var hasUnavailableFamilyRecovery: Bool { session.unavailableFamilyRecovery != nil }
+    var unavailableFamilyReason: UnavailableFamilyReason? { session.unavailableFamilyRecovery?.reason }
     var calendar: Calendar { household?.calendar ?? AppCalendar.current }
     var day: CivilDay { CivilDay(today, calendar: calendar) }
     var nextHouseholdMidnight: Date { tomorrow.date(in: calendar) }
@@ -122,6 +126,11 @@ final class HouseholdStore {
         guard let selectedMember else { return false }
         return selectedMember.role == .parent && session.location?.isOwner == true
             && selectedMember.id == snapshot.creatorMemberID
+    }
+    var canDeleteAllFamilyData: Bool {
+        guard let selectedMember, selectedMember.role == .parent,
+              selectedMember.id == snapshot.creatorMemberID else { return false }
+        return session.location == nil || session.location?.isOwner == true
     }
     var canFinishDeletingFamily: Bool {
         canDeleteFamily && familyAccessLost && session.pendingFamilyDeletion == true
@@ -290,7 +299,8 @@ final class HouseholdStore {
     }
 
     private func requireInvitationIngressAllowed() throws {
-        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset,
+              !hasUnavailableFamilyRecovery else {
             throw HouseholdError.pendingChanges
         }
     }
@@ -339,6 +349,43 @@ final class HouseholdStore {
         updated.cloudParticipantID = "synthetic-child"
         updated.accountMembershipLockAttemptID = UUID()
         updated.familyAccessLost = true
+        try repository.commit(facts: [], session: updated)
+        session = updated
+        cloudAccessBlocked = true
+        cloudIsReadOnly = true
+    }
+
+    func prepareUnavailableFamilyRecoveryUITest() throws {
+        if household == nil {
+            try createFamily(name: "Deleted Family", parentName: "Parent")
+            let child = try saveMember(name: "Child", role: .child, avatar: .star)
+            try finishSetup()
+            try selectProfile(child.id)
+        }
+        guard let household else { throw HouseholdError.noHousehold }
+        let attemptID = UUID()
+        let participant = "synthetic-child"
+        let claimBinding = "synthetic-deleted-family-claim"
+        var updated = session
+        updated.location = CloudLocation(
+            householdID: household.id,
+            zoneName: "EarnedIt-\(household.id.uuidString)",
+            ownerName: "synthetic-owner",
+            isOwner: false
+        )
+        updated.cloudParticipantID = participant
+        updated.accountMembershipLockAttemptID = attemptID
+        updated.accountMembershipClaimBinding = claimBinding
+        updated.cloudCanWrite = false
+        updated.familyAccessLost = false
+        updated.unavailableFamilyRecovery = UnavailableFamilyRecovery(
+            householdID: household.id,
+            membershipAttemptID: attemptID,
+            claimBinding: claimBinding,
+            ownerAuthorityBinding: AccountMembershipBinding.ownerAuthority(participantID: "synthetic-owner"),
+            reason: .deleted,
+            membershipReleased: true
+        )
         try repository.commit(facts: [], session: updated)
         session = updated
         cloudAccessBlocked = true
@@ -847,10 +894,40 @@ final class HouseholdStore {
     func revokeInvitation(_ invitation: FamilyInvitation) async throws {
         try await withExclusiveCloudMutation {
             try requireParent()
+            try await synchronize()
+            try requireParent()
             guard snapshot.invitation(invitation.id) == invitation,
                   snapshot.invitationClaim(invitation.id)?.deviceID != session.deviceID,
                   let parent = selectedMember, let transport, let location = session.location else {
                 throw HouseholdError.permission
+            }
+            if let claim = snapshot.invitationClaim(invitation.id),
+               let member = snapshot.member(invitation.memberID) {
+                let expectedAccountGeneration = transport.accountGeneration
+                guard let expectedParticipantID = session.cloudParticipantID,
+                      try await transport.participantID() == expectedParticipantID,
+                      transport.accountGeneration == expectedAccountGeneration else {
+                    throw HouseholdError.wrongAccount
+                }
+                guard location.isOwner,
+                      claim.memberID == invitation.memberID,
+                      claim.codeDigest == invitation.codeDigest else {
+                    throw HouseholdError.permission
+                }
+                let membership = AccountFamilyMembership(
+                    invitation: invitation,
+                    claim: claim,
+                    member: member
+                )
+                try await transport.publishMembershipRevocation(
+                    householdID: invitation.householdID,
+                    claimBinding: AccountMembershipBinding.invitation(membership),
+                    expectedParticipantID: expectedParticipantID
+                )
+                guard transport.accountGeneration == expectedAccountGeneration,
+                      try await transport.participantID() == expectedParticipantID else {
+                    throw HouseholdError.wrongAccount
+                }
             }
             try await transport.revokeInvitationAccess(participantID: invitation.cloudShareParticipantID, from: location)
             var bodies: [HouseholdFactBody] = [
@@ -2208,18 +2285,96 @@ final class HouseholdStore {
         }
     }
 
+    private func establishUnavailableFamilyIfMembershipRevokedFromJournal(
+        _ lock: AccountMembershipLock,
+        in imported: HouseholdSnapshot,
+        participant: String,
+        expectedSession: DeviceSession,
+        expectedAccountGeneration: UInt64
+    ) async throws -> Bool {
+        guard let transport,
+              lock.state == .active,
+              revokedMembershipBindingMatches(lock, in: imported, participant: participant),
+              transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration,
+              try await transport.accountMembershipLock() == lock,
+              transport.accountGeneration == expectedAccountGeneration,
+              session == expectedSession else { return false }
+        try persistUnavailableFamily(
+            reason: .membershipRevoked,
+            lock: lock,
+            participant: participant,
+            expectedSession: expectedSession
+        )
+        try? await releaseUnavailableFamilyMembership(
+            expectedParticipantID: participant,
+            expectedAccountGeneration: expectedAccountGeneration
+        )
+        return true
+    }
+
+    private func establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+        _ lock: AccountMembershipLock,
+        participant: String,
+        expectedSession: DeviceSession,
+        expectedAccountGeneration: UInt64
+    ) async throws -> Bool {
+        guard let transport,
+              lock.state == .active || lock.state == .released,
+              let claimBinding = lock.claimBinding,
+              !claimBinding.isEmpty,
+              claimBinding != AccountMembershipBinding.owner(householdID: lock.householdID),
+              let ownerAuthorityBinding = lock.ownerAuthorityBinding,
+              transport.accountGeneration == expectedAccountGeneration,
+              try await transport.membershipRevocationIsAuthoritative(
+                  householdID: lock.householdID,
+                  claimBinding: claimBinding,
+                  ownerAuthorityBinding: ownerAuthorityBinding,
+                  expectedParticipantID: participant
+              ),
+              transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration,
+              try await transport.accountMembershipLock() == lock,
+              transport.accountGeneration == expectedAccountGeneration,
+              session == expectedSession else { return false }
+        try persistUnavailableFamily(
+            reason: .membershipRevoked,
+            lock: lock,
+            participant: participant,
+            expectedSession: expectedSession
+        )
+        try? await releaseUnavailableFamilyMembership(
+            expectedParticipantID: participant,
+            expectedAccountGeneration: expectedAccountGeneration
+        )
+        return true
+    }
+
     private func reconcileInactiveAccountMembershipLock(_ lock: AccountMembershipLock) async throws {
         guard let transport else { throw HouseholdError.cloudUnavailable }
         let accountGeneration = transport.accountGeneration
         let participant = try await transport.participantID()
         guard transport.accountGeneration == accountGeneration else { throw HouseholdError.wrongAccount }
         guard let location = try await transport.membershipLocation(householdID: lock.householdID) else {
-            guard try await releaseAccountMembershipLockIfFamilyDeleted(
+            if try await establishUnavailableFamilyIfDeleted(
                 lock,
                 participant: participant,
+                expectedSession: session,
                 expectedAccountGeneration: accountGeneration
-            ) else { throw HouseholdError.accountMembershipConflict }
-            return
+            ) {
+                throw HouseholdError.pendingChanges
+            }
+            if try await establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+                lock,
+                participant: participant,
+                expectedSession: session,
+                expectedAccountGeneration: accountGeneration
+            ) {
+                throw HouseholdError.pendingChanges
+            }
+            throw HouseholdError.accountMembershipConflict
         }
         let remote = try await transport.fetch(from: location)
         try validate(remote, householdID: location.householdID)
@@ -2315,10 +2470,11 @@ final class HouseholdStore {
         )
     }
 
-    private func releaseAccountMembershipLockIfFamilyDeleted(
+    private func establishUnavailableFamilyIfDeleted(
         _ lock: AccountMembershipLock,
         location: CloudLocation? = nil,
         participant: String,
+        expectedSession: DeviceSession,
         expectedAccountGeneration: UInt64
     ) async throws -> Bool {
         guard let transport,
@@ -2344,15 +2500,19 @@ final class HouseholdStore {
               try await transport.membershipLocation(householdID: lock.householdID) == nil,
               transport.accountGeneration == expectedAccountGeneration,
               try await transport.accountMembershipLock() == lock,
-              transport.accountGeneration == expectedAccountGeneration else { return false }
-        if lock.state == .released { return true }
-        return try await transport.releaseAccountMembershipLock(
-            expectedLock: lock,
+              transport.accountGeneration == expectedAccountGeneration,
+              session == expectedSession else { return false }
+        try persistUnavailableFamily(
+            reason: .deleted,
+            lock: lock,
+            participant: participant,
+            expectedSession: expectedSession
+        )
+        try? await releaseUnavailableFamilyMembership(
             expectedParticipantID: participant,
-            reason: .confirmedFamilyDeletion,
-            clientTime: clock(),
             expectedAccountGeneration: expectedAccountGeneration
         )
+        return true
     }
 
     private func exactOwnerAuthorityBinding(for lock: AccountMembershipLock, participant: String) -> String? {
@@ -2363,25 +2523,102 @@ final class HouseholdStore {
         return expected
     }
 
-    private func transitionToOnboardingIfFamilyDeleted(
+    private func persistUnavailableFamily(
+        reason: UnavailableFamilyReason,
         lock: AccountMembershipLock,
-        location: CloudLocation? = nil,
         participant: String,
-        expectedSession: DeviceSession,
+        expectedSession: DeviceSession
+    ) throws {
+        guard session == expectedSession,
+              lock.state == .active || lock.state == .released,
+              expectedSession.householdID == nil || expectedSession.householdID == lock.householdID,
+              expectedSession.cloudParticipantID == nil || expectedSession.cloudParticipantID == participant,
+              expectedSession.accountMembershipLockAttemptID == nil
+                || expectedSession.accountMembershipLockAttemptID == lock.attemptID,
+              expectedSession.accountMembershipClaimBinding == nil
+                || expectedSession.accountMembershipClaimBinding == lock.claimBinding else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        var recovery = UnavailableFamilyRecovery(
+            householdID: lock.householdID,
+            membershipAttemptID: lock.attemptID,
+            claimBinding: lock.claimBinding,
+            ownerAuthorityBinding: lock.ownerAuthorityBinding,
+            reason: reason,
+            membershipReleased: lock.state == .released
+        )
+        if let existing = expectedSession.unavailableFamilyRecovery {
+            guard existing.householdID == recovery.householdID,
+                  existing.membershipAttemptID == recovery.membershipAttemptID,
+                  existing.claimBinding == recovery.claimBinding,
+                  existing.ownerAuthorityBinding == recovery.ownerAuthorityBinding,
+                  existing.reason == recovery.reason else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            recovery.membershipReleased = recovery.membershipReleased || existing.membershipReleased
+        }
+        var updated = expectedSession
+        updated.cloudParticipantID = participant
+        updated.accountMembershipLockAttemptID = lock.attemptID
+        updated.accountMembershipClaimBinding = lock.claimBinding
+        updated.cloudCanWrite = false
+        updated.familyAccessLost = false
+        updated.unavailableFamilyRecovery = recovery
+        try repository.commit(facts: [], session: updated)
+        session = updated
+        cloudAccessBlocked = true
+        cloudIsReadOnly = true
+        isCheckingAccountMembership = false
+        requiresMembershipRecovery = false
+        canReleaseStaleOwnerMembership = false
+        staleOwnerMembershipReleaseCandidate = nil
+        syncMessage = "Family no longer available"
+    }
+
+    private func releaseUnavailableFamilyMembership(
+        expectedParticipantID: String,
         expectedAccountGeneration: UInt64
-    ) async throws -> Bool {
-        guard try await releaseAccountMembershipLockIfFamilyDeleted(
-            lock,
-            location: location,
-            participant: participant,
-            expectedAccountGeneration: expectedAccountGeneration
-        ) else { return false }
-        guard let transport,
-              try await transport.participantID() == participant,
+    ) async throws {
+        guard let transport, var recovery = session.unavailableFamilyRecovery else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        guard transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == expectedParticipantID,
               transport.accountGeneration == expectedAccountGeneration,
-              session == expectedSession else { throw HouseholdError.wrongAccount }
-        try purgeDeletedFamily(householdID: lock.householdID)
-        return true
+              session.cloudParticipantID == expectedParticipantID else {
+            throw HouseholdError.wrongAccount
+        }
+        let currentLock = try await transport.accountMembershipLock()
+        guard transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
+        if currentLock == nil {
+            recovery.membershipReleased = true
+        } else if let currentLock, recovery.matches(currentLock), currentLock.state == .released {
+            recovery.membershipReleased = true
+        } else if let currentLock, recovery.matches(currentLock), currentLock.state == .active {
+            let releaseReason: AccountMembershipLockReleaseReason = recovery.reason == .deleted
+                ? .confirmedFamilyDeletion : .confirmedMembershipRevocation
+            guard try await transport.releaseAccountMembershipLock(
+                expectedLock: currentLock,
+                expectedParticipantID: expectedParticipantID,
+                reason: releaseReason,
+                clientTime: clock(),
+                expectedAccountGeneration: expectedAccountGeneration
+            ) else { throw HouseholdError.accountMembershipConflict }
+            recovery.membershipReleased = true
+        } else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        guard transport.accountGeneration == expectedAccountGeneration,
+              session.unavailableFamilyRecovery?.householdID == recovery.householdID,
+              session.unavailableFamilyRecovery?.membershipAttemptID == recovery.membershipAttemptID else {
+            throw HouseholdError.wrongAccount
+        }
+        var updated = session
+        updated.unavailableFamilyRecovery = recovery
+        try repository.commit(facts: [], session: updated)
+        session = updated
     }
 
     private func incompleteOwnerConnectionIsAuthoritative(
@@ -2449,9 +2686,17 @@ final class HouseholdStore {
            lock.householdID == location.householdID,
            lock.attemptID == attemptID {
             do {
-                if try await transitionToOnboardingIfFamilyDeleted(
-                    lock: lock,
+                if try await establishUnavailableFamilyIfDeleted(
+                    lock,
                     location: location,
+                    participant: participant,
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: expectedAccountGeneration
+                ) {
+                    return .familyDeleted
+                }
+                if try await establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+                    lock,
                     participant: participant,
                     expectedSession: expectedSession,
                     expectedAccountGeneration: expectedAccountGeneration
@@ -3095,6 +3340,7 @@ final class HouseholdStore {
 
     func reconcileAccountMembershipLock() async throws {
         try await withExclusiveCloudMutation {
+        guard !hasUnavailableFamilyRecovery else { return }
         if session.householdID == nil, session.pendingInvitationAcceptance == nil {
             try await recoverExistingAccountMembership()
             return
@@ -3173,11 +3419,27 @@ final class HouseholdStore {
             }
             guard lock.state != .released else {
                 let expectedSession = session
+                if let completed = expectedSession.completedUnavailableFamilyRecovery,
+                   completed.membershipReleased,
+                   completed.matches(lock) {
+                    requiresMembershipRecovery = false
+                    syncMessage = "Ready to create or join a family"
+                    return
+                }
                 let hasExactOwnerClaim = lock.claimBinding == AccountMembershipBinding.owner(
                     householdID: lock.householdID
                 )
-                if try await transitionToOnboardingIfFamilyDeleted(
-                    lock: lock,
+                if try await establishUnavailableFamilyIfDeleted(
+                    lock,
+                    participant: participant,
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: accountGeneration
+                ) {
+                    requiresMembershipRecovery = false
+                    return
+                }
+                if try await establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+                    lock,
                     participant: participant,
                     expectedSession: expectedSession,
                     expectedAccountGeneration: accountGeneration
@@ -3259,8 +3521,8 @@ final class HouseholdStore {
                         throw error
                     }
                     if lifecycleState == .deleted {
-                        if try await transitionToOnboardingIfFamilyDeleted(
-                            lock: lock,
+                        if try await establishUnavailableFamilyIfDeleted(
+                            lock,
                             participant: participant,
                             expectedSession: expectedSession,
                             expectedAccountGeneration: accountGeneration
@@ -3284,8 +3546,17 @@ final class HouseholdStore {
                     canReleaseStaleOwnerMembership = true
                     throw HouseholdError.ownerMembershipUnavailable
                 }
-                if try await transitionToOnboardingIfFamilyDeleted(
-                    lock: lock,
+                if try await establishUnavailableFamilyIfDeleted(
+                    lock,
+                    participant: participant,
+                    expectedSession: expectedSession,
+                    expectedAccountGeneration: accountGeneration
+                ) {
+                    requiresMembershipRecovery = false
+                    return
+                }
+                if try await establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+                    lock,
                     participant: participant,
                     expectedSession: expectedSession,
                     expectedAccountGeneration: accountGeneration
@@ -3294,6 +3565,15 @@ final class HouseholdStore {
                     return
                 }
                 throw HouseholdError.invitationUnavailable
+            }
+            if try await establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+                lock,
+                participant: participant,
+                expectedSession: expectedSession,
+                expectedAccountGeneration: accountGeneration
+            ) {
+                requiresMembershipRecovery = false
+                return
             }
             if location.isOwner {
                 let lifecycleState = try await transport.ensureFamilyLifecycleAuthority(
@@ -3307,6 +3587,16 @@ final class HouseholdStore {
             let imported = HouseholdSnapshot(facts: remote)
             guard imported.household?.id == lock.householdID else { throw HouseholdError.familyStillSyncing }
             if !location.isOwner { try validateCompleteFamily(imported, householdID: lock.householdID) }
+            if try await establishUnavailableFamilyIfMembershipRevokedFromJournal(
+                lock,
+                in: imported,
+                participant: participant,
+                expectedSession: expectedSession,
+                expectedAccountGeneration: accountGeneration
+            ) {
+                requiresMembershipRecovery = false
+                return
+            }
             let evidence = try await membershipEvidence(
                 in: imported,
                 location: location,
@@ -3628,6 +3918,29 @@ final class HouseholdStore {
                 expectedOwnerAuthorityBinding: expectedOwnerAuthorityBinding,
                 localAttemptID: session.accountMembershipLockAttemptID
             )
+            if let currentLock,
+               try await establishUnavailableFamilyIfMembershipRevokedFromAuthority(
+                    currentLock,
+                    participant: participant,
+                    expectedSession: session,
+                    expectedAccountGeneration: expectedAccountGeneration
+               ) {
+                diagnostics.record(stage: .ownerMembershipValidation, outcome: .succeeded,
+                                   householdID: location.householdID)
+                return
+            }
+            if let currentLock,
+               try await establishUnavailableFamilyIfMembershipRevokedFromJournal(
+                    currentLock,
+                    in: imported,
+                    participant: participant,
+                    expectedSession: session,
+                    expectedAccountGeneration: expectedAccountGeneration
+               ) {
+                diagnostics.record(stage: .ownerMembershipValidation, outcome: .succeeded,
+                                   householdID: location.householdID)
+                return
+            }
             guard let binding = try await membershipEvidence(
                 in: imported,
                 location: location,
@@ -3903,6 +4216,7 @@ final class HouseholdStore {
             try await reconcileAccountMembershipLock(imported: remoteSnapshot, location: location,
                                                       participant: participant,
                                                       expectedAccountGeneration: expectedAccountGeneration)
+            if hasUnavailableFamilyRecovery { return }
             cloudIsReadOnly = try await !transport.canWrite(to: location)
             var updated = session
             updated.cloudCanWrite = !cloudIsReadOnly
@@ -4022,6 +4336,49 @@ final class HouseholdStore {
         session = updated
     }
 
+    func deleteAllFamilyData() async throws {
+        guard canDeleteAllFamilyData else { throw HouseholdError.permission }
+        if session.location != nil {
+            try await deleteFamily()
+            return
+        }
+        try await withExclusiveCloudMutation {
+            guard !isSyncing, session.pendingFamilyDeletion != true else {
+                throw HouseholdError.pendingChanges
+            }
+            guard let householdID = session.householdID else { throw HouseholdError.noHousehold }
+            try purgeAllLocalFamilyData(expectedHouseholdID: householdID)
+        }
+    }
+
+    func resetUnavailableFamily() async throws {
+        await cancelAutomaticMembershipReconciliation()
+        try await withExclusiveCloudMutation {
+            guard !isSyncing, let recovery = session.unavailableFamilyRecovery else {
+                throw HouseholdError.pendingChanges
+            }
+            if !recovery.membershipReleased {
+                guard let transport, let participant = session.cloudParticipantID else {
+                    throw HouseholdError.cloudUnavailable
+                }
+                let accountGeneration = transport.accountGeneration
+                try await releaseUnavailableFamilyMembership(
+                    expectedParticipantID: participant,
+                    expectedAccountGeneration: accountGeneration
+                )
+            }
+            guard session.unavailableFamilyRecovery?.membershipReleased == true else {
+                throw HouseholdError.cloudUnavailable
+            }
+            var completedRecovery = recovery
+            completedRecovery.membershipReleased = true
+            try purgeAllLocalFamilyData(
+                expectedHouseholdID: recovery.householdID,
+                retainingUnavailableFamilyReset: completedRecovery
+            )
+        }
+    }
+
     func deleteFamily() async throws {
         try await withExclusiveCloudMutation {
         guard !isSyncing else { throw HouseholdError.pendingChanges }
@@ -4033,6 +4390,7 @@ final class HouseholdStore {
               let transport else { throw HouseholdError.permission }
         let deviceID = session.deviceID
         let householdID = location.householdID
+        let expectedAccountGeneration = transport.accountGeneration
         @MainActor func requireDeletionSession(pending: Bool? = nil) throws {
             guard session.deviceID == deviceID,
                   session.householdID == householdID,
@@ -4043,7 +4401,10 @@ final class HouseholdStore {
                 throw HouseholdError.permission
             }
         }
-        guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+        guard try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
         try requireDeletionSession()
 
         if session.pendingFamilyDeletion != true {
@@ -4072,14 +4433,40 @@ final class HouseholdStore {
             expectedParticipantID: participant
         )
         try requireDeletionSession(pending: true)
-        guard try await transport.releaseAccountMembershipLock(
-            householdID: location.householdID, attemptID: attemptID,
-            expectedParticipantID: participant, now: clock()
-        ) else { throw HouseholdError.cloudUnavailable }
+        guard let deletingLock = try await transport.accountMembershipLock(),
+              transport.accountGeneration == expectedAccountGeneration,
+              deletingLock.householdID == householdID,
+              deletingLock.attemptID == attemptID,
+              deletingLock.state == .active || deletingLock.state == .released,
+              deletingLock.claimBinding == AccountMembershipBinding.owner(householdID: householdID),
+              exactOwnerAuthorityBinding(for: deletingLock, participant: participant) != nil else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        if deletingLock.state == .active {
+            guard try await transport.releaseAccountMembershipLock(
+                householdID: location.householdID, attemptID: attemptID,
+                expectedParticipantID: participant, now: clock()
+            ) else { throw HouseholdError.cloudUnavailable }
+        }
+        guard transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
         try requireDeletionSession(pending: true)
         syncTask?.cancel()
         try requireDeletionSession(pending: true)
-        try purgeDeletedFamily(householdID: householdID)
+        try purgeAllLocalFamilyData(
+            expectedHouseholdID: householdID,
+            retainingUnavailableFamilyReset: UnavailableFamilyRecovery(
+                householdID: householdID,
+                membershipAttemptID: attemptID,
+                claimBinding: deletingLock.claimBinding,
+                ownerAuthorityBinding: deletingLock.ownerAuthorityBinding,
+                reason: .deleted,
+                membershipReleased: true
+            )
+        )
         }
     }
 
@@ -4105,17 +4492,21 @@ final class HouseholdStore {
         requiresMembershipRecovery = false
     }
 
-    private func purgeDeletedFamily(householdID: UUID) throws {
-        guard session.householdID == nil || session.householdID == householdID else {
+    private func purgeAllLocalFamilyData(
+        expectedHouseholdID: UUID,
+        retainingUnavailableFamilyReset completedRecovery: UnavailableFamilyRecovery? = nil
+    ) throws {
+        guard session.householdID == nil || session.householdID == expectedHouseholdID else {
             throw HouseholdError.accountMembershipConflict
         }
-        let showNotice = session.householdID == householdID
-            || session.familyDeletionNoticeState != .acknowledged
         var replacement = DeviceSession()
         replacement.deviceID = session.deviceID
-        replacement.familyDeletionNoticeState = showNotice ? .pending : .acknowledged
+        replacement.completedUnavailableFamilyRecovery = completedRecovery
         syncTask?.cancel()
-        try repository.purgeHouseholdData(householdID: householdID, replacementSession: replacement)
+        invitationCleanupTail?.cancel()
+        ShareAcceptance.shared.pending = nil
+        try localDataResetter.clearNonJournalData()
+        try repository.purgeAllHouseholdData(replacementSession: replacement)
         session = replacement
         facts = []
         rejectedChanges = [:]
@@ -4126,6 +4517,9 @@ final class HouseholdStore {
         cloudIsReadOnly = false
         isCheckingAccountMembership = false
         requiresMembershipRecovery = false
+        canReleaseStaleOwnerMembership = false
+        staleOwnerMembershipReleaseCandidate = nil
+        errorMessage = nil
     }
 
     private func requireWriteAccess() throws {

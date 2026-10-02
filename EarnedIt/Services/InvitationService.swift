@@ -93,6 +93,10 @@ enum AccountMembershipBinding {
         digest("family-lifecycle|\(householdID.uuidString)")
     }
 
+    static func membershipRevocationRecordName(householdID: UUID, claimBinding: String) -> String {
+        digest("membership-revocation|\(householdID.uuidString)|\(claimBinding)")
+    }
+
     private static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }

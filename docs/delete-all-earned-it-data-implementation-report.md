@@ -2,7 +2,7 @@
 
 ## Outcome
 
-`Delete All Earned It Data` is a permanent, account-wide destructive escape hatch for owners, invited parents, children, connected installations, recovery states, profile selection, and Welcome. Settings and recovery UI call the same `AccountDataResetCoordinator`. The action uses one confirmation:
+Normal Settings now exposes one destructive action, `Delete All Data`, only to the creating parent. It uses the focused family lifecycle, removes the shared family for every participant, and returns the initiating installation to Welcome. The account-wide `Delete All Earned It Data` coordinator remains an emergency recovery boundary for unreadable startup data and selected membership-recovery states. It is not an alternative destructive action in normal Settings.
 
 > Delete All Earned It Data? This permanently deletes your Earned It family data, membership, invitations, and local app data from iCloud and this device. This cannot be undone.
 
@@ -12,13 +12,12 @@ The invitation diagnostics button remains in place. Invitation creation behavior
 
 ### Owner account
 
-The coordinator enumerates every custom zone in the current account's private CloudKit database. It deletes a zone only when its name is exactly `EarnedIt-<UUID>`. Deleting the zone removes every household fact, temporary record, zone-wide `CKShare`, invitation metadata, and participant entry in that zone. The coordinator does not depend on the household cached on this device, so stale zones for multiple old households are included.
+The coordinator enumerates every custom zone in the current account's private CloudKit database. It processes a zone only when its name is exactly `EarnedIt-<UUID>`. Each owned zone is taken through the creator-authenticated family lifecycle transition before deletion. Deleting the zone removes every household fact, temporary record, zone-wide `CKShare`, invitation metadata, and participant entry in that zone. The resulting `deleted` lifecycle authority remains as the minimal anti-resurrection tombstone. The coordinator does not depend on the household cached on this device, so stale zones for multiple old households are included.
 
 It also deletes:
 
 - the exact `AccountMembershipLock/current-membership` record after verifying its type;
 - all `AccountMembershipValidationTime` and defensive `_defaultZone` `InvitationValidationTime` matches;
-- every `FamilyLifecycleAuthority` whose CloudKit creator is the current participant and that the current account is authorized to delete;
 - all current and historical local persistence described in the historical inventory.
 
 Malformed `EarnedIt-` names and unrelated private zones are never guessed or deleted.
@@ -32,8 +31,8 @@ CloudKit does not give a participant authority to delete the owner's private zon
 ## Phases, durability, and atomicity
 
 1. **Bind identity.** The coordinator reads the current CloudKit participant and account-generation value. It atomically persists an `AccountDataResetProgress` receipt in `account-data-reset-v1.json` beside the active store before any cloud mutation. The receipt binds the operation to the exact participant and is mirrored into the SwiftData session when that store is readable.
-2. **Discover.** It rechecks participant and generation, enumerates exact owner and shared zones, queries the historical private-record allow-list, and queries public lifecycle records by creator. The deterministically ordered target plan is persisted.
-3. **Delete and checkpoint.** Targets are processed in order: owned zones, shared participation, public records, then private records. After each successful deletion, the target is removed from the persisted plan. Exact record or zone not-found is success. Record type and public creator are checked before individual deletion.
+2. **Discover.** It rechecks participant and generation, enumerates exact owner and shared zones, and queries the historical private-record allow-list. The deterministically ordered target plan is persisted. Public lifecycle authorities are not deletion targets.
+3. **Delete and checkpoint.** Targets are processed in order: owned zones, shared participation, then private records. Each owned zone receives a durable `deleted` lifecycle authority before completion. After each successful deletion, the target is removed from the persisted plan. Exact record or zone not-found is success. Persisted public-record targets from an older receipt are completed without deleting the tombstone.
 4. **Verify absence.** The coordinator repeats full discovery after the target plan is exhausted. It cannot report success while a target remains. Up to four verification passes bound eventual-consistency retries. A still-visible target or a real CloudKit error leaves the receipt and remaining targets intact and surfaces a retryable error.
 5. **Clear nonjournal local state.** Only after an empty cloud discovery pass does the app remove obsolete historical stores and sidecars, app cache contents, the app's UserDefaults domain, and in-memory diagnostic receipts.
 6. **Replace the active journal.** When SwiftData is readable, the repository verifies its receipt mirror, saves and releases the active container, checkpoints SQLite, removes the WAL, SHM, support artifacts, and `shared-household-v1.store`, then opens a clean replacement containing only a new empty `DeviceSession`. When startup cannot open SwiftData, the same coordinator removes those exact artifacts directly after cloud verification. In both paths, `account-data-reset-v1.json` remains authoritative through store removal and is removed last. A process exit or local cleanup failure therefore leaves a resumable receipt.
@@ -45,32 +44,31 @@ If the app terminates or a deletion fails, startup reads the independent receipt
 
 ## No-resurrection behavior
 
-Owned zones are deleted before lifecycle and private lock records. An interruption therefore leaves conservative evidence that blocks ordinary recovery until reset resumes. On full completion, no obsolete lock, lifecycle record, local invitation continuation, recovery receipt, or journal remains to reconstruct active membership.
+Owned zones are finalized as deleted before private lock records are removed. An interruption therefore leaves conservative evidence that blocks ordinary recovery until reset resumes. On full completion, no obsolete lock, local invitation continuation, recovery receipt, or journal remains to reconstruct active membership. The lifecycle tombstone remains so stale devices and invitations cannot treat zone absence as a new bootstrap opportunity.
 
-A stale offline installation can retain an old local journal, but it cannot recreate a deleted custom zone. Synchronization fetches the existing zone before upload, and missing zone access is persisted as `familyAccessLost` during either startup reconciliation or synchronization. The relaunched participant therefore reaches the recovery screen with `Try Reconnecting` and the explicit destructive action regardless of debounced-sync ordering. Reset then removes that participant account's private membership and shared access before clearing the stale local journal.
+A stale offline installation can retain an old local journal, but it cannot recreate a deleted custom zone. Synchronization fetches the existing zone before upload. Only creator-authenticated `deleted` authority, exact zone absence, stable account identity, and the unchanged membership generation establish `Family No Longer Available`. The app conditionally releases that exact lock and waits for the participant to confirm `Reset App`. Reset clears obsolete local family data and bindings while retaining only a completed generation receipt, then returns to Welcome. The receipt prevents the old released lock from trapping the installation again without blocking a new family or invitation generation. Missing access, offline state, permission failure, delayed sync, and transient validation failures remain reconnect states and never trigger this reset route.
 
 An interrupted owner connection is also fail closed. The app persists a new attempt identifier plus household and participant bootstrap provenance before the first membership-lock or other cloud write. Every retry without a committed cloud location requires the exact provisional `AccountMembershipLock` for that account, household, and attempt. If another installation completed account-wide reset and removed that evidence, startup enters recovery and explicit connection is rejected before any lock, zone, lifecycle authority, or journal upload can be recreated. A fresh invitation acceptance remains a separate bootstrap path.
 
 ## UI and accessibility
 
-- Settings contains the same destructive action for owner parents, invited parents, children, unselected profiles, and a clean Welcome installation.
+- Settings contains one destructive family action, `Delete All Data`, for the creating parent. The confirmation states that deletion is permanent and affects the entire family.
 - The pending Apple invitation-verification route is scrollable and retains the same destructive action.
 - The startup-error route retains retry and the same confirmed destructive action even when SwiftData cannot open.
-- Recovery screens always retain `Try Reconnecting` and add `Delete All Earned It Data`. A reconnect failure never starts reset automatically.
+- The authoritative deleted-or-revoked route explains that the family is no longer available and offers a confirmed `Reset App` action. Transient access-loss routes retain only reconnect actions.
 - A pending reset has a dedicated progress route. It retries on launch and offers `Retry Deletion` after an error.
 - The confirmation is one system alert with a destructive button and Cancel. There is no phrase entry or second confirmation.
 - Stable accessibility identifiers cover the destructive action, retry action, recovery actions, and progress route.
 - Automatic membership reconciliation is owned by the store. Explicit retry or reset cancels and awaits that task before starting the selected operation, preserving one cloud mutation at a time.
 - Delayed synchronization clears inherited cloud-mutation task context before waiting, so an invitation operation cannot leave a stale exclusive token in its scheduled follow-up.
-- The creator-only `Delete Family and Cloud Data` flow and stale-owner `Release My Membership` flow remain available beside the account-wide escape hatch.
-- Child navigation exposes Settings and the account-wide reset without exposing the parent-only local disconnect control.
+- The former local reset, disconnect, separate family-delete, and account-wide actions are absent from normal Settings.
 
 ## CloudKit safety properties
 
 - Every operation is scoped to `iCloud.com.jlm429.EarnedIt` through the existing transport.
 - Private record operations run only in the currently authenticated account's databases.
 - Owner zone selection requires both the exact prefix and a valid UUID suffix.
-- Public deletion verifies the exact known record type and current participant creator.
+- Public lifecycle authorities are retained as generation-scoped anti-resurrection tombstones.
 - Shared deletion uses only zones CloudKit exposes to the current participant.
 - Participant identity and account generation are revalidated after suspended identity work and immediately before every destructive mutation.
 - No code resets a CloudKit environment, modifies a schema, deploys a schema, or enumerates unrelated containers.
@@ -95,14 +93,12 @@ In Apple's CloudKit Console for `iCloud.com.jlm429.EarnedIt`:
 1. Select the Development environment and open Schema, Record Types.
 2. Verify `FamilyLifecycleAuthority` exists with `formatVersion` of type Int64 and `state` of type String.
 3. Configure public-database security so authenticated iCloud users can read and create, the record creator can read and write, and world access is disabled. This lets invited participants validate lifecycle state while only the creator can change or delete it.
-4. Ensure the system creator field is queryable. The reset enumerates the current account's lifecycle records by `creatorUserRecordID`. Keep record-name lookup available for deterministic direct fetches. No app-field query index is required by current code.
+4. Keep deterministic record-name lookup available. The app does not query lifecycle records during account cleanup, so no app-field query index is required by current code.
 5. Review all pending Development schema changes. Use the CloudKit Console deployment workflow to deploy the approved schema changes to Production. Do not create a one-off Production data record as a substitute for schema deployment.
-6. Switch the console to Production and confirm `FamilyLifecycleAuthority`, both fields, the creator query index, and the security roles are present.
+6. Switch the console to Production and confirm `FamilyLifecycleAuthority`, both fields, and the security roles are present.
 7. Retry invitation creation on a clean signed owner device and confirm the trace advances past lifecycle authority preparation to share and participant creation.
 
 Apple documents schema inspection and editing at [Inspecting and editing an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/inspecting-and-editing-an-icloud-container-s-schema) and deployment at [Deploying an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/deploying-an-icloud-container-s-schema).
-
-The reset's creator query also depends on the Production query index in step 4. Until the deployed schema supports that query, a real cloud reset may fail and retain its local reset receipt. That is intentional. The app must not report complete cleanup after a partial cloud operation.
 
 ## Focused executable coverage
 
@@ -110,7 +106,7 @@ The reset's creator query also depends on the Production query index in step 4. 
 
 | Requirement | Executable coverage |
 | --- | --- |
-| Clean owner reset | Connected owner zone, lock, facts, lifecycle authority, and local state are removed. |
+| Clean owner reset | Connected owner zone, lock, facts, and local state are removed while lifecycle authority remains `deleted`. |
 | Multiple stale owner zones | Multiple exact UUID zones are deleted while malformed and unrelated zones remain. |
 | Participant or child reset | Private lock and shared participation are removed without deleting the owner zone, owner lock, or lifecycle record. |
 | Lock forms | Provisional, active, and released `current-membership` records are each deleted. |
@@ -123,30 +119,29 @@ The reset's creator query also depends on the Production query index in step 4. 
 | Recovery invocation | The recovery UI confirms the action through an injected non-Production cloud boundary, reaches Welcome, and remains there after relaunch. |
 | Recovery operation ownership | Reset cancels and awaits an active automatic membership reconciliation before deleting. |
 | Account change | Participant or generation changes fail closed and retain the reset receipt, including a generation change while participant lookup is suspended before zone deletion. |
-| No resurrection and orphan sequence | A connected parent deletes while the child is offline; a newly opened persistent child store enters recovery without recreating the zone; child resets; Welcome survives another store reopen; child accepts a fresh invitation into a new family. |
+| No resurrection and orphan sequence | A connected parent deletes while the child is offline; a newly opened persistent child store receives authenticated deleted-generation recovery without recreating the zone; child resets; Welcome survives another store reopen; child accepts a fresh invitation into a new family. |
 | Interrupted owner bootstrap | The local attempt and provenance are durable before remote lock mutation. A crash after server submission, followed by another installation's reset, cannot recreate the lock, zone, lifecycle authority, or stale journal. |
 | Unreadable startup store | A file-backed receipt survives failed SwiftData startup, retains cloud progress after an offline failure, resumes through the same coordinator, and is removed only after store cleanup. |
 | Historical local artifacts | Known historical and active store files, sidecars, support directories, cache contents, and the bundle preference domain are removed through the managed store lifecycle. |
 
-The focused recovery UI flows verify that reconnect and reset remain scroll-reachable during automatic recovery, missing-family recovery, and unreadable-store startup, that stale-owner release remains available, that the exact reset confirmation is accessible at large Dynamic Type, and that resets launched from Welcome Settings or startup failure visibly return to Welcome. Real signed two-account CloudKit behavior still requires the device procedure below.
+The focused recovery UI flows verify that transient access loss remains a reconnect-only state, authoritative deleted-family recovery exposes a confirmed Reset App action at large Dynamic Type, and unreadable-store startup retains its emergency recovery path. Real signed two-account CloudKit behavior still requires the device procedure below.
 
 ## Real-device captain procedure
 
 Complete the Production schema check and deployment above before using the new reset in Production.
 
-1. Reset each account independently through `Delete All Earned It Data`, wait for completion, delete and reinstall Earned It, and launch online. Confirm Welcome appears. Relaunch each device and confirm Welcome remains.
-2. On a clean parent account, create a new family. Reset the child account, send a new invitation, accept it on the child, and confirm normal two-way sync.
+1. On the creating parent's device, use Settings, `Delete All Data`, and wait for completion. Confirm Welcome appears and remains after relaunch.
+2. Bring an existing child device online. Confirm `Family No Longer Available`, choose `Reset App`, and confirm Welcome remains after relaunch.
+3. On a clean parent account, create a new family, send a new invitation, accept it on the reset child, and confirm normal two-way sync.
 
-For the orphan sequence, keep the child offline while the old parent resets. Bring the child online, confirm reconnect cannot restore the deleted family and both recovery actions are offered, choose the explicit destructive action, then perform the child portion of steps 1 and 2.
+For the orphan sequence, keep the child offline while the old parent deletes the family. Bring the child online, confirm it receives the authoritative unavailable-family state, choose Reset App, then perform steps 2 and 3. Separately simulate temporary iCloud unavailability and confirm it offers reconnect but never Reset App.
 
 ## Verification record
 
-Validation used one explicitly booted iPhone 17e simulator with parallel testing disabled:
+Validation used an iPhone 17 Pro simulator and an iPad Pro 13-inch simulator:
 
-- `AccountDataResetTests`: 18 tests passed, including owner, participant, interruption, offline retry, suspended identity changes, mutation exclusion, active-store ordering, unreadable startup recovery, historical local artifacts, persistent child relaunch, server-first owner bootstrap interruption, and the full orphan sequence.
-- `InvitationTests`: the focused delayed-sync regression passed without inheriting a completed invitation mutation token.
-- Focused recovery UI flows: 3 tests passed, verifying recovery-progress actions, missing-family actions, stale-owner release, Welcome Settings dismissal, unreadable-store startup reset, and the exact destructive confirmation at an accessibility text size.
-- Complete `EarnedItCI` suite: 306 tests passed with 0 failures.
-- Release simulator build: succeeded. Release device-family metadata, build-number semantics, and App Store profile entitlement semantics all passed their repository validation scripts.
+- Complete `EarnedItTests` suite: 357 tests passed with 0 failures. Coverage includes owner deletion, offline child recovery, stale invitations, exact revocation authority, transient CloudKit failures, child Reset App, clean relaunch, and subsequent create or join behavior.
+- Focused native iPad UI: the Settings Delete All Data flow and the authoritative Family No Longer Available flow passed at accessibility text size. Both exercised landscape layout, confirmation, return to Welcome, and relaunch persistence.
+- Release iPad simulator build: succeeded. Its app metadata declares device families 1 and 2. Release device-family metadata, build-number semantics, and App Store profile entitlement semantics passed their repository validation scripts.
 
 No signed two-account Production deletion was run. The captain will perform the first real account cleanup only through the completed UI. The no-mistakes delivery report will be added when Firstmate requests the shipping gate.

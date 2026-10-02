@@ -114,6 +114,10 @@ struct EarnedItApp: App {
                 try initialStore.prepareFamilyAccessLostUITest()
             }
             if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-unavailable-family") {
+                try initialStore.prepareUnavailableFamilyRecoveryUITest()
+            }
+            if !readOnlyPreflight && isUITest
                 && arguments.contains("--ui-test-invitation-actions") {
                 try initialStore.prepareInvitationActionsUITest(
                     isOwner: !arguments.contains("--ui-test-non-owner-invitation-actions")

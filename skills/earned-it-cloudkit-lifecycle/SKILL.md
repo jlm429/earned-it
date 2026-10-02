@@ -19,7 +19,7 @@ Start with the current default branch and the authoritative implementation and d
 - Never infer permission to reset, delete, recreate, or repair live CloudKit data. A diagnostic reset or nuke path is not a product recovery design and must not ship without explicit product authorization.
 - Never deploy or mutate CloudKit schema from agent work. Compare the repository contract with the human-managed environment and report any mismatch.
 - Preserve exact household, membership-lock attempt, participant, invitation, member, role, and account-generation bindings. Missing, malformed, ambiguous, or foreign authority fails closed.
-- Account-wide reset must query lifecycle creator metadata using both the resolved current-user record ID and the exact current-user sentinel, then apply the same sentinel-shape and owner-binding validation before discovery and deletion.
+- Follow `docs/family-lifecycle-authority.md` for account-wide reset. It owns the required lifecycle transitions, tombstone retention, and legacy reset-target handling.
 
 ## Invitation review
 

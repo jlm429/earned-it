@@ -9,7 +9,7 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 - [ ] Confirm the app icon artwork is owned or licensed for commercial use. The repository contains no provenance or license record for the artwork.
 - [ ] Confirm that system-rendered emoji avatars are acceptable in the shipping app and screenshots under current Apple review and artwork rules, or approve a separate owned-art replacement before release.
 - [ ] Replace or approve the current icon treatment before submission. It is a valid opaque 1024 by 1024 PNG, but the artwork includes its own rounded tile and white corners before iOS applies the system mask.
-- [ ] Capture at least one accurate App Store screenshot from the release candidate at an accepted iPhone size. The tracked `assets/earned-it-preview.png` is stale, shows an older interface and icon, says iOS 17+, and incorrectly says data stays only on device.
+- [ ] Capture accurate App Store screenshots from the release candidate at accepted iPhone and iPad sizes. The tracked `assets/earned-it-preview.png` is stale, shows an older interface and icon, says iOS 17+, and incorrectly says data stays only on device.
 - [ ] Complete a signed release-candidate pass on physical devices with two separate iCloud accounts. Cover owner creation, parent and child invitations, cold and warm acceptance, QR and link delivery, completion sync, relaunch, recovery, read-only behavior, and revocation.
 - [ ] Confirm the production CloudKit schema contains every record type and field used by `CloudKitHouseholdTransport.swift`. Existing reports say a production schema was deployed and used by TestFlight, but this repository audit cannot inspect the live container.
 - [ ] Create and verify the public `FamilyLifecycleAuthority` type in Development exactly as documented in [family-lifecycle-authority.md](../family-lifecycle-authority.md), complete signed two-account deletion safety checks, then have an authorized human promote that schema to Production. Do not distribute this change before the type and creator-only write rule are confirmed.
@@ -38,7 +38,7 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 
 ## Already complete
 
-- [x] Native iPhone target with iOS 18.0 minimum deployment and iPhone-only device family.
+- [x] Native iPhone and iPad target with iOS 18.0 minimum deployment and both device families enabled.
 - [x] Marketing version 1.0 and a CI build-number strategy based on GitHub run number and attempt.
 - [x] Release builds select the Production iCloud environment. Debug builds select Development.
 - [x] Explicit iCloud, CloudKit, sharing, custom invitation URL, and one-time-link entitlement configuration.
@@ -49,7 +49,7 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 - [x] No location, contacts, photos, microphone, notifications, health, Bluetooth, or other protected-data permission in source or configuration.
 - [x] UI-test store, reset arguments, synthetic invitations, dark-mode control, and weekly fixture are guarded by `DEBUG`; the weekly fixture file is also compile-gated.
 - [x] Production store creation does not seed sample data.
-- [x] Local deletion and shared-device disconnect require confirmation. Disconnect leaves other devices and iCloud data intact and blocks while ordinary changes are pending.
+- [x] Settings exposes one confirmed Delete All Data action to the creating parent. Authoritatively deleted or revoked participant installations expose a separate confirmed local Reset App recovery action.
 - [x] No application logging calls were found that expose family names, chore content, invitation URLs, or invitation codes.
 - [x] App Store upload workflow manually signs with supplied distribution assets, validates the certificate and profile before archiving, reserves temporary API-key material for upload, cleans temporary release material on exit, and overrides the build number without committing signing credentials.
 - [x] App Store profile validation accepts scalar or flat string allowlists, recognizes the CloudKit service wildcard, and fails closed unless the profile authorizes Production iCloud, the Earned It container, CloudKit, and `InProcessOneTimeLinks`.

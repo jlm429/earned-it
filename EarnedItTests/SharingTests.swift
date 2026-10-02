@@ -722,32 +722,29 @@ final class SharingTests: XCTestCase {
         XCTAssertEqual(HouseholdSnapshot(facts: remoteFacts), family.store.snapshot)
     }
 
-    func testSuspendedConnectionCannotAttachAfterResetAndNewFamily() async throws {
-        for createReplacement in [false, true] {
-            let server = TestCloudServer()
-            let transport = TestTransport(server: server, account: "owner")
-            let family = try TestFamily(transport: transport)
-            let suspended = expectation(description: "Zone creation suspended")
-            var resume: CheckedContinuation<Void, Never>?
-            transport.beforeCreateZone = {
-                await withCheckedContinuation { continuation in
-                    resume = continuation
-                    suspended.fulfill()
-                }
+    func testSuspendedConnectionBlocksLocalResetUntilConnectionCompletes() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        let suspended = expectation(description: "Zone creation suspended")
+        var resume: CheckedContinuation<Void, Never>?
+        transport.beforeCreateZone = {
+            await withCheckedContinuation { continuation in
+                resume = continuation
+                suspended.fulfill()
             }
-            let connection = Task { try await family.store.connect() }
-            await fulfillment(of: [suspended], timeout: 5)
-            try family.store.resetLocalData()
-            if createReplacement { try family.store.createFamily(name: "Replacement", parentName: "New Parent") }
-            let expectedSession = family.store.session
-            resume?.resume()
-            do { try await connection.value; XCTFail("Stale connection must fail") }
-            catch { XCTAssertEqual(error as? HouseholdError, .noHousehold) }
-            XCTAssertEqual(family.store.session, expectedSession)
-            XCTAssertNil(family.store.session.location)
-            XCTAssertTrue(transport.uploadedIDs.isEmpty)
-            XCTAssertEqual(family.store.household?.name, createReplacement ? "Replacement" : nil)
         }
+        let connection = Task { try await family.store.connect() }
+        await fulfillment(of: [suspended], timeout: 5)
+
+        XCTAssertThrowsError(try family.store.resetLocalData()) {
+            XCTAssertEqual($0 as? HouseholdError, .pendingChanges)
+        }
+        resume?.resume()
+        try await connection.value
+
+        XCTAssertNotNil(family.store.session.location)
+        XCTAssertEqual(family.store.household?.name, "Test Family")
     }
 
     func testApprovedParentCanDisconnectFromReadOnlyShare() async throws {

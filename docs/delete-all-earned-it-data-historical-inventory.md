@@ -77,13 +77,7 @@ Deleting an owned custom zone is the authoritative cleanup for every record in i
 
 ## Public database
 
-`FamilyLifecycleAuthority` is the only public Earned It record type found in history. It was introduced at `e40ac06`.
-
-- The record name is `SHA256("family-lifecycle|<household UUID>")`.
-- App fields are `formatVersion` as Int64 and `state` as String.
-- Recognized states are `active`, `deleting`, and `deleted`.
-- CloudKit system fields identify the creator and last modifier. The app binds those identities to the owner account through an opaque digest.
-- The record is fetched directly for normal lifecycle validation. Account-wide reset queries records whose `creatorUserRecordID` is the current participant and verifies the creator again before deletion.
+`FamilyLifecycleAuthority` is the only public Earned It record type found in history. It was introduced at `e40ac06`. The authoritative record identities, fields, states, creator checks, and deletion transitions are in `docs/family-lifecycle-authority.md`. Account-wide reset retains these lifecycle records as anti-resurrection tombstones. Persisted public-record targets from an older reset receipt are treated as complete without deleting the record.
 
 No other historical public record type was found. Invitation codes, invitations, member identities, household facts, account locks, validation records, and recovery receipts were never stored in the public database.
 
@@ -124,7 +118,7 @@ Unit tests have also created temporary `shared-household.store`, `household-test
 - membership-lock attempt and claim binding;
 - owner connection bootstrap household, attempt, and participant provenance persisted before the first cloud write;
 - `LastJoinReceipt` recovery and refusal evidence;
-- family-access-lost, pending family deletion, and family-deletion notice state;
+- family-access-lost, pending family deletion, family-deletion notice state, and exact unavailable-family recovery and completed-generation receipts;
 - a mirror of the durable account-reset participant binding, remaining target list, and verification progress when SwiftData is readable.
 
 Other local state includes in-memory household projections, cached profiles, rejected writes, sync status, recovery flags, pending tasks, and invitation diagnostics. `FamilyTransitionDiagnostics` holds an in-memory event buffer and latest sanitized trace. It also writes allow-listed comparison results to Apple's unified logging system. Reset clears the in-process buffer. iOS owns unified log retention, and an app sandbox has no supported API to delete selected historical unified-log entries.

@@ -82,33 +82,6 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         } catch let error as CKError where Self.isRecordMissing(error, recordID: membershipRecordID) {
         }
 
-        var publicRecords: [CKRecord] = []
-        for creatorRecordID in Self.accountResetLifecycleAuthorityCreatorRecordIDs(
-            expectedCurrentUserRecordName: expectedParticipantID
-        ) {
-            let creator = CKRecord.Reference(recordID: creatorRecordID, action: .none)
-            publicRecords += try await resetRecords(
-                recordType: familyLifecycleRecordType,
-                predicate: NSPredicate(
-                    format: "%K == %@",
-                    CKRecord.SystemFieldKey.creatorUserRecordID,
-                    creator
-                ),
-                database: container.publicCloudDatabase,
-                zoneID: .default
-            )
-            try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
-        }
-        targets += publicRecords.compactMap { record in
-            guard Self.accountResetLifecycleAuthorityCreatorMatches(
-                record.creatorUserRecordID,
-                expectedCurrentUserRecordName: expectedParticipantID
-            ) else { return nil }
-            return .publicRecord(
-                recordType: familyLifecycleRecordType,
-                recordName: record.recordID.recordName
-            )
-        }
         try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
         return CloudAccountResetTarget.ordered(targets)
     }
@@ -122,13 +95,22 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         switch target {
         case .ownedZone(let zone):
             let zoneID = CKRecordZone.ID(zoneName: zone.zoneName, ownerName: zone.ownerName)
-            guard isEarnedItZone(zoneID) else { throw HouseholdError.permission }
-            do {
-                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
-                _ = try await container.privateCloudDatabase.deleteRecordZone(withID: zoneID)
-            } catch let error as CKError where [.unknownItem, .zoneNotFound, .userDeletedZone].contains(error.code) {
-                break
+            guard let location = location(zoneID: zoneID, isOwner: true) else {
+                throw HouseholdError.permission
             }
+            _ = try await ensureFamilyLifecycleAuthority(
+                householdID: location.householdID,
+                expectedParticipantID: expectedParticipantID
+            )
+            try await beginFamilyDeletion(
+                householdID: location.householdID,
+                expectedParticipantID: expectedParticipantID
+            )
+            try await deleteFamilyData(at: location, expectedParticipantID: expectedParticipantID)
+            try await finalizeFamilyDeletion(
+                householdID: location.householdID,
+                expectedParticipantID: expectedParticipantID
+            )
         case .sharedParticipation(let zone):
             let zoneID = CKRecordZone.ID(zoneName: zone.zoneName, ownerName: zone.ownerName)
             guard isEarnedItZone(zoneID) else { throw HouseholdError.permission }
@@ -154,21 +136,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             }
         case .publicRecord(let recordType, let recordName):
             guard recordType == familyLifecycleRecordType else { throw HouseholdError.permission }
-            let recordID = CKRecord.ID(recordName: recordName, zoneID: .default)
-            do {
-                let record = try await container.publicCloudDatabase.record(for: recordID)
-                guard record.recordType == recordType,
-                      Self.accountResetLifecycleAuthorityCreatorMatches(
-                          record.creatorUserRecordID,
-                          expectedCurrentUserRecordName: expectedParticipantID
-                      ) else {
-                    throw HouseholdError.permission
-                }
-                try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
-                _ = try await container.publicCloudDatabase.deleteRecord(withID: recordID)
-            } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
-                break
-            }
+            guard !recordName.isEmpty else { throw HouseholdError.permission }
+            // Older reset receipts may still name lifecycle records. They are permanent
+            // generation tombstones and must survive local or account-wide cleanup.
+            break
         }
         try await requireAccount(expectedParticipantID, generation: expectedAccountGeneration)
     }
@@ -399,6 +370,10 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         case .confirmedFamilyDeletion:
             guard expectedLock.state == .active else { return false }
             releaseTime = clientTime
+        case .confirmedMembershipRevocation:
+            guard expectedLock.state == .active,
+                  expectedLock.claimBinding?.isEmpty == false else { return false }
+            releaseTime = clientTime
         case .ownerSelfRelease:
             let ownerAuthority = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
             guard expectedLock.state == .active,
@@ -409,7 +384,9 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     || expectedLock.ownerAuthorityBinding == ownerAuthority else { return false }
             releaseTime = clientTime
         }
-        guard try await membershipLocation(householdID: expectedLock.householdID) == nil else { return false }
+        if reason != .confirmedMembershipRevocation {
+            guard try await membershipLocation(householdID: expectedLock.householdID) == nil else { return false }
+        }
         try await requireAccount(expectedParticipantID, generation: expectedGeneration)
         do {
             let result = try await updateAccountMembershipLock(
@@ -645,6 +622,51 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
             familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck, outcome: .failed,
                                                 householdID: householdID, error: error)
             throw error
+        }
+    }
+
+    func publishMembershipRevocation(
+        householdID: UUID,
+        claimBinding: String,
+        expectedParticipantID: String
+    ) async throws {
+        guard !claimBinding.isEmpty else { throw HouseholdError.accountMembershipConflict }
+        _ = try await updateFamilyLifecycleAuthority(
+            householdID: householdID,
+            recordID: membershipRevocationRecordID(
+                householdID: householdID,
+                claimBinding: claimBinding
+            ),
+            expectedParticipantID: expectedParticipantID,
+            stage: .lifecycleDeletionPublish
+        ) { existing in
+            switch existing {
+            case .deleted: return .deleted
+            case .active, .deleting, nil: return .deleted
+            }
+        }
+    }
+
+    func membershipRevocationIsAuthoritative(
+        householdID: UUID,
+        claimBinding: String,
+        ownerAuthorityBinding: String,
+        expectedParticipantID: String
+    ) async throws -> Bool {
+        guard !claimBinding.isEmpty else { return false }
+        let recordID = membershipRevocationRecordID(
+            householdID: householdID,
+            claimBinding: claimBinding
+        )
+        do {
+            let record = try await container.publicCloudDatabase.record(for: recordID)
+            return try decodeFamilyLifecycleAuthority(
+                record,
+                ownerAuthorityBinding: ownerAuthorityBinding,
+                expectedCurrentUserRecordName: expectedParticipantID
+            ) == .deleted
+        } catch let error as CKError where Self.isRecordMissing(error, recordID: recordID) {
+            return false
         }
     }
 
@@ -1402,13 +1424,14 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private func updateFamilyLifecycleAuthority(
         householdID: UUID,
+        recordID requestedRecordID: CKRecord.ID? = nil,
         expectedParticipantID: String,
         stage: FamilyTransitionDiagnosticStage,
         transition: (FamilyLifecycleState?) throws -> FamilyLifecycleState
     ) async throws -> FamilyLifecycleState {
         let expectedGeneration = accountGeneration
         let ownerAuthorityBinding = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
-        let recordID = familyLifecycleRecordID(householdID: householdID)
+        let recordID = requestedRecordID ?? familyLifecycleRecordID(householdID: householdID)
         let database = container.publicCloudDatabase
         familyTransitionDiagnostics.record(stage: stage, outcome: .started, householdID: householdID)
         do {
@@ -1761,6 +1784,13 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private func familyLifecycleRecordID(householdID: UUID) -> CKRecord.ID {
         CKRecord.ID(recordName: AccountMembershipBinding.lifecycleRecordName(householdID: householdID))
+    }
+
+    private func membershipRevocationRecordID(householdID: UUID, claimBinding: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: AccountMembershipBinding.membershipRevocationRecordName(
+            householdID: householdID,
+            claimBinding: claimBinding
+        ))
     }
 
     private func requireAccount(_ expectedParticipantID: String, generation: UInt64) async throws {

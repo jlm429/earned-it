@@ -49,7 +49,7 @@ final class TestAccountLocalDataResetter: AccountLocalDataResetting {
 
 @MainActor
 final class AccountDataResetTests: XCTestCase {
-    func testResetDeletesLifecycleAuthorityWithExactCurrentUserSentinelCreator() async throws {
+    func testResetPreservesLifecycleAuthorityWithExactCurrentUserSentinelCreator() async throws {
         let server = TestCloudServer()
         let transport = TestTransport(server: server, account: "owner")
         let store = try HouseholdStore(
@@ -85,7 +85,7 @@ final class AccountDataResetTests: XCTestCase {
 
         try await store.deleteAllEarnedItData()
 
-        XCTAssertNil(server.lifecycleAuthorities[ownedHouseholdID])
+        XCTAssertNotNil(server.lifecycleAuthorities[ownedHouseholdID])
         XCTAssertNotNil(server.lifecycleAuthorities[malformedHouseholdID])
         XCTAssertNil(store.session.accountDataResetProgress)
     }
@@ -139,7 +139,8 @@ final class AccountDataResetTests: XCTestCase {
         XCTAssertNil(store.session.accountDataResetProgress)
         XCTAssertTrue(try repository.facts(householdID: householdID).isEmpty)
         XCTAssertNil(server.accountMembershipLocks["owner"])
-        XCTAssertTrue(server.lifecycleAuthorities.values.allSatisfy { $0.creator != "owner" })
+        XCTAssertEqual(server.lifecycleAuthorities[householdID]?.state, .deleted)
+        XCTAssertTrue(staleIDs.allSatisfy { server.lifecycleAuthorities[$0]?.state == .deleted })
         XCTAssertTrue(server.privateAccountResetRecords["owner", default: []].isEmpty)
         XCTAssertNil(server.zones["EarnedIt-\(householdID.uuidString)"])
         XCTAssertNil(server.zones["EarnedIt-\(staleIDs[0].uuidString)"])
@@ -494,22 +495,22 @@ final class AccountDataResetTests: XCTestCase {
         try await parent.deleteAllEarnedItData()
         XCTAssertNil(server.accountMembershipLocks["old-owner"])
         XCTAssertNotNil(server.accountMembershipLocks["child"])
+        XCTAssertEqual(server.lifecycleAuthorities[oldHouseholdID]?.state, .deleted)
 
         do {
             let relaunchedChild = try makeChildStore()
             try await relaunchedChild.reconcileAccountMembershipLock()
-            XCTAssertTrue(relaunchedChild.familyAccessLost)
+            XCTAssertFalse(relaunchedChild.familyAccessLost)
+            XCTAssertTrue(relaunchedChild.hasUnavailableFamilyRecovery)
+            XCTAssertEqual(relaunchedChild.unavailableFamilyReason, .deleted)
             XCTAssertEqual(relaunchedChild.household?.id, oldHouseholdID)
             XCTAssertNil(server.zones.values.first { $0.householdID == oldHouseholdID })
             XCTAssertNil(server.accountMembershipLocks["old-owner"])
 
-            await XCTAssertThrowsErrorAsync(
-                try await relaunchedChild.synchronize(),
-                expectedCloudKitCode: .zoneNotFound
-            )
-            XCTAssertTrue(relaunchedChild.familyAccessLost)
-            try await relaunchedChild.deleteAllEarnedItData()
-            XCTAssertNil(server.accountMembershipLocks["child"])
+            try await relaunchedChild.synchronize()
+            XCTAssertTrue(relaunchedChild.hasUnavailableFamilyRecovery)
+            try await relaunchedChild.resetUnavailableFamily()
+            XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .released)
             XCTAssertNil(relaunchedChild.household)
         }
 
@@ -517,6 +518,7 @@ final class AccountDataResetTests: XCTestCase {
         try await child.reconcileAccountMembershipLock()
         XCTAssertNil(child.household)
         XCTAssertFalse(child.requiresMembershipRecovery)
+        XCTAssertFalse(child.hasUnavailableFamilyRecovery)
 
         let freshParent = try TestFamily(transport: TestTransport(server: server, account: "new-owner"))
         freshParent.clock.now = .now

@@ -35,11 +35,11 @@ Read the full [privacy policy](docs/app-store/privacy-policy.md) and [privacy au
 
 ## Requirements
 
-- iPhone running iOS 18 or later
+- iPhone or iPad running iOS 18 or later
 - An iCloud account and network connection for sharing between devices
 - Optional camera access for scanning invitation QR codes
 
-A family can also use Earned It locally on one iPhone without enabling sharing.
+A family can also use Earned It locally on one iPhone or iPad without enabling sharing.
 
 ## Development
 

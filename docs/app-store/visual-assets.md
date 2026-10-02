@@ -29,7 +29,7 @@ The file remains as historical artwork so this audit does not delete potentially
 
 ## Required App Store screenshots
 
-Capture screenshots from the signed release candidate with fictional family information. Provide at least one, preferably four or five, at an App Store accepted iPhone size. A current 6.9-inch portrait option is 1260 by 2736, 1290 by 2796, or 1320 by 2868 pixels. Screenshots must not contain alpha.
+Capture screenshots from the signed release candidate with fictional family information. Provide an accurate set at App Store accepted iPhone and iPad sizes. Include portrait and landscape review of the important iPad flows even when the submitted screenshot set uses one orientation. Screenshots must not contain alpha.
 
 Recommended set:
 

@@ -10,7 +10,7 @@ Read the repository sources first:
 
 ## Lifecycle schema and identity
 
-`FamilyLifecycleAuthority` is in the public database. Its application fields are exactly `formatVersion: Int64` and `state: String`. The CloudKit system `creatorUserRecordID` metadata must be queryable because account-wide deletion discovers authorities absent from the device. No application-field query or sort index is required.
+`FamilyLifecycleAuthority` is in the public database. Its application fields are exactly `formatVersion: Int64` and `state: String`. Lifecycle records are fetched by deterministic record ID, so no application-field query or sort index is required.
 
 CloudKit may return creator and modifier metadata as either a stable unique record name or the exact current-user sentinel. A stable unique name is accepted through the retained owner-authority binding, including when a non-owner reader observes owner deletion. The sentinel is accepted only when the current reader derives that same owner binding and its shape is well formed:
 
@@ -20,13 +20,13 @@ CloudKit may return creator and modifier metadata as either a stable unique reco
 
 Validate creator and modifier independently. Reject a missing identity, a unique name with another owner binding, a sentinel read by a non-owner, a sentinel in another zone, or a sentinel with another zone owner.
 
-Account-wide reset queries lifecycle creator metadata under both the resolved current-user record ID and the exact sentinel. Discovery and deletion pass every result through the same sentinel-shape and owner-binding validator, so Production sentinel representation cannot hide an owned authority and a malformed sentinel cannot broaden deletion.
+Account-wide reset does not discover or delete lifecycle records. It takes every owned Earned It zone through the creator-authenticated deletion transition and retains the resulting tombstone. A persisted legacy public-record reset target is completed without deleting that record. See `docs/family-lifecycle-authority.md` for the authoritative contract.
 
 ## Permanent deletion and restart
 
-Permanent Delete Family is creator-only. It persists pending intent, publishes `deleting`, deletes the exact owner zone, publishes `deleted`, conditionally releases the unchanged exact owner membership lock, and then purges only that household locally. Each phase is idempotent. A failure retains enough state to retry and must not report success.
+Permanent `Delete All Data` is creator-only. It persists pending intent, publishes `deleting`, deletes the exact owner zone, publishes `deleted`, conditionally releases the unchanged exact owner membership lock, and then purges only that household locally. Each phase is idempotent. A failure retains enough state to retry and must not report success.
 
-A child may release its lock and purge locally only after creator-authenticated `deleted` authority and exact zone absence. Revocation, access loss, offline state, a missing or malformed authority, or `active` or `deleting` state is not deletion proof.
+A participant may conditionally release its exact lock and enter the unavailable-family route only after creator-authenticated `deleted` authority and exact zone absence, or exact claim-bound revocation proof. Local family data remains until the person confirms `Reset App`. Access loss, offline state, a missing or malformed authority, or `active` or `deleting` state is not deletion proof.
 
 After terminal cleanup, fresh family creation must use new household, zone, lock attempt, and lifecycle identities. Old facts, pending invitation state, locks, or deletion receipts must not attach to the replacement.
 

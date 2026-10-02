@@ -102,6 +102,7 @@ final class TestCloudServer {
     var accountMembershipLocks: [String: AccountMembershipLock] = [:]
     var privateAccountResetRecords: [String: Set<CloudAccountResetTarget>] = [:]
     var lifecycleAuthorities: [UUID: LifecycleAuthority] = [:]
+    var membershipRevocationAuthorities: [String: LifecycleAuthority] = [:]
     var authoritativeTime: Date?
     var createCalls = 0
     var failUploadAfter: Int?
@@ -137,6 +138,8 @@ final class TestTransport: HouseholdTransport {
     var lifecycleBeginFailures = 0
     var lifecycleFinalizeFailures = 0
     var lifecycleStateError: Error?
+    var membershipRevocationPublishError: Error?
+    var membershipRevocationStateError: Error?
     var accountMembershipValidationTimeError: Error?
     var membershipLocationError: Error?
     var preflightAccountLockReadError: Error?
@@ -230,18 +233,6 @@ final class TestTransport: HouseholdTransport {
             ))
         }
         targets += server.privateAccountResetRecords[account] ?? []
-        targets += server.lifecycleAuthorities.compactMap { householdID, authority in
-            let creatorRecordID = authority.creatorRecordID
-                ?? CKRecord.ID(recordName: authority.creator, zoneID: .default)
-            guard CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorMatches(
-                creatorRecordID,
-                expectedCurrentUserRecordName: account
-            ) else { return nil }
-            return .publicRecord(
-                recordType: "FamilyLifecycleAuthority",
-                recordName: AccountMembershipBinding.lifecycleRecordName(householdID: householdID)
-            )
-        }
         guard account == expectedParticipantID,
               accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
         return CloudAccountResetTarget.ordered(targets)
@@ -267,7 +258,22 @@ final class TestTransport: HouseholdTransport {
             if let existing = server.zones[zone.zoneName] {
                 guard existing.owner == expectedParticipantID,
                       existing.owner == zone.ownerName else { throw HouseholdError.permission }
+                let householdID = existing.householdID
+                if let authority = server.lifecycleAuthorities[householdID] {
+                    guard authority.creator == expectedParticipantID,
+                          authority.lastModifier == expectedParticipantID else {
+                        throw HouseholdError.accountMembershipConflict
+                    }
+                } else {
+                    server.lifecycleAuthorities[householdID] = .init(
+                        state: .active,
+                        creator: expectedParticipantID,
+                        lastModifier: expectedParticipantID
+                    )
+                }
+                server.lifecycleAuthorities[householdID]?.state = .deleting
                 server.zones.removeValue(forKey: zone.zoneName)
+                server.lifecycleAuthorities[householdID]?.state = .deleted
             }
         case .sharedParticipation(let zone):
             guard Self.isEarnedItZoneName(zone.zoneName) else { throw HouseholdError.permission }
@@ -291,17 +297,7 @@ final class TestTransport: HouseholdTransport {
             server.privateAccountResetRecords[expectedParticipantID]?.remove(target)
         case .publicRecord(let recordType, let recordName):
             guard recordType == "FamilyLifecycleAuthority" else { throw HouseholdError.permission }
-            if let match = server.lifecycleAuthorities.first(where: {
-                AccountMembershipBinding.lifecycleRecordName(householdID: $0.key) == recordName
-            }) {
-                let creatorRecordID = match.value.creatorRecordID
-                    ?? CKRecord.ID(recordName: match.value.creator, zoneID: .default)
-                guard CloudKitHouseholdTransport.accountResetLifecycleAuthorityCreatorMatches(
-                    creatorRecordID,
-                    expectedCurrentUserRecordName: expectedParticipantID
-                ) else { throw HouseholdError.permission }
-                server.lifecycleAuthorities.removeValue(forKey: match.key)
-            }
+            guard !recordName.isEmpty else { throw HouseholdError.permission }
         }
         await afterAccountResetDeletion?()
         guard account == expectedParticipantID,
@@ -544,6 +540,10 @@ final class TestTransport: HouseholdTransport {
         case .confirmedFamilyDeletion:
             guard expectedLock.state == .active else { return false }
             releaseTime = clientTime
+        case .confirmedMembershipRevocation:
+            guard expectedLock.state == .active,
+                  expectedLock.claimBinding?.isEmpty == false else { return false }
+            releaseTime = clientTime
         case .ownerSelfRelease:
             let ownerAuthority = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
             guard expectedLock.state == .active,
@@ -554,7 +554,9 @@ final class TestTransport: HouseholdTransport {
                     || expectedLock.ownerAuthorityBinding == ownerAuthority else { return false }
             releaseTime = clientTime
         }
-        guard try await membershipLocation(householdID: expectedLock.householdID) == nil else { return false }
+        if reason != .confirmedMembershipRevocation {
+            guard try await membershipLocation(householdID: expectedLock.householdID) == nil else { return false }
+        }
         guard account == expectedParticipantID,
               accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         await beforeAccountLockReleaseSubmission?()
@@ -812,6 +814,51 @@ final class TestTransport: HouseholdTransport {
         familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck, outcome: .succeeded,
                                             householdID: householdID)
         return authority.state
+    }
+
+    func publishMembershipRevocation(
+        householdID: UUID,
+        claimBinding: String,
+        expectedParticipantID: String
+    ) async throws {
+        guard account == expectedParticipantID, !claimBinding.isEmpty else {
+            throw HouseholdError.wrongAccount
+        }
+        if let membershipRevocationPublishError { throw membershipRevocationPublishError }
+        let key = membershipRevocationKey(householdID: householdID, claimBinding: claimBinding)
+        if let authority = server.membershipRevocationAuthorities[key] {
+            guard authority.creator == account,
+                  authority.lastModifier == account else {
+                throw HouseholdError.accountMembershipConflict
+            }
+        }
+        server.membershipRevocationAuthorities[key] = .init(
+            state: .deleted,
+            creator: account,
+            lastModifier: account
+        )
+    }
+
+    func membershipRevocationIsAuthoritative(
+        householdID: UUID,
+        claimBinding: String,
+        ownerAuthorityBinding: String,
+        expectedParticipantID: String
+    ) async throws -> Bool {
+        guard account == expectedParticipantID, !claimBinding.isEmpty else {
+            throw HouseholdError.wrongAccount
+        }
+        if let membershipRevocationStateError { throw membershipRevocationStateError }
+        let key = membershipRevocationKey(householdID: householdID, claimBinding: claimBinding)
+        guard let authority = server.membershipRevocationAuthorities[key] else { return false }
+        return authority.state == .deleted
+            && authority.creator == authority.lastModifier
+            && AccountMembershipBinding.ownerAuthority(participantID: authority.creator)
+                == ownerAuthorityBinding
+    }
+
+    private func membershipRevocationKey(householdID: UUID, claimBinding: String) -> String {
+        "\(householdID.uuidString)|\(claimBinding)"
     }
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact] {
         fetchCalls += 1

@@ -11,22 +11,25 @@ The authority is correctness state, not a diagnostic receipt. Diagnostic collect
 The record is stored in the public database so an authenticated former participant can fetch it after the shared zone is gone.
 
 - Record type: `FamilyLifecycleAuthority`
-- Record name: SHA-256 of a domain-separated household UUID. The UUID is never stored as a field.
+- Family record name: SHA-256 of a domain-separated household UUID.
+- Membership-revocation record name: SHA-256 of the household UUID and the already opaque invitation-claim binding, with a separate domain prefix.
 - `formatVersion`: Int64, currently `1`
 - `state`: String, one of `active`, `deleting`, or `deleted`
 - System metadata: `creatorUserRecordID` and `lastModifiedUserRecordID`
 
-There are no family names, member names, invitation values, URLs, codes, digests, zone names, participant identifiers, payloads, or journal facts in the record. The private `AccountMembershipLock` payload gains only an optional opaque hash of the exact owner participant. That is an existing Bytes payload and does not add an `AccountMembershipLock` schema field.
+There are no family names, member names, invitation values, URLs, codes, zone names, participant identifiers, payloads, or journal facts in the record. A membership-revocation record exposes only a second one-way record-name digest derived from an already opaque claim binding. The private `AccountMembershipLock` payload gains only an optional opaque hash of the exact owner participant. That is an existing Bytes payload and does not add an `AccountMembershipLock` schema field.
 
 CloudKit can represent creator and modifier metadata as a stable unique record name or as the current-user sentinel. The app accepts each stable unique name only when its derived owner-authority binding matches the exact binding retained in the private lock. It accepts the sentinel only when its record name is `CKCurrentUserDefaultName`, its zone is the default record zone, its zone owner is `CKCurrentUserDefaultName`, and the current reader's derived binding matches the retained owner binding. A missing identity, a foreign unique name, a non-owner reader sentinel, or a sentinel with another zone name or owner fails closed. The current account and account generation are checked around every mutation.
 
-Account-wide deletion discovers creator-owned lifecycle records with both the resolved current-user record ID query and the exact current-user sentinel query. It applies the same shape and owner-binding check when accepting a discovery result and again immediately before deleting that exact public record.
+Account-wide cleanup does not discover or delete lifecycle records. Every owned Earned It zone is instead taken through the same authenticated `deleting` and `deleted` transition as the focused family workflow. A persisted legacy public-record reset target is treated as complete without deleting its tombstone.
 
 After a lifecycle mutation, the app validates the server-returned saved record directly. It requires the exact requested record ID and lifecycle state plus the same creator and last-modifier ownership checks. It does not depend on a second immediate fetch to confirm a write that CloudKit has already returned.
 
 ## State transitions
 
-`active` is created during owner bootstrap or backfilled while recovering an accessible owner family. It can move only to `deleting`. `deleting` can move only to `deleted`. No path returns a record to `active`.
+The family record's `active` state is created during owner bootstrap or backfilled while recovering an accessible owner family. It can move only to `deleting`. `deleting` can move only to `deleted`. No path returns a family record to `active`.
+
+Before removing a claimed invitation's CloudKit participant, the owner writes an immutable claim-scoped record in `deleted` state. The owner then removes share access and appends the journal revocation. This record uses the existing schema and creator checks. It lets a participant authenticate revocation even when share removal prevents that device from downloading the final journal fact. A failure to publish the record stops revocation before access is removed.
 
 Owner deletion persists local pending state before publishing `deleting`, deletes the exact owner zone, publishes `deleted`, conditionally releases the exact owner lock, and then purges that household's local data. Repeating any completed phase is safe.
 
@@ -40,7 +43,7 @@ A child releases an active lock only when all of these conditions hold:
 
 An active marker plus revoked access does not release. Offline, permission, wrong-account, malformed-authority, wrong-owner, stale-household, and ambiguous-location results retain the lock and local read-only data. Released locks preserve the opaque claim and owner-authority evidence but cannot authorize recovery.
 
-After an installed participant confirms both creator-authenticated `deleted` authority and exact zone absence, it conditionally releases only the matching lock, purges only that household's local journal and session cache, and returns to normal onboarding. A local identifier-free pending or acknowledged notice state makes `Family data was deleted` one-shot across relaunches. This small local UX receipt is required for the explicit terminal message; it carries no household, account, participant, or CloudKit value and is reset to pending only by another confirmed deletion. Revocation, permission loss, and offline failures never set it.
+After an installed participant confirms both creator-authenticated `deleted` family authority and exact zone absence, it persists a generation-scoped unavailable-family receipt and conditionally releases only the matching lock. An exact creator-authenticated membership-revocation record, or exact journal revocation evidence while access remains, establishes the same route only for the lock's claim binding. The participant remains on a `Family No Longer Available` screen until confirming `Reset App`. Reset clears that household's ordinary local journal, profiles, invitation state, bindings, preferences, and caches, then returns to Welcome. A minimal completed-generation receipt remains so the same released private lock cannot make the cleaned installation enter recovery again. A new family or invitation uses a different membership generation. Revocation ambiguity, permission loss, validation failure, and offline failures never set it.
 
 An empty-session active lock with the exact deterministic owner claim is classified separately from invited and legacy-shared memberships. If that owner lock predates `ownerAuthorityBinding`, the app derives a candidate authority only from the stable current CloudKit participant and the exact owner claim. Terminal cleanup still requires the lifecycle record creator and last modifier to match that candidate, the state to be `deleted`, exact no-location evidence, and the complete lock to remain unchanged. This is not a general backfill or migration.
 
@@ -50,10 +53,10 @@ If terminal deletion cannot be authenticated, a positively classified owner may 
 
 This change requires a human-reviewed Development schema update and later human promotion to Production. Agent work must not deploy it or modify Production data.
 
-Configure `FamilyLifecycleAuthority` in the public database with only the two application fields above. Permit authenticated users to read and create. Permit updates and deletion only by the record creator. Do not enable public unauthenticated access. Normal lifecycle validation fetches the deterministic record ID directly. Account-wide deletion also queries the CloudKit system creator field so it can find stale records for households absent from the device. Make `creatorUserRecordID` queryable. No application-field query index is required.
+Configure `FamilyLifecycleAuthority` in the public database with only the two application fields above. Permit authenticated users to read and create. Permit updates only by the record creator. Do not enable public unauthenticated access. Lifecycle validation fetches the deterministic record ID directly. No application-field query index is required by the app.
 
-The durable Production dependency is therefore the public `FamilyLifecycleAuthority` type, `formatVersion` as Int64, `state` as String, and a queryable system `creatorUserRecordID` metadata field. This repository documents and validates the contract but never deploys the schema.
+The durable Production dependency is therefore the public `FamilyLifecycleAuthority` type, with `formatVersion` as Int64 and `state` as String. This repository documents and validates the contract but never deploys the schema.
 
-Before a signed build is distributed, verify in CloudKit Console that the record type, field types, database scope, creator query index, and creator-only write and delete rules match this document. Promote through the existing authorized release process only after Development two-account deletion, revocation, reinstall, and account-switch checks pass. The observed Production deployment finding and captain procedure are in `docs/delete-all-earned-it-data-implementation-report.md`.
+Before a signed build is distributed, verify in CloudKit Console that the record type, field types, database scope, and creator-only write rules match this document. Promote through the existing authorized release process only after Development two-account deletion, revocation, reinstall, and account-switch checks pass. The observed Production deployment finding and captain procedure are in `docs/delete-all-earned-it-data-implementation-report.md`.
 
 Relevant Apple contracts are [CKRecord creator metadata](https://developer.apple.com/documentation/cloudkit/ckrecord/creatoruserrecordid), [CKRecord last-modifier metadata](https://developer.apple.com/documentation/cloudkit/ckrecord/lastmodifieduserrecordid), and [record-zone deletion change reporting](https://developer.apple.com/documentation/cloudkit/ckfetchdatabasechangesoperation/recordzonewithidwasdeletedblock).

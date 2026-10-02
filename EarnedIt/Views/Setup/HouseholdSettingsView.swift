@@ -2,9 +2,7 @@ import SwiftUI
 
 struct HouseholdSettingsView: View {
     @Environment(HouseholdStore.self) private var store
-    @State private var confirmingReset = false
-    @State private var confirmingFamilyDeletion = false
-    @State private var confirmingPermanentDeletion = false
+    @State private var confirmingDeletion = false
     @State private var deletingFamily = false
     @State private var familyName = ""
 
@@ -32,39 +30,21 @@ struct HouseholdSettingsView: View {
                     SyncStatusView()
                     Text(store.session.location == nil
                          ? "This family is saved only on this device. Invite a family member from Manage Family to begin sharing."
-                         : "Disconnect removes this family from this device. Other family devices keep their data, and you can reconnect later.")
-                    if store.selectedMember?.role == .parent {
-                        Button(store.session.location == nil ? "Delete All Local Data" : "Disconnect This Device", role: .destructive) {
-                            confirmingReset = true
-                        }
-                        .disabled(deletingFamily || store.isDeletingAllEarnedItData
-                            || store.session.pendingFamilyDeletion == true)
-                        .accessibilityIdentifier("clear-all-data")
-                    }
+                         : "Family changes synchronize through the invited household in iCloud.")
                 }
             }
-            if store.canDeleteFamily {
-                Section {
-                    Text("Deleting the app or disconnecting this device does not delete your family from iCloud.")
-                    Button("Delete Family and Cloud Data", role: .destructive) {
-                        confirmingFamilyDeletion = true
+            if store.canDeleteAllFamilyData {
+                Section("Delete All Data") {
+                    Text("Permanently deletes this entire family for everyone, including chores, profiles, completion history, invitations, memberships, cloud shares, and local data.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("Delete All Data", role: .destructive) {
+                        confirmingDeletion = true
                     }
-                    .disabled(deletingFamily || store.isDeletingAllEarnedItData)
-                    .accessibilityIdentifier("delete-family")
-                    if deletingFamily { ProgressView("Deleting family…") }
-                } header: {
-                    Text("Delete Family")
-                } footer: {
-                    Text("Only the family creator can permanently delete the family for everyone.")
-                }
-            }
-            Section("Delete All Data") {
-                Text("This removes every Earned It family you own, your membership in shared families, account records, and local app data.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                DeleteAllEarnedItDataButton()
-                if store.isDeletingAllEarnedItData {
-                    ProgressView("Deleting data…")
+                    .disabled(deletingFamily || store.isDeletingAllEarnedItData
+                        || store.session.pendingFamilyDeletion == true)
+                    .accessibilityIdentifier("delete-all-data")
+                    if deletingFamily { ProgressView("Deleting all data…") }
                 }
             }
             Section("About") {
@@ -77,26 +57,11 @@ struct HouseholdSettingsView: View {
         }
         .refreshable { await refreshFamily() }
         .navigationTitle("Settings")
-        .alert("Remove local family data?", isPresented: $confirmingReset) {
-            Button("Remove Local Data", role: .destructive) { store.perform { try store.resetLocalData() } }
+        .alert("Delete All Data?", isPresented: $confirmingDeletion) {
+            Button("Delete All Data", role: .destructive) { deleteAllData() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(store.session.location == nil
-                 ? "This deletes the family saved on this device. This cannot be undone."
-                 : "Other family devices keep their data. Any waiting changes must finish syncing first. You can reconnect later.")
-        }
-        .alert("Delete Family and Cloud Data?", isPresented: $confirmingFamilyDeletion) {
-            Button("Continue", role: .destructive) { confirmingPermanentDeletion = true }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently deletes the family and its Earned It data from iCloud. Invited family members will lose access. This cannot be undone. Deleting the app alone does not do this.")
-        }
-        .alert("Permanently delete \"\(store.household?.name ?? "this family")\"?",
-               isPresented: $confirmingPermanentDeletion) {
-            Button("Delete Family", role: .destructive) { deleteFamily() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("All family chores, history, invitations, and access will be permanently removed from iCloud.")
+            Text("This permanently deletes the entire family for everyone. All chores, profiles, completion history, invitations, memberships, cloud shares, and local data will be removed. This cannot be undone.")
         }
     }
 
@@ -110,11 +75,11 @@ struct HouseholdSettingsView: View {
         familyName = store.household?.name ?? familyName
     }
 
-    private func deleteFamily() {
+    private func deleteAllData() {
         deletingFamily = true
         Task {
             defer { deletingFamily = false }
-            do { try await store.deleteFamily() }
+            do { try await store.deleteAllFamilyData() }
             catch { store.errorMessage = error.localizedDescription }
         }
     }

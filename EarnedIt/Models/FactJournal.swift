@@ -142,6 +142,27 @@ enum FamilyDeletionNoticeState: String, Codable, Equatable {
     case acknowledged
 }
 
+enum UnavailableFamilyReason: String, Codable, Equatable {
+    case deleted
+    case membershipRevoked
+}
+
+struct UnavailableFamilyRecovery: Codable, Equatable {
+    let householdID: UUID
+    let membershipAttemptID: UUID
+    let claimBinding: String?
+    let ownerAuthorityBinding: String?
+    let reason: UnavailableFamilyReason
+    var membershipReleased: Bool
+
+    func matches(_ lock: AccountMembershipLock) -> Bool {
+        householdID == lock.householdID
+            && membershipAttemptID == lock.attemptID
+            && claimBinding == lock.claimBinding
+            && ownerAuthorityBinding == lock.ownerAuthorityBinding
+    }
+}
+
 struct OwnerConnectionBootstrap: Codable, Equatable {
     let householdID: UUID
     let attemptID: UUID
@@ -168,5 +189,7 @@ struct DeviceSession: Codable, Equatable {
     var familyAccessLost: Bool?
     var pendingFamilyDeletion: Bool?
     var familyDeletionNoticeState: FamilyDeletionNoticeState?
+    var unavailableFamilyRecovery: UnavailableFamilyRecovery?
+    var completedUnavailableFamilyRecovery: UnavailableFamilyRecovery?
     var accountDataResetProgress: AccountDataResetProgress?
 }

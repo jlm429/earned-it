@@ -165,6 +165,22 @@ final class HouseholdRepository {
         }
     }
 
+    func purgeAllHouseholdData(replacementSession: DeviceSession) throws {
+        do {
+            try requireNoPendingAccountReset()
+            try context.fetch(FetchDescriptor<StoredFact>()).forEach(context.delete)
+            if let stored = try context.fetch(FetchDescriptor<StoredSession>()).first {
+                stored.payload = try JSONEncoder().encode(replacementSession)
+            } else {
+                context.insert(try StoredSession(replacementSession))
+            }
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
     func discardFacts(householdID: UUID, retaining retainedFactIDs: Set<UUID>, updating session: DeviceSession) throws {
         do {
             try requireNoPendingAccountReset()

@@ -25,12 +25,18 @@ fi
 
 first_family="$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:0' "$info_plist")"
 if [[ "$first_family" != "1" ]]; then
-  echo "Release application must declare iPhone device family 1 only." >&2
+  echo "Release application must declare iPhone device family 1 first." >&2
   exit 1
 fi
 
-if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$info_plist" >/dev/null 2>&1; then
-  echo "Release application unexpectedly declares another device family." >&2
+second_family="$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:1' "$info_plist")"
+if [[ "$second_family" != "2" ]]; then
+  echo "Release application must declare iPad device family 2 second." >&2
+  exit 1
+fi
+
+if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:2' "$info_plist" >/dev/null 2>&1; then
+  echo "Release application unexpectedly declares a third device family." >&2
   exit 1
 fi
 
@@ -40,4 +46,4 @@ if [[ "$marketing_version" != "1.0.2" ]]; then
   exit 1
 fi
 
-echo "Release metadata passed: Earned It $marketing_version supports iPhone only."
+echo "Release metadata passed: Earned It $marketing_version supports iPhone and iPad."
