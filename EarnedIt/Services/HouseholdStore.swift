@@ -3819,7 +3819,17 @@ final class HouseholdStore {
     }
 
     func synchronize() async throws {
-        try await synchronize(deferWhenCloudMutationActive: true)
+        if let token = Self.cloudMutationToken, token == activeCloudMutationToken {
+            try await synchronize(deferWhenCloudMutationActive: false)
+            return
+        }
+        try await Self.$cloudMutationToken.withValue(nil) {
+            while activeCloudMutationToken != nil {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+            try await synchronize(deferWhenCloudMutationActive: false)
+        }
     }
 
     private func synchronize(deferWhenCloudMutationActive: Bool) async throws {

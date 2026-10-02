@@ -4,7 +4,7 @@ import CloudKit
 
 @MainActor
 final class SharingTests: XCTestCase {
-    func testPublicRefreshWaitsForMembershipReconciliation() async throws {
+    func testPublicRefreshWaitsForMembershipReconciliationWhenAutomaticSyncIsDisabled() async throws {
         let server = TestCloudServer()
         let transport = TestTransport(server: server, account: "owner")
         let family = try TestFamily(transport: transport)
@@ -13,7 +13,7 @@ final class SharingTests: XCTestCase {
             repository: family.repository,
             transport: transport,
             clock: { family.clock.now },
-            automaticSync: true
+            automaticSync: false
         )
         let fetchCallsBeforeRefresh = transport.fetchCalls
         let gate = TestSuspensionGate()
@@ -26,9 +26,14 @@ final class SharingTests: XCTestCase {
             try await reopened.reconcileAccountMembershipLockAutomatically()
         }
         while !gate.isWaiting { await Task.yield() }
+        var publicRefreshFinished = false
+        let publicRefresh = Task {
+            defer { publicRefreshFinished = true }
+            try await reopened.synchronize()
+        }
+        await Task.yield()
 
-        try await reopened.synchronize()
-
+        XCTAssertFalse(publicRefreshFinished)
         XCTAssertNil(reopened.errorMessage)
         XCTAssertEqual(reopened.pendingCount, 0)
         XCTAssertFalse(reopened.cloudAccessBlocked)
@@ -36,8 +41,9 @@ final class SharingTests: XCTestCase {
 
         gate.resume()
         try await reconciliation.value
-        try await Task.sleep(for: .milliseconds(500))
+        try await publicRefresh.value
 
+        XCTAssertTrue(publicRefreshFinished)
         XCTAssertNil(reopened.errorMessage)
         XCTAssertNotNil(reopened.lastSyncedAt)
         XCTAssertEqual(reopened.syncMessage, "Up to date")
