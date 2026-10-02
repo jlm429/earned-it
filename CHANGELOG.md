@@ -4,8 +4,15 @@ User-visible changes to Earned It.
 
 ## Unreleased
 
+### Changed
+
+- Settings now presents one destructive family action, Delete All Data, for the creating parent. It permanently deletes the family for every participant and returns the initiating installation to Welcome.
+- Devices with authenticated proof that their family generation was deleted or their exact membership was revoked now offer a confirmed Reset App recovery path. Temporary iCloud failures continue to preserve local data and membership.
+- Native iPad support is enabled alongside iPhone support, including the release device-family validation path.
+
 ### Fixed
 
+- Family deletion keeps its generation-scoped lifecycle tombstone so an offline child or stale invitation cannot restore the deleted family. After local reset, that child can create or join a new family without being trapped by the old generation.
 - Pull to refresh now waits for in-progress iCloud membership recovery instead of showing a pending-changes error. Automatic refreshes resume after recovery finishes.
 - Family owners can create their first invitation when the same valid iCloud household membership is already active but the device retained a different setup attempt. Conflicting households, accounts, claims, and authority remain blocked.
 

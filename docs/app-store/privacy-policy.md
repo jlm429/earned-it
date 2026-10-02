@@ -47,7 +47,7 @@ On a family that has never enabled sharing, a selected parent can choose **Delet
 
 On a shared installation, a selected parent can choose **Disconnect This Device** after pending changes have synchronized. This removes the local family copy from that device but does not delete the owner's CloudKit data or copies held by other family devices. The family owner can revoke invited access.
 
-The family creator can choose **Delete Family and Cloud Data** to delete only the current shared family and its CloudKit data for everyone. This narrower action does not delete other Earned It families or all account-wide state.
+The family creator can choose **Delete All Data** to permanently delete the current family and its CloudKit data for everyone. Devices with authenticated proof that the family was deleted or their exact membership was revoked can then use **Reset App** to clear obsolete local family data and return to first-launch setup. Temporary iCloud or validation failures do not enable that reset.
 
 Every installation and role can choose **Delete All Earned It Data**. After one explicit confirmation, Earned It permanently removes every unambiguously Earned It household zone owned by the current iCloud account, this account's Earned It private membership and validation records, public Earned It lifecycle records created by this account, and local app data. For a participant, the action relinquishes the current account's shared access where CloudKit permits it. It does not delete another account's household zone or other participants' data. Cloud cleanup must succeed before local family data is cleared. A failed or interrupted deletion remains pending for retry and is not reported as complete.
 

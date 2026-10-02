@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var diagnosticPreflightFinished = false
     @State private var diagnosticPreflightAvailable = false
     @State private var confirmsStaleOwnerRelease = false
+    @State private var confirmsUnavailableFamilyReset = false
 
     var body: some View {
         @Bindable var store = store
@@ -46,6 +47,20 @@ struct RootView: View {
                     }
                 }
                 .accessibilityIdentifier("account-data-reset-progress")
+            } else if store.hasUnavailableFamilyRecovery {
+                ScrollableUnavailableView(
+                    title: "Family No Longer Available",
+                    systemImage: "person.3.sequence.fill",
+                    description: store.unavailableFamilyReason == .membershipRevoked
+                        ? "Your access to this family was revoked. Reset this installation to remove its obsolete family data and return to Welcome."
+                        : "This family was deleted. Reset this installation to remove its obsolete family data and return to Welcome."
+                ) {
+                    Button("Reset App", role: .destructive) {
+                        confirmsUnavailableFamilyReset = true
+                    }
+                    .accessibilityIdentifier("reset-unavailable-family")
+                }
+                .accessibilityIdentifier("family-no-longer-available")
             } else if store.hasPendingInvitationPackage || store.hasPendingInvitationAcceptance {
                 ScrollableUnavailableView(
                     title: "Finish Joining Your Family",
@@ -154,13 +169,6 @@ struct RootView: View {
                         }
                     }
                     .accessibilityIdentifier("retry-family-access")
-                    DeleteAllEarnedItDataButton()
-                    if store.canRemoveUnavailableFamilyFromDevice {
-                        Button("Remove From This Device", role: .destructive) {
-                            store.perform { try store.removeUnavailableFamilyFromDevice() }
-                        }
-                        .accessibilityIdentifier("remove-unavailable-family")
-                    }
                 }
                 .accessibilityIdentifier("family-access-ended")
             } else if store.household == nil || store.household?.isSetupComplete == false {
@@ -196,6 +204,7 @@ struct RootView: View {
                 catch { store.errorMessage = error.localizedDescription }
                 return
             }
+            if store.hasUnavailableFamilyRecovery { return }
             store.refreshDate()
             if store.hasPendingInvitationPackage {
                 do { try await store.continuePendingInvitation() }
@@ -251,7 +260,7 @@ struct RootView: View {
         }
         .onOpenURL { url in
             guard !readOnlyPreflightMode, !store.hasPendingAccountDataReset,
-                  !store.isDeletingAllEarnedItData,
+                  !store.isDeletingAllEarnedItData, !store.hasUnavailableFamilyRecovery,
                   url.scheme == "earnedit-invitation" else { return }
             Task {
                 do { try await store.redeemInvitation(url.absoluteString) }
@@ -308,11 +317,23 @@ struct RootView: View {
         } message: {
             Text("This releases only this iCloud account's stale Earned It membership. It does not delete family data or change anyone else's access.")
         }
+        .alert("Reset App?", isPresented: $confirmsUnavailableFamilyReset) {
+            Button("Reset App", role: .destructive) {
+                Task {
+                    do { try await store.resetUnavailableFamily() }
+                    catch { store.errorMessage = error.localizedDescription }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the obsolete family's profiles, chores, history, invitations, and cached data from this installation. You can then create or join another family.")
+        }
     }
 
     private func acceptInvitation() async {
         guard !readOnlyPreflightMode else { return }
-        if store.hasPendingAccountDataReset || store.isDeletingAllEarnedItData {
+        if store.hasPendingAccountDataReset || store.isDeletingAllEarnedItData
+            || store.hasUnavailableFamilyRecovery {
             invitations.pending = nil
             return
         }

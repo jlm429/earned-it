@@ -18,7 +18,7 @@ Parents can create recurring weekday chores or make a chore available only when 
 
 Weekly views help families review progress, streaks, and missing items. Parents can optionally set an allowance amount and see whether all required work was completed. Earned It tracks eligibility only. It does not move money or record payments.
 
-Family data is saved locally first and can synchronize through private/shared iCloud storage across invited iPhones. Offline changes are retained and synchronize when the app can connect again.
+Family data is saved locally first and can synchronize through private/shared iCloud storage across invited iPhones and iPads. Offline changes are retained and synchronize when the app can connect again.
 
 Free. No ads. No tracking.
 

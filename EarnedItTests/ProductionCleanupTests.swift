@@ -1186,12 +1186,14 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertNil(server.zones[location.zoneName])
         XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
         XCTAssertNil(family.store.household)
-        XCTAssertTrue(family.store.hasFamilyDeletionNotice)
+        XCTAssertFalse(family.store.hasFamilyDeletionNotice)
         let replacement = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
                                               transport: transport,
                                               clock: { family.clock.now }, automaticSync: false)
         try await replacement.reconcileAccountMembershipLock()
         XCTAssertNil(replacement.household)
+        XCTAssertTrue(replacement.hasUnavailableFamilyRecovery)
+        try await replacement.resetUnavailableFamily()
         try replacement.createFamily(name: "New Family", parentName: "New Parent")
         XCTAssertEqual(replacement.household?.name, "New Family")
     }
@@ -1224,7 +1226,7 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(releasedLock.ownerAuthorityBinding, firstLock.ownerAuthorityBinding)
         XCTAssertEqual(server.lifecycleAuthorities[firstHouseholdID]?.state, .deleted)
         XCTAssertNil(family.store.household)
-        XCTAssertTrue(family.store.hasFamilyDeletionNotice)
+        XCTAssertFalse(family.store.hasFamilyDeletionNotice)
 
         try family.store.createFamily(name: "Replacement Family", parentName: "Replacement Parent")
         let replacementChild = try family.store.saveMember(name: "Replacement Child", role: .child, avatar: .star)
@@ -1655,6 +1657,7 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(server.accountMembershipLocks[childAccount], childLock)
         XCTAssertTrue(reinstalled.requiresMembershipRecovery)
         XCTAssertFalse(reinstalled.hasFamilyDeletionNotice)
+        XCTAssertFalse(reinstalled.hasUnavailableFamilyRecovery)
 
         try await family.store.deleteFamily()
         XCTAssertEqual(server.lifecycleAuthorities[householdID]?.state, .deleted)
@@ -1695,6 +1698,7 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(server.accountMembershipLocks[childAccount], childLock)
         XCTAssertTrue(reinstalled.requiresMembershipRecovery)
         XCTAssertFalse(reinstalled.hasFamilyDeletionNotice)
+        XCTAssertFalse(reinstalled.hasUnavailableFamilyRecovery)
 
         try await family.store.deleteFamily()
         XCTAssertNil(family.store.household)
@@ -1709,7 +1713,8 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(released.claimBinding, childLock.claimBinding)
         XCTAssertEqual(released.ownerAuthorityBinding, childLock.ownerAuthorityBinding)
         XCTAssertFalse(reinstalled.requiresMembershipRecovery)
-        XCTAssertTrue(reinstalled.hasFamilyDeletionNotice)
+        XCTAssertTrue(reinstalled.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(reinstalled.unavailableFamilyReason, .deleted)
     }
 
     func testChildRecoveryPreflightKeepsFailedReadsUnknown() async throws {
@@ -1767,6 +1772,7 @@ final class ProductionCleanupTests: XCTestCase {
         }
         XCTAssertEqual(server.accountMembershipLocks[childAccount], lock)
         XCTAssertTrue(reinstalled.requiresMembershipRecovery)
+        XCTAssertFalse(reinstalled.hasUnavailableFamilyRecovery)
     }
 
     func testLifecycleReadFailureRetainsChildLock() async throws {
@@ -1793,6 +1799,7 @@ final class ProductionCleanupTests: XCTestCase {
             XCTAssertEqual(server.accountMembershipLocks[childAccount], lock)
             XCTAssertTrue(reinstalled.requiresMembershipRecovery)
             XCTAssertFalse(reinstalled.hasFamilyDeletionNotice)
+            XCTAssertFalse(reinstalled.hasUnavailableFamilyRecovery)
         }
     }
 
@@ -1818,7 +1825,7 @@ final class ProductionCleanupTests: XCTestCase {
 
         try await relaunched.deleteFamily()
         XCTAssertNil(relaunched.household)
-        XCTAssertTrue(relaunched.hasFamilyDeletionNotice)
+        XCTAssertFalse(relaunched.hasFamilyDeletionNotice)
         XCTAssertEqual(server.accountMembershipLocks["owner"]?.state, .released)
     }
 
@@ -1850,13 +1857,15 @@ final class ProductionCleanupTests: XCTestCase {
         fixture.guestTransport.fetchError = CKError(.permissionFailure)
 
         try await fixture.guest.synchronize()
-        XCTAssertNil(fixture.guest.household)
+        XCTAssertEqual(fixture.guest.household?.id, householdID)
         XCTAssertFalse(fixture.guest.familyAccessLost)
-        XCTAssertFalse(fixture.guest.cloudIsReadOnly)
+        XCTAssertTrue(fixture.guest.cloudIsReadOnly)
         XCTAssertFalse(fixture.guest.requiresMembershipRecovery)
         XCTAssertFalse(fixture.guest.isCheckingAccountMembership)
-        XCTAssertTrue(fixture.guest.hasFamilyDeletionNotice)
-        XCTAssertTrue(try fixture.guestRepository.facts(householdID: householdID).isEmpty)
+        XCTAssertFalse(fixture.guest.hasFamilyDeletionNotice)
+        XCTAssertTrue(fixture.guest.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(fixture.guest.unavailableFamilyReason, .deleted)
+        XCTAssertFalse(try fixture.guestRepository.facts(householdID: householdID).isEmpty)
         XCTAssertNil(fixture.server.zones[location.zoneName])
         let released = try XCTUnwrap(fixture.server.accountMembershipLocks["guest"])
         XCTAssertEqual(released.state, .released)
@@ -1865,19 +1874,152 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(released.claimBinding, guestLock.claimBinding)
         XCTAssertEqual(released.ownerAuthorityBinding, guestLock.ownerAuthorityBinding)
 
-        try fixture.guest.dismissFamilyDeletionNotice()
-        XCTAssertFalse(fixture.guest.hasFamilyDeletionNotice)
         let relaunched = try HouseholdStore(repository: fixture.guestRepository,
                                             transport: fixture.guestTransport,
                                             clock: { fixture.family.clock.now }, automaticSync: false)
         try await relaunched.reconcileAccountMembershipLock()
+        XCTAssertEqual(relaunched.household?.id, householdID)
+        XCTAssertTrue(relaunched.hasUnavailableFamilyRecovery)
+        try await relaunched.resetUnavailableFamily()
         XCTAssertNil(relaunched.household)
-        XCTAssertFalse(relaunched.hasFamilyDeletionNotice)
+        XCTAssertFalse(relaunched.hasUnavailableFamilyRecovery)
         XCTAssertFalse(relaunched.requiresMembershipRecovery)
 
-        try fixture.guest.createFamily(name: "Guest New Family", parentName: "Guest Parent")
-        XCTAssertEqual(fixture.guest.household?.name, "Guest New Family")
+        try relaunched.createFamily(name: "Guest New Family", parentName: "Guest Parent")
+        XCTAssertEqual(relaunched.household?.name, "Guest New Family")
         XCTAssertNil(fixture.server.zones[location.zoneName])
+    }
+
+    func testParentDeleteAllDataWaitsForExistingChildResetThenAllowsFreshCreation() async throws {
+        let server = TestCloudServer()
+        let owner = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let invitation = try await owner.store.createChildInvitation(memberID: owner.hanna.id)
+        let childRepository = try HouseholdRepository(inMemory: true)
+        let childTransport = TestTransport(server: server, account: "child")
+        let child = try HouseholdStore(
+            repository: childRepository,
+            transport: childTransport,
+            clock: { owner.clock.now },
+            automaticSync: false
+        )
+        try await child.redeemInvitation(invitation.qrPayload)
+        let oldHouseholdID = try XCTUnwrap(owner.store.household?.id)
+        let oldLocation = try XCTUnwrap(owner.store.session.location)
+        let oldChildLock = try XCTUnwrap(server.accountMembershipLocks["child"])
+
+        try await owner.store.deleteAllFamilyData()
+        childTransport.fetchError = CKError(.zoneNotFound)
+        try await child.synchronize()
+
+        XCTAssertNil(owner.store.household)
+        XCTAssertTrue(try owner.repository.facts(householdID: oldHouseholdID).isEmpty)
+        XCTAssertEqual(server.lifecycleAuthorities[oldHouseholdID]?.state, .deleted)
+        XCTAssertNil(server.zones[oldLocation.zoneName])
+        XCTAssertTrue(child.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(child.unavailableFamilyReason, .deleted)
+        XCTAssertEqual(child.household?.id, oldHouseholdID)
+        XCTAssertFalse(try childRepository.facts(householdID: oldHouseholdID).isEmpty)
+        let released = try XCTUnwrap(server.accountMembershipLocks["child"])
+        XCTAssertEqual(released.state, .released)
+        XCTAssertEqual(released.householdID, oldChildLock.householdID)
+        XCTAssertEqual(released.attemptID, oldChildLock.attemptID)
+
+        do {
+            try await child.redeemInvitation(invitation.qrPayload)
+            XCTFail("A stale invitation must stay blocked while reset is pending")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .pendingChanges)
+        }
+        try await child.resetUnavailableFamily()
+
+        XCTAssertNil(child.household)
+        XCTAssertFalse(child.hasUnavailableFamilyRecovery)
+        XCTAssertTrue(try childRepository.facts(householdID: oldHouseholdID).isEmpty)
+        do {
+            try await child.redeemInvitation(invitation.qrPayload)
+            XCTFail("A deleted family's stale invitation must not survive Reset App")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitation)
+        }
+        try child.createFamily(name: "Fresh Family", parentName: "Fresh Parent")
+        XCTAssertNotEqual(child.household?.id, oldHouseholdID)
+    }
+
+    func testAuthoritativeRevocationOffersResetAndNewInvitationReplacesOnlyOldGeneration() async throws {
+        let server = TestCloudServer()
+        let first = try TestFamily(transport: TestTransport(server: server, account: "first-owner"))
+        let firstInvitation = try await first.store.createChildInvitation(memberID: first.hanna.id)
+        let childTransport = TestTransport(server: server, account: "child")
+        let child = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: childTransport,
+            clock: { first.clock.now },
+            automaticSync: false
+        )
+        try await child.redeemInvitation(firstInvitation.qrPayload)
+        let oldLock = try XCTUnwrap(server.accountMembershipLocks["child"])
+        let oldLocation = try XCTUnwrap(child.session.location)
+
+        try await first.store.revokeInvitation(firstInvitation.invitation)
+        try await child.synchronize()
+
+        XCTAssertFalse(try XCTUnwrap(server.zones[oldLocation.zoneName]).participants.contains("child"))
+        XCTAssertTrue(child.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(child.unavailableFamilyReason, .membershipRevoked)
+        XCTAssertEqual(server.accountMembershipLocks["child"]?.state, .released)
+        try await child.resetUnavailableFamily()
+
+        let second = try TestFamily(transport: TestTransport(server: server, account: "second-owner"))
+        let secondInvitation = try await second.store.createChildInvitation(memberID: second.hanna.id)
+        try await child.redeemInvitation(secondInvitation.qrPayload)
+
+        let replacement = try XCTUnwrap(server.accountMembershipLocks["child"])
+        XCTAssertEqual(child.household?.id, second.store.household?.id)
+        XCTAssertEqual(child.selectedMember?.id, second.hanna.id)
+        XCTAssertNotEqual(replacement.householdID, oldLock.householdID)
+        XCTAssertNotEqual(replacement.attemptID, oldLock.attemptID)
+        XCTAssertEqual(replacement.state, .active)
+    }
+
+    func testRevocationAuthorityFailuresRemainReconnectOnlyAndPreserveMembership() async throws {
+        let server = TestCloudServer()
+        let ownerTransport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: ownerTransport)
+        let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let childTransport = TestTransport(server: server, account: "child")
+        let child = try HouseholdStore(
+            repository: HouseholdRepository(inMemory: true),
+            transport: childTransport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        try await child.redeemInvitation(invitation.qrPayload)
+        let location = try XCTUnwrap(child.session.location)
+        let lock = try XCTUnwrap(server.accountMembershipLocks["child"])
+
+        ownerTransport.membershipRevocationPublishError = CKError(.networkFailure)
+        do {
+            try await family.store.revokeInvitation(invitation.invitation)
+            XCTFail("Revocation must not remove access without durable authority")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .networkFailure)
+        }
+        XCTAssertTrue(try XCTUnwrap(server.zones[location.zoneName]).participants.contains("child"))
+        XCTAssertFalse(family.store.snapshot.isInvitationRevoked(invitation.invitation.id))
+
+        server.zones[location.zoneName]?.participants.remove("child")
+        childTransport.membershipRevocationStateError = CKError(.networkFailure)
+        do {
+            try await child.synchronize()
+            XCTFail("Missing access must remain a reconnect error without revocation authority")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .permissionFailure)
+        }
+
+        XCTAssertTrue(child.familyAccessLost)
+        XCTAssertFalse(child.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(server.accountMembershipLocks["child"], lock)
+        XCTAssertEqual(child.household?.id, family.store.household?.id)
     }
 
     func testReconciliationConfirmsDeletedFamilyAfterPermissionFailure() async throws {
@@ -1888,10 +2030,15 @@ final class ProductionCleanupTests: XCTestCase {
 
         try await fixture.guest.reconcileAccountMembershipLock()
 
-        XCTAssertNil(fixture.guest.household)
-        XCTAssertTrue(fixture.guest.hasFamilyDeletionNotice)
-        XCTAssertTrue(try fixture.guestRepository.facts(householdID: householdID).isEmpty)
+        XCTAssertEqual(fixture.guest.household?.id, householdID)
+        XCTAssertTrue(fixture.guest.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(fixture.guest.unavailableFamilyReason, .deleted)
+        XCTAssertFalse(try fixture.guestRepository.facts(householdID: householdID).isEmpty)
         XCTAssertEqual(fixture.server.accountMembershipLocks["guest"]?.state, .released)
+
+        try await fixture.guest.resetUnavailableFamily()
+        XCTAssertNil(fixture.guest.household)
+        XCTAssertTrue(try fixture.guestRepository.facts(householdID: householdID).isEmpty)
     }
 
     func testReinstalledChildCannotRecoverDeletedFamilyAndCanJoinNewInvitation() async throws {
@@ -1925,20 +2072,27 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(server.accountMembershipLocks[childAccount]?.state, .released)
         XCTAssertFalse(reinstalledChild.requiresMembershipRecovery)
         XCTAssertNil(reinstalledChild.household)
-        XCTAssertTrue(reinstalledChild.hasFamilyDeletionNotice)
+        XCTAssertTrue(reinstalledChild.hasUnavailableFamilyRecovery)
+        XCTAssertEqual(reinstalledChild.unavailableFamilyReason, .deleted)
         let recoveredFamilies = try await reinstalledChild.discoverFamilies()
         XCTAssertTrue(recoveredFamilies.isEmpty)
         do {
             try await reinstalledChild.redeemInvitation(oldInvitation.qrPayload)
-            XCTFail("A deleted family's invitation must not be redeemable after reinstall")
+            XCTFail("Reset must be required before accepting another invitation")
         } catch {
-            XCTAssertEqual(error as? HouseholdError, .invitation)
+            XCTAssertEqual(error as? HouseholdError, .pendingChanges)
         }
         XCTAssertNil(reinstalledChild.household)
         XCTAssertNil(reinstalledChild.session.pendingInvitationPackage)
 
-        try reinstalledChild.dismissFamilyDeletionNotice()
-        XCTAssertFalse(reinstalledChild.hasFamilyDeletionNotice)
+        try await reinstalledChild.resetUnavailableFamily()
+        XCTAssertFalse(reinstalledChild.hasUnavailableFamilyRecovery)
+        do {
+            try await reinstalledChild.redeemInvitation(oldInvitation.qrPayload)
+            XCTFail("A deleted family's invitation must not be redeemable after reset")
+        } catch {
+            XCTAssertEqual(error as? HouseholdError, .invitation)
+        }
 
         let newFamily = try TestFamily(transport: TestTransport(server: server, account: "new-owner"))
         let newInvitation = try await newFamily.store.createChildInvitation(memberID: newFamily.hanna.id)

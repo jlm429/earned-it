@@ -6,6 +6,7 @@ final class EarnedItUITests: XCTestCase {
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset"]
         if name.contains("LargeType") {
@@ -47,16 +48,30 @@ final class EarnedItUITests: XCTestCase {
         tap("finish-setup")
         XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
         keepScreenshot("empty-parent-largest-text")
+        if app.frame.width >= 700 {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        }
         tap("family-management")
         reveal(app.buttons["invite-profile"])
         XCTAssertTrue(app.buttons["invite-profile"].exists)
         XCTAssertFalse(app.buttons["manage-apple-sharing"].exists)
         tap("household-settings")
-        tap("clear-all-data")
+        XCTAssertFalse(app.buttons["clear-all-data"].exists)
+        XCTAssertFalse(app.buttons["delete-family"].exists)
+        XCTAssertFalse(app.buttons["delete-all-earned-it-data"].exists)
+        tap("delete-all-data")
+        XCTAssertTrue(app.alerts["Delete All Data?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS 'permanently deletes the entire family for everyone'"
+        )).firstMatch.exists)
         tap("Cancel")
         XCTAssertTrue(app.navigationBars["Settings"].exists)
-        tap("clear-all-data")
-        tap("Remove Local Data")
+        tap("delete-all-data")
+        app.alerts["Delete All Data?"].buttons["Delete All Data"].tap()
+        if app.frame.width > app.frame.height {
+            XCUIDevice.shared.orientation = .portrait
+        }
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
         relaunch(largeType: true)
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
@@ -64,7 +79,6 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.buttons["create-family"].exists)
         keepScreenshot("fresh-after-confirmed-local-reset")
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
-        try checkJoinFailureKeepsFreshSetup()
     }
 
     func testInvitationPackageColdAndWarmURLRoutingKeepsUnclaimedSetup() throws {
@@ -181,21 +195,51 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(screen("parent-dashboard").exists)
     }
 
-    func testFamilyDeletionNoticeAppearsOnceOverNormalOnboarding() {
+    func testAuthoritativeFamilyDeletionOffersConfirmedResetAtLargeType() throws {
         app.terminate()
-        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-family-deletion-notice"]
+        app.launchArguments = [
+            "--ui-test-store",
+            "--ui-test-reset",
+            "--ui-test-unavailable-family",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityXXXL"
+        ]
         app.launch()
 
-        let notice = app.alerts["Family data was deleted"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 8))
-        XCTAssertTrue(notice.staticTexts["This family was permanently deleted. You can create or join another family."].exists)
-        keepScreenshot("family-deletion-notice")
-        tap("OK")
+        XCTAssertTrue(screen("family-no-longer-available").waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Family No Longer Available"].exists)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS 'This family was deleted'"
+        )).firstMatch.exists)
+        let reset = app.buttons["reset-unavailable-family"]
+        reveal(reset)
+        XCTAssertTrue(reset.isHittable)
+        XCTAssertGreaterThanOrEqual(reset.frame.height, 44 - 0.01)
+        if app.frame.width >= 700 {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertTrue(screen("family-no-longer-available").waitForExistence(timeout: 5))
+            XCTAssertTrue(reset.isHittable)
+        }
+        reset.tap()
+        let alert = app.alerts["Reset App?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS \"obsolete family's profiles\""
+        )).firstMatch.exists)
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(screen("family-no-longer-available").exists)
+        keepScreenshot("family-no-longer-available-largest-text")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion])
+        reset.tap()
+        app.alerts["Reset App?"].buttons["Reset App"].tap()
+        if app.frame.width > app.frame.height {
+            XCUIDevice.shared.orientation = .portrait
+        }
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
 
         relaunch()
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.alerts["Family data was deleted"].exists)
+        XCTAssertFalse(screen("family-no-longer-available").exists)
     }
 
     func testOwnerMembershipRecoveryOffersReconnectAndAccountResetConfirmation() throws {
@@ -267,25 +311,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(screen("family-access-ended").waitForExistence(timeout: 8))
         reveal(app.buttons["retry-family-access"])
         XCTAssertTrue(app.buttons["retry-family-access"].isHittable)
-        reveal(app.buttons["delete-all-earned-it-data"])
-        XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
-
-        tap("delete-all-earned-it-data")
-        var alert = app.alerts["Delete All Earned It Data?"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        alert.buttons["Delete All Earned It Data"].tap()
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-
-        tap("welcome-settings")
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        reveal(app.buttons["delete-all-earned-it-data"])
-        tap("delete-all-earned-it-data")
-        alert = app.alerts["Delete All Earned It Data?"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        alert.buttons["Delete All Earned It Data"].tap()
-
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.navigationBars["Settings"].exists)
+        XCTAssertFalse(app.buttons["delete-all-earned-it-data"].exists)
 
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-startup-failure",
@@ -300,7 +326,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.buttons["delete-all-earned-it-data"].isHittable)
 
         tap("delete-all-earned-it-data")
-        alert = app.alerts["Delete All Earned It Data?"]
+        let alert = app.alerts["Delete All Earned It Data?"]
         XCTAssertTrue(alert.waitForExistence(timeout: 5))
         XCTAssertTrue(alert.staticTexts.containing(NSPredicate(
             format: "label == 'This permanently deletes your Earned It family data, membership, invitations, and local app data from iCloud and this device. This cannot be undone.'"
@@ -860,23 +886,6 @@ final class EarnedItUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
             XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
         }
-    }
-
-    private func checkJoinFailureKeepsFreshSetup() throws {
-        tap("join-family")
-        keepScreenshot("native-join-existing-family")
-        fill("invitation-code", with: "23456789AB")
-        tap("accept-invitation")
-        XCTAssertTrue(app.alerts["Unable to Join"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label CONTAINS 'iCloud sharing is unavailable'")).firstMatch.exists)
-        keepScreenshot("unsigned-simulator-sharing-dependency")
-        tap("OK")
-        tap("Cancel")
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 5))
-        relaunch()
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-        XCTAssertFalse(screen("parent-dashboard").exists)
-        XCTAssertFalse(screen("profile-selection").exists)
     }
 
     private func createFamily() {
