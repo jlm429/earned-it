@@ -31,13 +31,29 @@ final class SharingTests: XCTestCase {
             defer { publicRefreshFinished = true }
             try await reopened.synchronize()
         }
+        var cancelledRefreshFinished = false
+        let cancelledRefresh = Task {
+            defer { cancelledRefreshFinished = true }
+            try await reopened.synchronize()
+        }
         await Task.yield()
 
         XCTAssertFalse(publicRefreshFinished)
+        XCTAssertFalse(cancelledRefreshFinished)
         XCTAssertNil(reopened.errorMessage)
         XCTAssertEqual(reopened.pendingCount, 0)
         XCTAssertFalse(reopened.cloudAccessBlocked)
         XCTAssertFalse(reopened.cloudIsReadOnly)
+
+        cancelledRefresh.cancel()
+        do {
+            try await cancelledRefresh.value
+            XCTFail("Cancelled refresh must not synchronize")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertTrue(cancelledRefreshFinished)
+        XCTAssertFalse(publicRefreshFinished)
 
         gate.resume()
         try await reconciliation.value

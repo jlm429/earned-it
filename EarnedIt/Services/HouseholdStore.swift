@@ -50,6 +50,7 @@ final class HouseholdStore {
     private var facts: [HouseholdFact] = []
     private var staleOwnerMembershipReleaseCandidate: StaleOwnerMembershipReleaseCandidate?
     private var activeCloudMutationToken: UUID?
+    private var cloudMutationWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var automaticMembershipReconciliationTask: Task<Void, Error>?
     private var automaticMembershipReconciliationID: UUID?
 
@@ -215,6 +216,32 @@ final class HouseholdStore {
         }
     }
 
+    private func waitForActiveCloudMutation() async throws {
+        guard activeCloudMutationToken != nil else { return }
+        try Task.checkCancellation()
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard activeCloudMutationToken != nil else {
+                    continuation.resume()
+                    return
+                }
+                cloudMutationWaiters[id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let continuation = self?.cloudMutationWaiters.removeValue(forKey: id) else { return }
+                continuation.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func resumeCloudMutationWaiters() {
+        let waiters = Array(cloudMutationWaiters.values)
+        cloudMutationWaiters.removeAll()
+        for continuation in waiters { continuation.resume() }
+    }
+
     private func withExclusiveCloudMutation<T>(
         allowPendingReset: Bool = false,
         cancelScheduledSync: Bool = false,
@@ -248,7 +275,10 @@ final class HouseholdStore {
         defer {
             let ownsMutation = activeCloudMutationToken == token
             let shouldRunDeferredSync = ownsMutation && deferredAutomaticSync
-            if ownsMutation { activeCloudMutationToken = nil }
+            if ownsMutation {
+                activeCloudMutationToken = nil
+                resumeCloudMutationWaiters()
+            }
             if shouldRunDeferredSync { deferredAutomaticSync = false }
             if shouldRunDeferredSync || (shouldRestoreScheduledSync && pendingCount > 0) {
                 scheduleSync()
@@ -3825,9 +3855,9 @@ final class HouseholdStore {
         }
         try await Self.$cloudMutationToken.withValue(nil) {
             while activeCloudMutationToken != nil {
-                try Task.checkCancellation()
-                await Task.yield()
+                try await waitForActiveCloudMutation()
             }
+            try Task.checkCancellation()
             try await synchronize(deferWhenCloudMutationActive: false)
         }
     }
