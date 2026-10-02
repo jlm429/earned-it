@@ -1,6 +1,6 @@
 # App Store Release Readiness
 
-Audit date: September 16, 2026. This checklist reflects the repository at version 1.0 and does not assert the state of Apple Developer or App Store Connect accounts unless repository evidence supports it.
+Audit date: September 16, 2026. Release metadata entries were updated October 2, 2026 for version 1.0.3. This checklist does not assert the state of Apple Developer or App Store Connect accounts unless repository evidence supports it.
 
 ## Blocking
 
@@ -38,8 +38,8 @@ Audit date: September 16, 2026. This checklist reflects the repository at versio
 
 ## Already complete
 
-- [x] Native iPhone and iPad target with iOS 18.0 minimum deployment and both device families enabled.
-- [x] Marketing version 1.0 and a CI build-number strategy based on GitHub run number and attempt.
+- [x] Native iPhone and iPad target with iOS 18.0 minimum deployment, both device families enabled, and all four iPad multitasking orientations declared.
+- [x] Marketing version 1.0.3 and a CI build-number strategy based on GitHub run number and attempt.
 - [x] Release builds select the Production iCloud environment. Debug builds select Development.
 - [x] Explicit iCloud, CloudKit, sharing, custom invitation URL, and one-time-link entitlement configuration.
 - [x] Generated launch screen and app display name configuration.
