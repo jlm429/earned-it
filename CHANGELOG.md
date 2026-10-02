@@ -6,6 +6,7 @@ User-visible changes to Earned It.
 
 ### Fixed
 
+- Pull to refresh now waits for in-progress iCloud membership recovery instead of showing a pending-changes error. Automatic refreshes resume after recovery finishes.
 - Family owners can create their first invitation when the same valid iCloud household membership is already active but the device retained a different setup attempt. Conflicting households, accounts, claims, and authority remain blocked.
 
 ## Earned It 1.0.1

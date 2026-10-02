@@ -46,9 +46,11 @@ final class HouseholdStore {
     private var activeSync: Task<Void, Error>?
     private var invitationCleanupTail: Task<Void, Never>?
     private var syncAgain = false
+    private var deferredAutomaticSync = false
     private var facts: [HouseholdFact] = []
     private var staleOwnerMembershipReleaseCandidate: StaleOwnerMembershipReleaseCandidate?
     private var activeCloudMutationToken: UUID?
+    private var cloudMutationWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var automaticMembershipReconciliationTask: Task<Void, Error>?
     private var automaticMembershipReconciliationID: UUID?
 
@@ -214,17 +216,52 @@ final class HouseholdStore {
         }
     }
 
+    private func waitForActiveCloudMutation() async throws {
+        guard activeCloudMutationToken != nil else { return }
+        try Task.checkCancellation()
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard activeCloudMutationToken != nil else {
+                    continuation.resume()
+                    return
+                }
+                cloudMutationWaiters[id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let continuation = self?.cloudMutationWaiters.removeValue(forKey: id) else { return }
+                continuation.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func resumeCloudMutationWaiters() {
+        let waiters = Array(cloudMutationWaiters.values)
+        cloudMutationWaiters.removeAll()
+        for continuation in waiters { continuation.resume() }
+    }
+
     private func withExclusiveCloudMutation<T>(
         allowPendingReset: Bool = false,
         cancelScheduledSync: Bool = false,
+        whenCloudMutationActive: (@MainActor () -> T)? = nil,
         _ operation: @MainActor () async throws -> T
     ) async throws -> T {
         if let token = Self.cloudMutationToken {
-            guard token == activeCloudMutationToken else { throw HouseholdError.pendingChanges }
+            guard token == activeCloudMutationToken else {
+                if activeCloudMutationToken != nil, let whenCloudMutationActive {
+                    return whenCloudMutationActive()
+                }
+                throw HouseholdError.pendingChanges
+            }
             return try await operation()
         }
-        guard activeCloudMutationToken == nil,
-              !isDeletingAllEarnedItData,
+        if activeCloudMutationToken != nil {
+            if let whenCloudMutationActive { return whenCloudMutationActive() }
+            throw HouseholdError.pendingChanges
+        }
+        guard !isDeletingAllEarnedItData,
               allowPendingReset || !hasPendingAccountDataReset else {
             throw HouseholdError.pendingChanges
         }
@@ -236,8 +273,16 @@ final class HouseholdStore {
             syncTask = nil
         }
         defer {
-            if activeCloudMutationToken == token { activeCloudMutationToken = nil }
-            if shouldRestoreScheduledSync && pendingCount > 0 { scheduleSync() }
+            let ownsMutation = activeCloudMutationToken == token
+            let shouldRunDeferredSync = ownsMutation && deferredAutomaticSync
+            if ownsMutation {
+                activeCloudMutationToken = nil
+                resumeCloudMutationWaiters()
+            }
+            if shouldRunDeferredSync { deferredAutomaticSync = false }
+            if shouldRunDeferredSync || (shouldRestoreScheduledSync && pendingCount > 0) {
+                scheduleSync()
+            }
         }
         return try await Self.$cloudMutationToken.withValue(token) {
             try await operation()
@@ -3804,7 +3849,27 @@ final class HouseholdStore {
     }
 
     func synchronize() async throws {
-        try await withExclusiveCloudMutation {
+        if let token = Self.cloudMutationToken, token == activeCloudMutationToken {
+            try await synchronize(deferWhenCloudMutationActive: false)
+            return
+        }
+        try await Self.$cloudMutationToken.withValue(nil) {
+            while activeCloudMutationToken != nil {
+                try await waitForActiveCloudMutation()
+            }
+            try Task.checkCancellation()
+            try await synchronize(deferWhenCloudMutationActive: false)
+        }
+    }
+
+    private func synchronize(deferWhenCloudMutationActive: Bool) async throws {
+        let whenCloudMutationActive: (() -> Void)?
+        if deferWhenCloudMutationActive {
+            whenCloudMutationActive = { self.deferredAutomaticSync = true }
+        } else {
+            whenCloudMutationActive = nil
+        }
+        try await withExclusiveCloudMutation(whenCloudMutationActive: whenCloudMutationActive) {
         guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
             throw HouseholdError.pendingChanges
         }
@@ -3918,7 +3983,7 @@ final class HouseholdStore {
             await Self.$cloudMutationToken.withValue(nil) {
                 do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
                 guard let self else { return }
-                do { try await self.synchronize() } catch {
+                do { try await self.synchronize(deferWhenCloudMutationActive: true) } catch {
                     guard !Task.isCancelled else { return }
                     self.errorMessage = error.localizedDescription
                 }
@@ -3928,7 +3993,8 @@ final class HouseholdStore {
 
     func resetLocalData() throws {
         today = clock()
-        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+        guard activeCloudMutationToken == nil,
+              !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
             throw HouseholdError.pendingChanges
         }
         guard !isSyncing else { throw HouseholdError.pendingChanges }
