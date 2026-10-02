@@ -41,9 +41,23 @@ if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:2' "$info_plist" >/dev/null
 fi
 
 marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
-if [[ "$marketing_version" != "1.0.2" ]]; then
-  echo "Release application marketing version must be 1.0.2." >&2
+if [[ "$marketing_version" != "1.0.3" ]]; then
+  echo "Release application marketing version must be 1.0.3." >&2
   exit 1
 fi
 
-echo "Release metadata passed: Earned It $marketing_version supports iPhone and iPad."
+required_ipad_orientations=(
+  UIInterfaceOrientationPortrait
+  UIInterfaceOrientationPortraitUpsideDown
+  UIInterfaceOrientationLandscapeLeft
+  UIInterfaceOrientationLandscapeRight
+)
+
+for orientation in "${required_ipad_orientations[@]}"; do
+  if ! /usr/libexec/PlistBuddy -c 'Print :UISupportedInterfaceOrientations~ipad' "$info_plist" | grep -Fxq "    $orientation"; then
+    echo "Release application is missing required iPad orientation $orientation." >&2
+    exit 1
+  fi
+done
+
+echo "Release metadata passed: Earned It $marketing_version supports iPhone and iPad multitasking orientations."
