@@ -1624,6 +1624,54 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(transport.deleteFamilyAttempts, 3)
     }
 
+    func testDeleteFamilyRetryAfterReleasedLockFinishesLocalCleanup() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let resetter = TestAccountLocalDataResetter()
+        let deleting = try HouseholdStore(
+            repository: family.repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false,
+            localDataResetter: resetter
+        )
+        resetter.error = CKError(.networkFailure)
+        let releaseWrites = transport.accountLockMutationEnqueues
+
+        do { try await deleting.deleteFamily(); XCTFail("Local cleanup failure must be reported") }
+        catch { XCTAssertEqual((error as? CKError)?.code, .networkFailure) }
+
+        let releasedLock = try XCTUnwrap(server.accountMembershipLocks["owner"])
+        XCTAssertEqual(releasedLock.state, .released)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, releaseWrites + 1)
+        XCTAssertEqual(deleting.session.pendingFamilyDeletion, true)
+        XCTAssertNotNil(deleting.household)
+
+        var modifiedLock = releasedLock
+        modifiedLock.claimBinding = "different-owner-claim"
+        server.accountMembershipLocks["owner"] = modifiedLock
+        resetter.error = nil
+        let relaunched = try HouseholdStore(
+            repository: family.repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false,
+            localDataResetter: resetter
+        )
+        do { try await relaunched.deleteFamily(); XCTFail("Modified released lock must be refused") }
+        catch { XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict) }
+        XCTAssertNotNil(relaunched.household)
+
+        server.accountMembershipLocks["owner"] = releasedLock
+        try await relaunched.deleteFamily()
+
+        XCTAssertNil(relaunched.household)
+        XCTAssertEqual(server.accountMembershipLocks["owner"], releasedLock)
+        XCTAssertEqual(transport.accountLockMutationEnqueues, releaseWrites + 1)
+    }
+
     func testDeletingIntentAndRevocationDoNotReleaseChildLock() async throws {
         let server = TestCloudServer()
         let ownerTransport = TestTransport(server: server, account: "owner")

@@ -4390,6 +4390,7 @@ final class HouseholdStore {
               let transport else { throw HouseholdError.permission }
         let deviceID = session.deviceID
         let householdID = location.householdID
+        let expectedAccountGeneration = transport.accountGeneration
         @MainActor func requireDeletionSession(pending: Bool? = nil) throws {
             guard session.deviceID == deviceID,
                   session.householdID == householdID,
@@ -4400,7 +4401,10 @@ final class HouseholdStore {
                 throw HouseholdError.permission
             }
         }
-        guard try await transport.participantID() == participant else { throw HouseholdError.wrongAccount }
+        guard try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
         try requireDeletionSession()
 
         if session.pendingFamilyDeletion != true {
@@ -4430,17 +4434,25 @@ final class HouseholdStore {
         )
         try requireDeletionSession(pending: true)
         guard let deletingLock = try await transport.accountMembershipLock(),
+              transport.accountGeneration == expectedAccountGeneration,
               deletingLock.householdID == householdID,
               deletingLock.attemptID == attemptID,
-              deletingLock.state == .active,
+              deletingLock.state == .active || deletingLock.state == .released,
               deletingLock.claimBinding == AccountMembershipBinding.owner(householdID: householdID),
               exactOwnerAuthorityBinding(for: deletingLock, participant: participant) != nil else {
             throw HouseholdError.accountMembershipConflict
         }
-        guard try await transport.releaseAccountMembershipLock(
-            householdID: location.householdID, attemptID: attemptID,
-            expectedParticipantID: participant, now: clock()
-        ) else { throw HouseholdError.cloudUnavailable }
+        if deletingLock.state == .active {
+            guard try await transport.releaseAccountMembershipLock(
+                householdID: location.householdID, attemptID: attemptID,
+                expectedParticipantID: participant, now: clock()
+            ) else { throw HouseholdError.cloudUnavailable }
+        }
+        guard transport.accountGeneration == expectedAccountGeneration,
+              try await transport.participantID() == participant,
+              transport.accountGeneration == expectedAccountGeneration else {
+            throw HouseholdError.wrongAccount
+        }
         try requireDeletionSession(pending: true)
         syncTask?.cancel()
         try requireDeletionSession(pending: true)
