@@ -3993,7 +3993,8 @@ final class HouseholdStore {
 
     func resetLocalData() throws {
         today = clock()
-        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+        guard activeCloudMutationToken == nil,
+              !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
             throw HouseholdError.pendingChanges
         }
         guard !isSyncing else { throw HouseholdError.pendingChanges }

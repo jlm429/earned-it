@@ -148,6 +148,40 @@ final class SharingTests: XCTestCase {
         XCTAssertEqual(reopened.syncMessage, "Up to date")
     }
 
+    func testDisconnectCannotInterruptMembershipReconciliation() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        try await family.store.connect()
+        let reopened = try HouseholdStore(
+            repository: family.repository,
+            transport: transport,
+            clock: { family.clock.now },
+            automaticSync: false
+        )
+        let gate = TestSuspensionGate()
+        transport.beforeFetch = {
+            transport.beforeFetch = nil
+            await gate.wait()
+        }
+
+        let reconciliation = Task {
+            try await reopened.reconcileAccountMembershipLockAutomatically()
+        }
+        while !gate.isWaiting { await Task.yield() }
+        let session = reopened.session
+        let snapshot = reopened.snapshot
+
+        XCTAssertThrowsError(try reopened.resetLocalData()) {
+            XCTAssertEqual($0 as? HouseholdError, .pendingChanges)
+        }
+        XCTAssertEqual(reopened.session, session)
+        XCTAssertEqual(reopened.snapshot, snapshot)
+
+        gate.resume()
+        try await reconciliation.value
+    }
+
     func testParentOnlyFamilyRenameUsesJournalAndConvergesWithoutShareMutation() async throws {
         let server = TestCloudServer()
         let ownerTransport = TestTransport(server: server, account: "owner")
