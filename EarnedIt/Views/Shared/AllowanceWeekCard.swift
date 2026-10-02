@@ -79,7 +79,7 @@ struct AllowanceWeekCard: View {
             }
             if !week.items.isEmpty {
                 DisclosureGroup {
-                    Text("Weeks run Monday through Sunday. Done and Not Needed count toward the result. Every required chore must be accounted for to earn the week.")
+                    Text("Weeks run Monday through Sunday. Done and legacy per-child Not Needed count toward the result. Current Not Needed Today occurrences are excluded from both the completed and required totals. Every included required chore must be accounted for to earn the week.")
                         .padding(.top, 4)
                 } label: {
                     Label("How weekly progress works", systemImage: "info.circle")
