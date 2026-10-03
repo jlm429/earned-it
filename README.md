@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
+  <a href="https://apps.apple.com/us/app/earned-it-chore-tracker/id6809452728">
+    <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
+  </a>
 </p>
 
 # Earned It
