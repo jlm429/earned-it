@@ -632,6 +632,11 @@ final class EarnedItUITests: XCTestCase {
     }
 
     func testPuntApprovalRelaunchAndRecipientCompletion() {
+        verifyPuntRegressionInteractions()
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
         preparePuntChore()
         tap("switch-user")
         tap("user-card-hanna")
@@ -658,23 +663,122 @@ final class EarnedItUITests: XCTestCase {
     }
 
     func testPuntDeclineAndDeniedAlertsRemainUsefulAtLargeType() throws {
-        preparePuntChore()
-        tap("switch-user")
-        tap("user-card-hanna")
-        sendUIPuntRequest()
-        tap("switch-user")
-        tap("user-card-alek")
-        relaunch(largeType: true)
+        launchPuntFixture("--ui-test-activity-overflow")
+        XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 53 unread")
         tap("family-activity-button")
         XCTAssertTrue(app.staticTexts["activity-alerts-denied"].waitForExistence(timeout: 5))
+        let unread = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'read-activity-'"))
+        XCTAssertEqual(unread.count, 53)
+        var readIDs = Set<String>()
+        for _ in 0..<53 {
+            let button = unread.firstMatch
+            reveal(button)
+            XCTAssertTrue(readIDs.insert(button.identifier).inserted)
+            button.tap()
+        }
+        XCTAssertEqual(readIDs.count, 53)
+        XCTAssertEqual(unread.count, 0)
+        keepScreenshot("all-53-updates-read")
+        tap("Done")
+        XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 0 unread")
+        relaunchWeekly(date: "2026-09-07T16:00:00Z", largeType: true, hideClock: true)
+        XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 0 unread")
+        tap("family-activity-button")
+        XCTAssertEqual(unread.count, 0)
+        XCTAssertTrue(app.buttons["accept-punt"].exists)
+        XCTAssertTrue(app.buttons["decline-punt"].exists)
+        keepScreenshot("pending-punt-preserved-after-reading-and-relaunch")
         tap("decline-punt")
         keepScreenshot("punt-declined-denied-alerts-largest-text")
         tap("Done")
         tap("switch-user")
         tap("user-card-hanna")
-        XCTAssertTrue(asNeededStateButton("state-punt-dishwasher-hanna", state: "Unmarked").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["state-punt-dishwasher-hanna"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["cancel-punt-punt-dishwasher"].exists)
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
+    private func launchPuntFixture(_ flag: String, largeType: Bool = false) {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-weekly-fixture", "--ui-test-hide-clock", flag,
+                               "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        if largeType { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        app.launch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8) || screen("child-home").exists)
+    }
+
+    private func verifyPuntRegressionInteractions() {
+        launchPuntFixture("--ui-test-punt-regressions")
+        tap("not-needed-restore-task")
+        let keepTurn = app.buttons["keep-turn"].firstMatch
+        XCTAssertTrue(keepTurn.waitForExistence(timeout: 5))
+        keepTurn.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-restore-task"], containing: "Not needed today"))
+        tap("restore-requirement-restore-task")
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-restore-task"], containing: "Hanna"))
+        XCTAssertFalse(app.buttons["restore-requirement-restore-task"].exists)
+        keepScreenshot("scheduled-requirement-restored-with-implicit-punt-capability")
+        tap("not-needed-stale-task")
+        XCTAssertTrue(keepTurn.waitForExistence(timeout: 5))
+        keepTurn.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-stale-task"], containing: "Not needed today"))
+        XCTAssertTrue(screen("history-stale-task-hanna").exists)
+        keepScreenshot("stale-former-owner-done-remains-audit-only")
+        relaunchWeekly(date: "2026-09-07T16:00:00Z", hideClock: true)
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-stale-task"], containing: "Not needed today"))
+        XCTAssertFalse(app.buttons["restore-requirement-restore-task"].exists)
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        keepScreenshot("completed-legacy-next-turn")
+        XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Alek"),
+                      app.staticTexts["next-turn-legacy-task"].debugDescription)
+        tap("skip-next-legacy-task")
+        XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Hanna"))
+        tap("make-available-legacy-task")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("switch-user")
+        tap("user-card-hanna")
+        let legacyID = asNeededStateElement("state-legacy-task-hanna", state: "Done").identifier
+        tap("request-punt-legacy-task")
+        tap("Ask Alek")
+        tap("Send Punt Request")
+        // Cancel and retry so the recipient sees a displaced request alongside the current one.
+        tap("cancel-punt-legacy-task")
+        tap("request-punt-legacy-task")
+        tap("Ask Alek")
+        tap("Send Punt Request")
+        tap("switch-user")
+        tap("user-card-alek")
+        XCTAssertFalse(app.staticTexts["full-status-stale-task"].exists)
+        tap("family-activity-button")
+        XCTAssertEqual(app.buttons.matching(identifier: "accept-punt").count, 1)
+        XCTAssertTrue(app.staticTexts["Cancelled. The original child keeps this turn."].exists)
+        keepScreenshot("displaced-request-has-no-approval-control")
+        tap("accept-punt")
+        XCTAssertFalse(app.buttons["accept-punt"].exists)
+        XCTAssertFalse(app.buttons["decline-punt"].exists)
+        tap("Done")
+        XCTAssertFalse(app.buttons["request-punt-legacy-task"].exists)
+        let fresh = asNeededStateButton("state-legacy-task-alek", state: "Unmarked")
+        reveal(fresh)
+        let freshID = fresh.identifier
+        XCTAssertNotEqual(freshID.components(separatedBy: "-alek-").last, legacyID.components(separatedBy: "-hanna-").last)
+        fresh.tap()
+        relaunchWeekly(date: "2026-09-07T16:00:00Z", hideClock: true)
+        XCTAssertEqual(asNeededStateElement("state-legacy-task-alek", state: "Done").identifier, freshID)
+        keepScreenshot("fresh-legacy-occurrence-recipient-credit-persists")
+        tap("switch-user")
+        tap("user-card-hanna")
+        XCTAssertEqual(asNeededStateElement("state-legacy-task-hanna", state: "Done").identifier, legacyID)
+        XCTAssertFalse(asNeededStateButtons("state-legacy-task-alek").firstMatch.exists)
+        tap("switch-user")
+        tap("user-card-test-parent")
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Alek"))
+        XCTAssertTrue(app.staticTexts["Completed 2 times today"].exists)
+        keepScreenshot("original-rotation-slot-and-both-occurrences-preserved")
     }
 
     private func preparePuntChore() {
@@ -1085,6 +1189,12 @@ final class EarnedItUITests: XCTestCase {
             reveal(element)
         }
         element.tap()
+    }
+
+    private func asNeededStateElement(_ identifierPrefix: String, state: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "\(identifierPrefix)-", state
+        )).firstMatch
     }
 
     private func asNeededStateButtons(_ identifierPrefix: String) -> XCUIElementQuery {
