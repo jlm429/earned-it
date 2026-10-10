@@ -337,7 +337,6 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$archive_path" \
-            CURRENT_PROJECT_VERSION="$build_number" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$distribution_certificate_sha1" \

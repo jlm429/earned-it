@@ -44,20 +44,26 @@ if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:2' "$info_plist" >/dev/null
 fi
 
 marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
-expected_marketing_version="$(
+build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")"
+release_settings="$(
   xcodebuild \
     -project "$project_path" \
     -target EarnedIt \
     -configuration Release \
-    -showBuildSettings 2>/dev/null \
-    | awk '$1 == "MARKETING_VERSION" { print $3; exit }'
+    -showBuildSettings 2>/dev/null
 )"
+expected_marketing_version="$(awk '$1 == "MARKETING_VERSION" { print $3; exit }' <<< "$release_settings")"
+expected_build_number="$(awk '$1 == "CURRENT_PROJECT_VERSION" { print $3; exit }' <<< "$release_settings")"
 if [[ -z "$expected_marketing_version" ]]; then
   echo "Could not resolve the Release MARKETING_VERSION from $project_path." >&2
   exit 1
 fi
 if [[ "$marketing_version" != "$expected_marketing_version" ]]; then
   echo "Release application marketing version must be $expected_marketing_version." >&2
+  exit 1
+fi
+if [[ -z "$expected_build_number" || "$build_number" != "$expected_build_number" ]]; then
+  echo "Release application build number must match the project ($expected_build_number)." >&2
   exit 1
 fi
 
@@ -75,4 +81,4 @@ for orientation in "${required_ipad_orientations[@]}"; do
   fi
 done
 
-echo "Release metadata passed: Earned It $marketing_version supports iPhone and iPad multitasking orientations."
+echo "Release metadata passed: Earned It $marketing_version build $build_number supports iPhone and iPad multitasking orientations."
