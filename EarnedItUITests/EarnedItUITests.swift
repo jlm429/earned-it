@@ -741,6 +741,55 @@ final class EarnedItUITests: XCTestCase {
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
     }
 
+    func testPuntStatsWeekSwitchEmptyStateAndRelaunch() throws {
+        launchPuntFixture("--ui-test-punt-stats")
+        tap("family-activity-button")
+        XCTAssertEqual(app.staticTexts["punt-stats-empty"].label, "No accepted punts this week.")
+        tap("punt-stats-last-week")
+        XCTAssertTrue(app.buttons["punt-stats-last-week"].isSelected)
+        XCTAssertGreaterThanOrEqual(app.buttons["punt-stats-last-week"].frame.height, 44)
+        XCTAssertEqual(app.staticTexts["punt-stats-punted"].label, "You punted: 1")
+        XCTAssertEqual(app.staticTexts["punt-stats-covered"].label, "You covered: 2")
+        XCTAssertTrue(app.staticTexts["You punted to Alek 1 time."].exists)
+        XCTAssertTrue(app.staticTexts["You covered for Alek 2 times."].exists)
+        keepScreenshot("punt-stats-last-week")
+        tap("punt-stats-this-week")
+        XCTAssertTrue(app.staticTexts["punt-stats-empty"].exists)
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-weekly-fixture", "--ui-test-hide-clock",
+                               "--ui-test-date=2026-09-14T16:00:00Z"]
+        app.launch()
+        tap("family-activity-button")
+        tap("punt-stats-last-week")
+        XCTAssertEqual(app.staticTexts["punt-stats-covered"].label, "You covered: 2")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+        tap("Done")
+        tap("switch-user")
+        tap("user-card-test-parent")
+        tap("family-activity-button")
+        XCTAssertFalse(screen("punt-stats").exists)
+    }
+
+    func testPuntStatsEmptyAndBreakdownAtLargeType() throws {
+        launchPuntFixture("--ui-test-punt-stats", largeType: true)
+        tap("family-activity-button")
+        let lastWeek = app.buttons["punt-stats-last-week"]
+        XCTAssertTrue(lastWeek.waitForExistence(timeout: 5))
+        XCTAssertLessThan(lastWeek.frame.height, app.frame.height / 3,
+                          "Week choices must remain readable without a column of individual letters.")
+        reveal(app.staticTexts["punt-stats-empty"])
+        XCTAssertEqual(app.staticTexts["punt-stats-empty"].label, "No accepted punts this week.")
+        keepScreenshot("punt-stats-empty-largest-text")
+        tap("punt-stats-last-week")
+        reveal(app.staticTexts["You covered for Alek 2 times."])
+        XCTAssertTrue(app.staticTexts["You covered for Alek 2 times."].isHittable)
+        XCTAssertEqual(app.staticTexts["punt-stats-punted"].label, "You punted: 1")
+        keepScreenshot("punt-stats-breakdown-largest-text")
+        tap("punt-stats-this-week")
+        XCTAssertTrue(app.staticTexts["punt-stats-empty"].exists)
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
     private func launchPuntFixture(_ flag: String, largeType: Bool = false) {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-weekly-fixture", "--ui-test-hide-clock", flag,

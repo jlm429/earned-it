@@ -45,6 +45,14 @@ struct PuntProjection {
 }
 
 enum PuntRules {
+    static func originalOwner(scope: PuntScope, snapshot: HouseholdSnapshot) -> UUID? {
+        if let occurrenceID = scope.occurrenceID {
+            return snapshot.asNeededProjection(choreID: scope.choreID, through: scope.day)
+                .occurrences.first { $0.id == occurrenceID }?.assignedMemberID
+        }
+        return ChoreRules.rotationOwner(choreID: scope.choreID, on: scope.day, snapshot: snapshot)?.id
+    }
+
     static func scope(for chore: DailyChore) -> PuntScope {
         PuntScope(choreID: chore.choreID, revisionID: chore.configuration.id,
                   day: chore.day, occurrenceID: chore.occurrenceID)

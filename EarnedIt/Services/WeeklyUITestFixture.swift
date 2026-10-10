@@ -104,6 +104,39 @@ enum PuntUITestFixture {
     }
 }
 
+/// Uses only the dedicated DEBUG test journal and the household clock.
+@MainActor
+enum PuntStatsUITestFixture {
+    static func prepare(repository: HouseholdRepository) throws {
+        guard WeeklyUITestFixture.enabled,
+              ProcessInfo.processInfo.arguments.contains("--ui-test-punt-stats") else { return }
+        let store = try HouseholdStore(repository: repository, clock: { WeeklyUITestFixture.now },
+                                       automaticSync: false, activityAlerts: DisabledActivityAlerts())
+        guard store.household == nil else { return }
+        try store.createFamily(name: "Test Family", parentName: "Test Parent",
+                               timeZone: TimeZone(identifier: "America/New_York")!)
+        let parent = store.selectedMember!
+        let hanna = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        let alek = try store.saveMember(name: "Alek", role: .child, avatar: .rocket)
+        try store.finishSetup()
+        for index in 0..<3 {
+            try store.selectProfile(parent.id)
+            let sender = index == 0 ? hanna : alek
+            let recipient = index == 0 ? alek : hanna
+            let chore = try store.saveChore(weekday: .monday, title: "Stats chore \(index)", mode: .alternating,
+                memberIDs: [hanna.id, alek.id], firstAlternatingMemberID: sender.id)
+            try store.selectProfile(sender.id)
+            try store.requestPunt(choreID: chore, recipientID: recipient.id)
+            let pending = store.activity.first { $0.punt?.status == .pending }!.id
+            try store.selectProfile(recipient.id)
+            try store.decidePunt(requestFactID: pending, kind: .accepted)
+        }
+        WeeklyUITestFixture.now = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
+        store.refreshDate()
+        try store.selectProfile(hanna.id)
+    }
+}
+
 struct WeeklyTestClockControl: View {
     @Environment(HouseholdStore.self) private var store
     var body: some View {
