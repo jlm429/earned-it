@@ -6,6 +6,7 @@ import UIKit
 @MainActor
 @Observable
 final class HouseholdStore {
+    static let supportedJournalCapability = JournalCapability.occurrenceAwareChores
     @TaskLocal private static var cloudMutationToken: UUID?
 
     private enum MissingFamilyAccessOutcome: Equatable {
@@ -36,6 +37,7 @@ final class HouseholdStore {
     private(set) var lastSyncedAt: Date?
     private(set) var cloudAccessBlocked = false
     private(set) var cloudIsReadOnly = false
+    private var transportRequiresAppUpdate = false
     private(set) var isCheckingAccountMembership = false
     private(set) var isJoiningInvitation = false
     private(set) var isDeletingAllEarnedItData = false
@@ -141,6 +143,10 @@ final class HouseholdStore {
         return "\(pending.location.id)/\(pending.invitationID?.uuidString ?? "pending")/\(pending.phase.rawValue)"
     }
     var latestInvitationDiagnostics: String? { transport?.familyTransitionDiagnostics.latestInvitationTrace }
+    var requiresAppUpdate: Bool {
+        transportRequiresAppUpdate
+            || snapshot.requiredJournalCapability > Self.supportedJournalCapability
+    }
 
     func recordInvitationErrorBeforePresentation(_ error: Error) {
         transport?.familyTransitionDiagnostics.recordUserFacingErrorConversion(error)
@@ -314,6 +320,7 @@ final class HouseholdStore {
         lastSyncedAt = nil
         cloudAccessBlocked = false
         cloudIsReadOnly = false
+        transportRequiresAppUpdate = false
         isCheckingAccountMembership = false
         requiresMembershipRecovery = false
         canReleaseStaleOwnerMembership = false
@@ -690,7 +697,8 @@ final class HouseholdStore {
         }
         let current = snapshot.configuration(choreID: choreID, on: day)
         let future = snapshot.configuration(choreID: choreID, on: tomorrow)
-        let currentOccurrence = dailyList().first { $0.id == choreID }
+        let currentOccurrences = dailyList().filter { $0.choreID == choreID }
+        let currentOccurrence = currentOccurrences.first
         guard current?.isArchived == false || future?.isArchived == false else {
             throw HouseholdError.invalidAssignment
         }
@@ -713,47 +721,72 @@ final class HouseholdStore {
                 schedulingMode: future.schedulingMode
             )))
         }
-        tombstones.append(.choreDeletion(ChoreDeletion(
-            choreID: choreID, day: day, recordedByMemberID: parent.id,
-            revisionID: current?.id,
-            eligibleMemberIDs: currentOccurrence?.eligibleMembers.map(\.id),
-            turnOwnerID: currentOccurrence?.turnOwnerID,
-            wasNotNeeded: currentOccurrence?.isNotNeeded,
-            resolvedContributions: currentOccurrence?.contributions.filter { $0.state != .unmarked },
-            resolvedExcusedMemberIDs: currentOccurrence.map { occurrence in
-                occurrence.eligibleMembers.filter { member in
-                    snapshot.excuses.contains {
-                        $0.memberID == member.id && $0.day == day && $0.isExcused
-                    }
-                }.map(\.id)
-            } ?? []
-        )))
-        try append(tombstones)
+        if let current, current.schedulingMode == .asNeeded {
+            let resolved = currentOccurrences.filter {
+                $0.asNeededStatus == .completed
+            }.compactMap { occurrence -> ResolvedAsNeededDeletionOccurrence? in
+                guard let occurrenceID = occurrence.occurrenceID else { return nil }
+                return ResolvedAsNeededDeletionOccurrence(
+                    id: occurrenceID, revisionID: occurrence.configuration.id,
+                    day: occurrence.day, eligibleMemberIDs: occurrence.eligibleMembers.map(\.id),
+                    requiredMemberIDs: Array(occurrence.requiredMemberIDs),
+                    assignedMemberID: occurrence.turnOwnerID,
+                    contributions: occurrence.contributions.filter { $0.state != .unmarked },
+                    excusedMemberIDs: occurrence.eligibleMembers.filter { member in
+                        snapshot.excuses.contains {
+                            $0.memberID == member.id && $0.day == day && $0.isExcused
+                        }
+                    }.map(\.id)
+                )
+            }
+            tombstones.append(.occurrenceAwareChoreDeletion(OccurrenceAwareChoreDeletion(
+                choreID: choreID, day: day, recordedByMemberID: parent.id,
+                revisionID: current.id, resolvedOccurrences: resolved
+            )))
+            try appendOccurrenceAware(tombstones, recordedByMemberID: parent.id)
+        } else {
+            tombstones.append(.choreDeletion(ChoreDeletion(
+                choreID: choreID, day: day, recordedByMemberID: parent.id,
+                revisionID: current?.id,
+                eligibleMemberIDs: currentOccurrence?.eligibleMembers.map(\.id),
+                turnOwnerID: currentOccurrence?.turnOwnerID,
+                wasNotNeeded: currentOccurrence?.isNotNeeded,
+                resolvedContributions: currentOccurrence?.contributions.filter { $0.state != .unmarked },
+                resolvedExcusedMemberIDs: currentOccurrence.map { occurrence in
+                    occurrence.eligibleMembers.filter { member in
+                        snapshot.excuses.contains {
+                            $0.memberID == member.id && $0.day == day && $0.isExcused
+                        }
+                    }.map(\.id)
+                } ?? []
+            )))
+            try append(tombstones)
+        }
     }
 
     func activateAsNeededChore(choreID: UUID, date: Date? = nil) throws {
         try requireParent()
         let occurrenceDay = CivilDay(date ?? today, calendar: calendar)
+        let projection = snapshot.asNeededProjection(choreID: choreID, through: occurrenceDay)
         guard occurrenceDay == day,
               let revision = snapshot.configuration(choreID: choreID, on: occurrenceDay),
               !revision.isArchived, !snapshot.isChoreDeleted(choreID, on: occurrenceDay),
               revision.schedulingMode == .asNeeded,
-              snapshot.occurrence(choreID: choreID, on: occurrenceDay) == nil,
-              !snapshot.occurrenceDispositions.contains(where: { activation in
-                  guard activation.choreID == choreID, activation.state == .available else { return false }
-                  guard snapshot.configuration(choreID: choreID, on: activation.day)?.id
-                      == activation.revisionID else { return false }
-                  return ChoreRules.dailyList(snapshot: snapshot, day: activation.day, today: day)
-                      .first(where: { $0.id == choreID })?.isFullyComplete == false
-              }),
-              !ChoreRules.eligibleMembers(for: revision, on: occurrenceDay, snapshot: snapshot).isEmpty,
+              projection.openOccurrence == nil,
               let parent = selectedMember else { throw HouseholdError.unavailableDay }
-        try append(.occurrence(ChoreOccurrenceDisposition(
-            choreID: choreID, revisionID: revision.id, day: occurrenceDay, state: .available,
-            alternatingSkipBehavior: nil, recordedByMemberID: parent.id,
-            assignedMemberID: revision.mode == .alternating
-                ? ChoreRules.nextAlternatingOwner(choreID: choreID, on: occurrenceDay, snapshot: snapshot)?.id : nil
-        )))
+        let eligible = ChoreRules.eligibleMembers(for: revision, on: occurrenceDay, snapshot: snapshot)
+        guard !eligible.isEmpty else { throw HouseholdError.unavailableDay }
+        let assigned = revision.mode == .alternating
+            ? ChoreRules.nextAlternatingOwner(choreID: choreID, on: occurrenceDay, snapshot: snapshot)?.id : nil
+        if revision.mode == .alternating, assigned == nil { throw HouseholdError.unavailableDay }
+        let required = revision.mode == .anyOne ? []
+            : (assigned.map { [$0] } ?? eligible.map(\.id))
+        try appendOccurrenceAware(.asNeededOccurrence(AsNeededOccurrence(
+            id: UUID(), choreID: choreID, revisionID: revision.id, day: occurrenceDay,
+            eligibleMemberIDs: eligible.map(\.id), requiredMemberIDs: required,
+            assignedMemberID: assigned, expectedControlHeadID: projection.controlHeadID,
+            recordedByMemberID: parent.id
+        )), recordedByMemberID: parent.id)
     }
 
     func makeAsNeededChoreAvailable(choreID: UUID) async throws {
@@ -763,17 +796,40 @@ final class HouseholdStore {
 
     func skipNextAlternatingChild(choreID: UUID) throws {
         try requireParent()
+        let projection = snapshot.asNeededProjection(choreID: choreID, through: day)
         guard let revision = snapshot.configuration(choreID: choreID, on: day),
               !revision.isArchived, !snapshot.isChoreDeleted(choreID, on: day),
               revision.mode == .alternating,
               revision.schedulingMode == .asNeeded,
-              ChoreRules.activeOccurrence(for: revision, in: dailyList()) == nil,
+              projection.openOccurrence == nil,
               let owner = nextAlternatingOwner(choreID: choreID),
+              Set(ChoreRules.eligibleMembers(for: revision, on: day, snapshot: snapshot).map(\.id)).count > 1,
               let parent = selectedMember else { throw HouseholdError.unavailableDay }
-        try append(.alternatingTurnAdvance(AlternatingTurnAdvance(
+        try appendOccurrenceAware(.asNeededTurnAdvance(AsNeededTurnAdvance(
             choreID: choreID, revisionID: revision.id, expectedMemberID: owner.id,
-            day: day, recordedByMemberID: parent.id
-        )))
+            day: day, expectedControlHeadID: projection.controlHeadID,
+            recordedByMemberID: parent.id
+        )), recordedByMemberID: parent.id)
+    }
+
+    func withdrawAsNeededOccurrence(choreID: UUID, occurrenceID: UUID) throws {
+        try requireParent()
+        let projection = snapshot.asNeededProjection(choreID: choreID, through: day)
+        guard let parent = selectedMember,
+              let open = projection.openOccurrence,
+              open.id == occurrenceID,
+              !open.contributions.values.contains(where: { $0.state == .done }),
+              let head = projection.controlHeadID else { throw HouseholdError.unavailableDay }
+        try appendOccurrenceAware(.asNeededOccurrenceResolution(AsNeededOccurrenceResolution(
+            occurrenceID: occurrenceID, choreID: choreID, revisionID: open.revisionID,
+            day: open.day, state: .withdrawn, expectedControlHeadID: head,
+            recordedByMemberID: parent.id
+        )), recordedByMemberID: parent.id)
+    }
+
+    func withdrawAsNeededOccurrenceAfterRefreshing(choreID: UUID, occurrenceID: UUID) async throws {
+        try await refreshSharedHistoryBeforeAsNeededMutation()
+        try withdrawAsNeededOccurrence(choreID: choreID, occurrenceID: occurrenceID)
     }
 
     func skipNextAlternatingChildAfterRefreshing(choreID: UUID) async throws {
@@ -808,7 +864,7 @@ final class HouseholdStore {
         guard occurrenceDay <= day,
               let chore = dailyList(on: date).first(where: { $0.id == choreID }),
               chore.isScheduledOccurrence,
-              !chore.isNotNeeded,
+              !chore.isNotNeeded, chore.completedMembers.isEmpty,
               let parent = selectedMember else { throw HouseholdError.unavailableDay }
         if chore.configuration.mode == .alternating {
             guard alternatingSkipBehavior != nil else { throw HouseholdError.invalidAssignment }
@@ -821,16 +877,70 @@ final class HouseholdStore {
         )))
     }
 
-    func setCompletion(choreID: UUID, memberID: UUID, date: Date, state: DailyStateKind) throws {
+    func restoreScheduledRequirement(choreID: UUID, date: Date) throws {
+        try requireParent()
+        let occurrenceDay = CivilDay(date, calendar: calendar)
+        guard occurrenceDay == day,
+              let chore = dailyList(on: date).first(where: { $0.choreID == choreID }),
+              chore.isScheduledOccurrence, chore.isNotNeeded,
+              let dispositionFactID = snapshot.scheduledNotNeededFactID(
+                choreID: choreID, revisionID: chore.configuration.id, on: occurrenceDay
+              ), let parent = selectedMember else { throw HouseholdError.unavailableDay }
+        try appendOccurrenceAware(.scheduledOccurrenceRestoration(ScheduledOccurrenceRestoration(
+            choreID: choreID, revisionID: chore.configuration.id, day: occurrenceDay,
+            dispositionFactID: dispositionFactID, recordedByMemberID: parent.id
+        )), recordedByMemberID: parent.id)
+    }
+
+    func setCompletion(choreID: UUID, occurrenceID: UUID? = nil, memberID: UUID,
+                       date: Date, state: DailyStateKind) throws {
         try requireWriteAccess()
         let requestedDay = CivilDay(date, calendar: calendar)
         if selectedMember?.role == .child && !PermissionService.canChildEdit(day: requestedDay, today: day) {
             throw HouseholdError.completionLocked
         }
-        guard let actor = selectedMember,
-              let chore = dailyList(on: date).first(where: { $0.id == choreID }),
+        guard let actor = selectedMember else { throw HouseholdError.permission }
+        let matches = dailyList(on: date).filter { $0.choreID == choreID }
+        let preferredOccurrenceID = occurrenceID ?? snapshot.asNeededProjection(
+            choreID: choreID, through: requestedDay
+        ).occurrences.last(where: { $0.day == requestedDay && $0.status != .withdrawn })?.id
+        let chore = preferredOccurrenceID.flatMap { id in matches.first { $0.occurrenceID == id } }
+            ?? matches.first(where: { $0.isActionableOccurrence }) ?? matches.last
+        guard let chore,
               PermissionService.canSetState(actor: actor, target: memberID, chore: chore, state: state) else {
             throw HouseholdError.permission
+        }
+        if let occurrenceID = chore.occurrenceID {
+            let projected = snapshot.asNeededProjection(choreID: choreID, through: requestedDay)
+            guard let occurrence = projected.occurrences.first(where: { $0.id == occurrenceID }),
+                  occurrence.status != .withdrawn else { throw HouseholdError.permission }
+            if occurrence.isLegacy,
+               snapshot.requiredJournalCapability < Self.supportedJournalCapability {
+                try append(.completion(DatedCompletion(
+                    choreID: choreID, revisionID: chore.configuration.id,
+                    memberID: memberID, day: chore.day, state: state,
+                    eligibleMemberIDs: (chore.configuration.mode == .anyOne
+                        ? chore.eligibleMembers : chore.requiredMembers).map(\.id),
+                    mode: chore.configuration.mode, recordedByMemberID: actor.id
+                )))
+                return
+            }
+            var recordedState = state
+            if occurrence.status == .completed, state == .unmarked,
+               requestedDay < day || projected.controlHeadID != occurrence.closureFactID {
+                recordedState = .missed
+            }
+            let completion = AsNeededOccurrenceCompletion(
+                occurrenceID: occurrenceID, choreID: choreID,
+                revisionID: chore.configuration.id, memberID: memberID, day: chore.day,
+                state: recordedState,
+                eligibleMemberIDs: chore.configuration.mode == .anyOne
+                    ? chore.eligibleMembers.map(\.id) : chore.requiredMembers.map(\.id),
+                mode: chore.configuration.mode, recordedByMemberID: actor.id
+            )
+            try appendOccurrenceAware(.asNeededOccurrenceCompletion(completion),
+                                      recordedByMemberID: actor.id)
+            return
         }
         try append(.completion(DatedCompletion(choreID: choreID, revisionID: chore.configuration.id,
                                               memberID: memberID, day: chore.day, state: state,
@@ -4263,6 +4373,7 @@ final class HouseholdStore {
                   transport.accountGeneration == expectedAccountGeneration else { throw HouseholdError.wrongAccount }
             let remote = try await transport.fetch(from: location)
             try validate(remote, householdID: location.householdID)
+            transportRequiresAppUpdate = false
             let remoteSnapshot = HouseholdSnapshot(facts: remote)
             try await reconcileAccountMembershipLock(imported: remoteSnapshot, location: location,
                                                       participant: participant,
@@ -4275,6 +4386,7 @@ final class HouseholdStore {
             try repository.commit(facts: remote, session: updated, uploaded: true)
             session = updated
             try reload()
+            guard !requiresAppUpdate else { throw HouseholdError.updateRequired }
             cloudAccessBlocked = false
             today = clock()
             let candidates = try repository.pending(householdID: location.householdID, includingRejected: true)
@@ -4325,7 +4437,10 @@ final class HouseholdStore {
             if let cloudError = error as? CKError {
                 cloudAccessBlocked = [.notAuthenticated, .permissionFailure, .zoneNotFound, .userDeletedZone].contains(cloudError.code)
             } else {
-                cloudAccessBlocked = error as? HouseholdError == .wrongAccount || error as? HouseholdError == .malformedData
+                let householdError = error as? HouseholdError
+                transportRequiresAppUpdate = householdError == .updateRequired
+                cloudAccessBlocked = householdError == .wrongAccount || householdError == .malformedData
+                    || householdError == .updateRequired
             }
             if cloudAccessBlocked {
                 var updated = session
@@ -4376,6 +4491,7 @@ final class HouseholdStore {
         syncMessage = "On this device"
         cloudAccessBlocked = false
         cloudIsReadOnly = false
+        transportRequiresAppUpdate = false
         isCheckingAccountMembership = transport != nil
         requiresMembershipRecovery = false
     }
@@ -4544,6 +4660,7 @@ final class HouseholdStore {
         syncMessage = "On this device"
         cloudAccessBlocked = false
         cloudIsReadOnly = false
+        transportRequiresAppUpdate = false
         isCheckingAccountMembership = transport != nil
         requiresMembershipRecovery = false
     }
@@ -4571,6 +4688,7 @@ final class HouseholdStore {
         lastSyncedAt = nil
         cloudAccessBlocked = false
         cloudIsReadOnly = false
+        transportRequiresAppUpdate = false
         isCheckingAccountMembership = false
         requiresMembershipRecovery = false
         canReleaseStaleOwnerMembership = false
@@ -4583,6 +4701,7 @@ final class HouseholdStore {
         if isDeletingAllEarnedItData || hasPendingAccountDataReset {
             throw HouseholdError.pendingChanges
         }
+        if requiresAppUpdate { throw HouseholdError.updateRequired }
         if cloudAccessBlocked { throw HouseholdError.cloudUnavailable }
         if cloudIsReadOnly { throw HouseholdError.readOnly }
     }
@@ -4594,6 +4713,27 @@ final class HouseholdStore {
 
     private func append(_ body: HouseholdFactBody) throws {
         try append([body])
+    }
+
+    private func appendOccurrenceAware(_ body: HouseholdFactBody,
+                                       recordedByMemberID: UUID) throws {
+        try appendOccurrenceAware([body], recordedByMemberID: recordedByMemberID)
+    }
+
+    private func appendOccurrenceAware(_ occurrenceAwareBodies: [HouseholdFactBody],
+                                       recordedByMemberID: UUID) throws {
+        var bodies: [HouseholdFactBody] = []
+        if snapshot.requiredJournalCapability < Self.supportedJournalCapability {
+            guard snapshot.member(recordedByMemberID)?.role == .parent else {
+                throw HouseholdError.permission
+            }
+            bodies.append(.journalCapability(JournalCapability(
+                minimumVersion: Self.supportedJournalCapability,
+                recordedByMemberID: recordedByMemberID
+            )))
+        }
+        bodies.append(contentsOf: occurrenceAwareBodies)
+        try append(bodies)
     }
 
     private func append(_ bodies: [HouseholdFactBody], scheduleSynchronization: Bool = true) throws {
@@ -4648,6 +4788,8 @@ final class HouseholdStore {
             switch fact.body {
             case .completion(let completion):
                 guard author.role == .parent || completion.memberID == author.id else { throw HouseholdError.permission }
+            case .asNeededOccurrenceCompletion(let completion):
+                guard author.role == .parent || completion.memberID == author.id else { throw HouseholdError.permission }
             default: try PermissionService.requireParent(author)
             }
         }
@@ -4659,6 +4801,8 @@ final class HouseholdStore {
         func hasMembers(_ ids: [UUID]) -> Bool { ids.allSatisfy { available.member($0) != nil } }
         switch fact.body {
         case .household, .member: return true
+        case .journalCapability(let value):
+            return hasMembers([value.recordedByMemberID])
         case .chore(let value): return hasMembers(value.memberIDs)
         case .choreDeletion(let value):
             return hasMembers([value.recordedByMemberID] + (value.eligibleMemberIDs ?? [])
@@ -4670,6 +4814,21 @@ final class HouseholdStore {
                 && available.revisions.contains {
                     $0.choreID == value.choreID && (value.revisionID == nil || $0.id == value.revisionID)
                 }
+        case .occurrenceAwareChoreDeletion(let value):
+            var memberIDs = [value.recordedByMemberID]
+            for occurrence in value.resolvedOccurrences {
+                memberIDs += occurrence.eligibleMemberIDs
+                memberIDs += occurrence.requiredMemberIDs
+                memberIDs += occurrence.excusedMemberIDs
+                if let assignedMemberID = occurrence.assignedMemberID { memberIDs.append(assignedMemberID) }
+                for contribution in occurrence.contributions {
+                    memberIDs += contribution.eligibleMemberIDs
+                    memberIDs += [contribution.memberID, contribution.recordedByMemberID]
+                }
+            }
+            return hasMembers(memberIDs) && available.revisions.contains {
+                    $0.id == value.revisionID && $0.choreID == value.choreID
+                }
         case .completion(let value):
             return hasMembers(value.eligibleMemberIDs + [value.memberID, value.recordedByMemberID])
                 && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
@@ -4679,6 +4838,55 @@ final class HouseholdStore {
         case .alternatingTurnAdvance(let value):
             return hasMembers([value.expectedMemberID, value.recordedByMemberID])
                 && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+        case .asNeededOccurrence(let value):
+            return hasMembers(value.eligibleMemberIDs + value.requiredMemberIDs
+                + [value.assignedMemberID, value.recordedByMemberID].compactMap { $0 })
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+        case .asNeededOccurrenceCompletion(let value):
+            return hasMembers(value.eligibleMemberIDs + [value.memberID, value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+                && available.orderedFacts.contains {
+                    if case .asNeededOccurrence(let occurrence) = $0.body {
+                        return occurrence.id == value.occurrenceID
+                            && occurrence.choreID == value.choreID
+                            && occurrence.revisionID == value.revisionID && occurrence.day == value.day
+                    }
+                    if case .occurrence(let occurrence) = $0.body {
+                        return $0.id == value.occurrenceID && occurrence.choreID == value.choreID
+                            && occurrence.revisionID == value.revisionID && occurrence.day == value.day
+                            && occurrence.state == .available
+                    }
+                    return false
+                }
+        case .asNeededOccurrenceResolution(let value):
+            return hasMembers([value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+                && available.orderedFacts.contains {
+                    if case .asNeededOccurrence(let occurrence) = $0.body {
+                        return occurrence.id == value.occurrenceID
+                            && occurrence.choreID == value.choreID
+                            && occurrence.revisionID == value.revisionID && occurrence.day == value.day
+                    }
+                    if case .occurrence(let occurrence) = $0.body {
+                        return $0.id == value.occurrenceID && occurrence.choreID == value.choreID
+                            && occurrence.revisionID == value.revisionID && occurrence.day == value.day
+                            && occurrence.state == .available
+                    }
+                    return false
+                }
+        case .asNeededTurnAdvance(let value):
+            return hasMembers([value.expectedMemberID, value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+        case .scheduledOccurrenceRestoration(let value):
+            return hasMembers([value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.revisionID && $0.choreID == value.choreID }
+                && available.orderedFacts.contains {
+                    guard $0.id == value.dispositionFactID,
+                          case .occurrence(let disposition) = $0.body else { return false }
+                    return disposition.choreID == value.choreID
+                        && disposition.revisionID == value.revisionID
+                        && disposition.day == value.day && disposition.state == .notNeeded
+                }
         case .allowance(let value): return available.member(value.memberID)?.role == .child
         case .excuse(let value): return hasMembers([value.memberID])
         case .request(let value): return hasMembers(value.memberIDs)
@@ -4703,6 +4911,27 @@ final class HouseholdStore {
         guard Set(facts.map(\.id)).count == facts.count,
               facts.allSatisfy({ $0.householdID == householdID && $0.sequence > 0 }) else {
             throw HouseholdError.malformedData
+        }
+        let ordered = facts.sorted(by: HouseholdFact.precedes)
+        let capabilityIndex = ordered.firstIndex { fact in
+            if case .journalCapability(let capability) = fact.body {
+                return capability.minimumVersion >= JournalCapability.occurrenceAwareChores
+            }
+            return false
+        }
+        for (index, fact) in ordered.enumerated() {
+            let needsOccurrenceCapability: Bool
+            switch fact.body {
+            case .asNeededOccurrence, .asNeededOccurrenceCompletion,
+                    .asNeededOccurrenceResolution, .asNeededTurnAdvance,
+                    .scheduledOccurrenceRestoration, .occurrenceAwareChoreDeletion:
+                needsOccurrenceCapability = true
+            default:
+                needsOccurrenceCapability = false
+            }
+            guard !needsOccurrenceCapability || capabilityIndex.map({ $0 < index }) == true else {
+                throw HouseholdError.malformedData
+            }
         }
         for fact in facts {
             switch fact.body {
@@ -4734,6 +4963,21 @@ final class HouseholdStore {
                       }) else {
                     throw HouseholdError.malformedData
                 }
+            case .occurrenceAwareChoreDeletion(let value):
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      Set(value.resolvedOccurrences.map(\.id)).count == value.resolvedOccurrences.count,
+                      value.resolvedOccurrences.allSatisfy({ occurrence in
+                          occurrence.day == value.day && occurrence.revisionID == value.revisionID
+                              && Set(occurrence.requiredMemberIDs)
+                                .isSubset(of: Set(occurrence.eligibleMemberIDs))
+                              && Set(occurrence.contributions.map(\.memberID)).count
+                                == occurrence.contributions.count
+                              && occurrence.contributions.allSatisfy {
+                                  $0.choreID == value.choreID
+                                      && $0.revisionID == value.revisionID && $0.day == value.day
+                                      && $0.state != .unmarked
+                              }
+                      }) else { throw HouseholdError.malformedData }
             case .occurrence(let value):
                 guard fact.authorMemberID == value.recordedByMemberID,
                       value.state == .notNeeded || value.alternatingSkipBehavior == nil,
@@ -4741,6 +4985,36 @@ final class HouseholdStore {
                     throw HouseholdError.malformedData
                 }
             case .alternatingTurnAdvance(let value):
+                guard fact.authorMemberID == value.recordedByMemberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .journalCapability(let value):
+                guard value.minimumVersion >= JournalCapability.occurrenceAwareChores,
+                      fact.authorMemberID == value.recordedByMemberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededOccurrence(let value):
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      Set(value.eligibleMemberIDs).count == value.eligibleMemberIDs.count,
+                      Set(value.requiredMemberIDs).isSubset(of: Set(value.eligibleMemberIDs)),
+                      value.assignedMemberID.map({ value.requiredMemberIDs == [$0] }) ?? true else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededOccurrenceCompletion(let value):
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      value.state != .notNeeded,
+                      value.eligibleMemberIDs.contains(value.memberID) else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededOccurrenceResolution(let value):
+                guard fact.authorMemberID == value.recordedByMemberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededTurnAdvance(let value):
+                guard fact.authorMemberID == value.recordedByMemberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .scheduledOccurrenceRestoration(let value):
                 guard fact.authorMemberID == value.recordedByMemberID else {
                     throw HouseholdError.malformedData
                 }
@@ -4774,6 +5048,14 @@ final class HouseholdStore {
         for deletion in deletions {
             guard revisions.contains(where: {
                 $0.choreID == deletion.choreID && $0.effectiveDay <= deletion.day
+            }), resolved.member(deletion.recordedByMemberID)?.role == .parent else {
+                throw HouseholdError.malformedData
+            }
+        }
+        for deletion in resolved.occurrenceAwareChoreDeletions {
+            guard revisions.contains(where: {
+                $0.id == deletion.revisionID && $0.choreID == deletion.choreID
+                    && $0.effectiveDay <= deletion.day && $0.schedulingMode == .asNeeded
             }), resolved.member(deletion.recordedByMemberID)?.role == .parent else {
                 throw HouseholdError.malformedData
             }
@@ -4815,6 +5097,102 @@ final class HouseholdStore {
                   revision.memberIDs.contains(advance.expectedMemberID),
                   resolved.member(advance.recordedByMemberID)?.role == .parent else {
                 throw HouseholdError.malformedData
+            }
+        }
+        let occurrenceIDs = facts.compactMap { fact -> UUID? in
+            if case .asNeededOccurrence(let occurrence) = fact.body { return occurrence.id }
+            return nil
+        }
+        guard Set(occurrenceIDs).count == occurrenceIDs.count else { throw HouseholdError.malformedData }
+        for fact in facts {
+            switch fact.body {
+            case .journalCapability(let capability):
+                guard resolved.member(capability.recordedByMemberID)?.role == .parent else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededOccurrence(let occurrence):
+                guard let revision = resolved.revisions.first(where: {
+                    $0.id == occurrence.revisionID && $0.choreID == occurrence.choreID
+                }), revision.schedulingMode == .asNeeded, !revision.isArchived,
+                      revision.effectiveDay <= occurrence.day,
+                      resolved.member(occurrence.recordedByMemberID)?.role == .parent,
+                      occurrence.eligibleMemberIDs.allSatisfy({ resolved.member($0)?.role == .child }),
+                      (revision.mode == .alternating) == (occurrence.assignedMemberID != nil) else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededOccurrenceCompletion(let completion):
+                let source = facts.first { candidate in
+                    if case .asNeededOccurrence(let occurrence) = candidate.body {
+                        return occurrence.id == completion.occurrenceID
+                            && occurrence.choreID == completion.choreID
+                            && occurrence.revisionID == completion.revisionID
+                            && occurrence.day == completion.day
+                    }
+                    if case .occurrence(let occurrence) = candidate.body {
+                        return candidate.id == completion.occurrenceID
+                            && occurrence.choreID == completion.choreID
+                            && occurrence.revisionID == completion.revisionID
+                            && occurrence.day == completion.day && occurrence.state == .available
+                    }
+                    return false
+                }
+                let sourceAllowsMember: Bool
+                if let source, case .asNeededOccurrence(let occurrence) = source.body {
+                    sourceAllowsMember = occurrence.assignedMemberID.map { $0 == completion.memberID }
+                        ?? occurrence.eligibleMemberIDs.contains(completion.memberID)
+                } else {
+                    sourceAllowsMember = source != nil
+                }
+                let author = resolved.member(completion.recordedByMemberID)
+                guard sourceAllowsMember, completion.mode == resolved.revisions.first(where: {
+                    $0.id == completion.revisionID
+                })?.mode,
+                      resolved.member(completion.memberID)?.role == .child,
+                      author?.role == .parent || author?.id == completion.memberID else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededOccurrenceResolution(let resolution):
+                let sourceMatches = facts.contains { candidate in
+                    if case .asNeededOccurrence(let occurrence) = candidate.body {
+                        return occurrence.id == resolution.occurrenceID
+                            && occurrence.choreID == resolution.choreID
+                            && occurrence.revisionID == resolution.revisionID
+                            && occurrence.day == resolution.day
+                    }
+                    if case .occurrence(let occurrence) = candidate.body {
+                        return candidate.id == resolution.occurrenceID
+                            && occurrence.choreID == resolution.choreID
+                            && occurrence.revisionID == resolution.revisionID
+                            && occurrence.day == resolution.day && occurrence.state == .available
+                    }
+                    return false
+                }
+                guard resolved.member(resolution.recordedByMemberID)?.role == .parent,
+                      sourceMatches else {
+                    throw HouseholdError.malformedData
+                }
+            case .asNeededTurnAdvance(let advance):
+                guard let revision = resolved.revisions.first(where: {
+                    $0.id == advance.revisionID && $0.choreID == advance.choreID
+                }), revision.mode == .alternating, revision.schedulingMode == .asNeeded,
+                      revision.memberIDs.contains(advance.expectedMemberID),
+                      resolved.member(advance.recordedByMemberID)?.role == .parent else {
+                    throw HouseholdError.malformedData
+                }
+            case .scheduledOccurrenceRestoration(let restoration):
+                guard let revision = resolved.revisions.first(where: {
+                    $0.id == restoration.revisionID && $0.choreID == restoration.choreID
+                }), revision.schedulingMode == .scheduled,
+                      resolved.member(restoration.recordedByMemberID)?.role == .parent,
+                      facts.contains(where: { candidate in
+                          guard candidate.id == restoration.dispositionFactID,
+                                case .occurrence(let disposition) = candidate.body else { return false }
+                          return disposition.choreID == restoration.choreID
+                              && disposition.revisionID == restoration.revisionID
+                              && disposition.day == restoration.day && disposition.state == .notNeeded
+                      }) else { throw HouseholdError.malformedData }
+            default:
+                continue
             }
         }
         guard Set(resolved.invitations.map(\.claimFactID)).count == resolved.invitations.count else {

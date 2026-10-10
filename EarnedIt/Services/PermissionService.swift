@@ -6,7 +6,7 @@ enum HouseholdError: LocalizedError, Equatable {
     case noHousehold, alreadyHasHousehold, cloudUnavailable, wrongAccount, invitation, readOnly
     case invitationNotFound, invitationExpired, invitationRevoked, invitationConsumed, invitationUnavailable
     case invitationOwnerRequired, accountMembershipConflict, ownerMembershipUnavailable
-    case missingProfile, lastParent, pendingChanges, malformedData, familyStillSyncing
+    case missingProfile, lastParent, pendingChanges, malformedData, familyStillSyncing, updateRequired
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +37,7 @@ enum HouseholdError: LocalizedError, Equatable {
         case .pendingChanges: "Sync pending changes before disconnecting so your work is kept."
         case .familyStillSyncing: "Your family’s information is still arriving from iCloud. Continue joining in a moment. If it keeps failing, ask a parent to check the invitation."
         case .malformedData: "The shared family contains data this version cannot read safely. Update the app or contact the family owner."
+        case .updateRequired: "Update Earned It to continue with this family. This version cannot safely read or change its newer chore history."
         }
     }
 }
@@ -78,7 +79,13 @@ enum PermissionService {
     static func canSetState(actor: FamilyMember, target: UUID, chore: DailyChore, state: DailyStateKind) -> Bool {
         guard !chore.isDeleted, !chore.isNotNeeded, chore.day <= chore.today,
               chore.eligibleMembers.contains(where: { $0.id == target }) else { return false }
-        if actor.role == .parent { return state != .unmarked || chore.day == chore.today }
+        if actor.role == .parent {
+            if chore.isAsNeededOccurrence && !chore.isActionableOccurrence {
+                return chore.asNeededStatus == .completed && state != .notNeeded
+            }
+            return state != .unmarked || chore.day == chore.today
+        }
+        guard chore.isActionableOccurrence else { return false }
         return actor.id == target && canChildEdit(day: chore.day, today: chore.today)
             && state != .missed && state != .notNeeded
     }

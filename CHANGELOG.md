@@ -6,6 +6,11 @@ User-visible changes to Earned It.
 
 ### Changed
 
+- As Needed chores can be withdrawn without credit or turn advancement and made available repeatedly on the same day. Each occurrence keeps distinct history and allowance credit while streaks remain day-based.
+- Alternating As Needed completion advances exactly once per occurrence, withdrawal keeps the turn, and Skip consumes one turn without creating credit. Concurrent and offline controls converge through occurrence IDs and expected control heads.
+- Families record an explicit journal capability before occurrence-aware actions. Incompatible app versions stop with an update-required state instead of ignoring newer facts or uploading legacy As Needed actions.
+- Scheduled Done completion now wins over Not Needed Today, including concurrent updates. Parents can restore an accidental current-day Not Needed action without replaying later rotation history.
+- Chore deletion confirmations now state that deletion is immediate and cannot be undone while resolved history and allowance results remain.
 - Settings now presents one destructive family action, Delete All Data, for the creating parent. It permanently deletes the family for every participant and returns the initiating installation to Welcome.
 - Devices with authenticated proof that their family generation was deleted or their exact membership was revoked now offer a confirmed Reset App recovery path. Temporary iCloud failures continue to preserve local data and membership.
 - Native iPad support is enabled alongside iPhone support, including the release device-family validation path.

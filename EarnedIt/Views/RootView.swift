@@ -28,6 +28,21 @@ struct RootView: View {
                 }
                 .accessibilityIdentifier(childRecoveryPreflightMode
                     ? "child-recovery-preflight" : "owner-transition-preflight")
+            } else if store.requiresAppUpdate {
+                ScrollableUnavailableView(
+                    title: "Update Earned It",
+                    systemImage: "arrow.down.app.fill",
+                    description: "This family uses newer chore controls that this version cannot read or change safely. Update Earned It before continuing."
+                ) {
+                    Button("Check Again") {
+                        Task {
+                            do { try await store.synchronize() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .accessibilityIdentifier("retry-after-update-required")
+                }
+                .accessibilityIdentifier("update-required")
             } else if store.hasPendingAccountDataReset {
                 ScrollableUnavailableView(
                     title: "Deleting Earned It Data",

@@ -1387,9 +1387,12 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
     }
 
     private static func decode(_ record: CKRecord) throws -> HouseholdFact {
-        guard (record["formatVersion"] as? Int) == 1, let payload = record["payload"] as? Data else {
+        guard let formatVersion = record["formatVersion"] as? Int,
+              let payload = record["payload"] as? Data else {
             throw HouseholdError.malformedData
         }
+        guard formatVersion <= 2 else { throw HouseholdError.updateRequired }
+        guard formatVersion == 1 || formatVersion == 2 else { throw HouseholdError.malformedData }
         let fact = try JSONDecoder().decode(HouseholdFact.self, from: payload)
         guard record.recordID.recordName == fact.id.uuidString else { throw HouseholdError.malformedData }
         return fact
@@ -1402,8 +1405,19 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         let data = try JSONEncoder().encode(fact)
         guard data.count < 900_000 else { throw HouseholdError.malformedData }
         record["payload"] = data as CKRecordValue
-        record["formatVersion"] = 1 as CKRecordValue
+        record["formatVersion"] = journalFormatVersion(for: fact.body) as CKRecordValue
         return record
+    }
+
+    private static func journalFormatVersion(for body: HouseholdFactBody) -> Int {
+        switch body {
+        case .journalCapability, .asNeededOccurrence, .asNeededOccurrenceCompletion,
+                .asNeededOccurrenceResolution, .asNeededTurnAdvance,
+                .scheduledOccurrenceRestoration, .occurrenceAwareChoreDeletion:
+            return 2
+        default:
+            return 1
+        }
     }
 
     private static func isSameInvitationClaim(_ lhs: HouseholdFact, as rhs: HouseholdFact) -> Bool {
