@@ -12,6 +12,7 @@ User-visible changes to Earned It.
 
 ### Fixed
 
+- Making an As Needed chore available or skipping its next child now refreshes shared history first, preventing a stale parent device from assigning the wrong turn. Temporary connection failures continue to use the local journal and synchronize later.
 - Family deletion keeps its generation-scoped lifecycle tombstone so an offline child or stale invitation cannot restore the deleted family. After local reset, that child can create or join a new family without being trapped by the old generation.
 - Pull to refresh now waits for in-progress iCloud membership recovery instead of showing a pending-changes error. Automatic refreshes resume after recovery finishes.
 - Family owners can create their first invitation when the same valid iCloud household membership is already active but the device retained a different setup attempt. Conflicting households, accounts, claims, and authority remain blocked.
