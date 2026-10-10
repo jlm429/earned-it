@@ -7,6 +7,7 @@ enum AppTheme {
     static let surface = adaptive(light: 0xFFFCF6, dark: 0x242C31)
     static let inset = adaptive(light: 0xEDE7DC, dark: 0x323D44)
     static let border = adaptive(light: 0xD4C9B8, dark: 0x53636C)
+    static let secondaryText = adaptive(light: 0x655E55, dark: 0xBAC6CD)
     static let accent = adaptive(light: 0x99462F, dark: 0xF2AF91)
     static let success = adaptive(light: 0x24634F, dark: 0x95D7B9)
     static let warning = adaptive(light: 0x805619, dark: 0xEEC477)
@@ -30,7 +31,7 @@ enum AppTheme {
 struct ThemedSurface: View {
     var tint: Color? = nil
     var cornerRadius: CGFloat = 22
-    @Environment(\.accessibilityContrast) private var contrast
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

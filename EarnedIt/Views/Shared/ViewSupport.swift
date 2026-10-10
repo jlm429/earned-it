@@ -20,7 +20,7 @@ extension ProgressStatus {
         case .green: AppTheme.success
         case .yellow: AppTheme.warning
         case .red: AppTheme.danger
-        case .neutral: .secondary
+        case .neutral: AppTheme.secondaryText
         }
     }
 
@@ -41,7 +41,7 @@ extension DayStatus {
         case .yellow: AppTheme.warning
         case .red: AppTheme.danger
         case .excused: AppTheme.info
-        case .neutral, .future: .secondary
+        case .neutral, .future: AppTheme.secondaryText
         }
     }
 
@@ -71,7 +71,7 @@ extension ResponsibilityCategory {
 extension DailyStateKind {
     var tint: Color {
         switch self {
-        case .unmarked: .secondary
+        case .unmarked: AppTheme.secondaryText
         case .done: AppTheme.success
         case .notNeeded: AppTheme.info
         case .missed: AppTheme.danger
@@ -129,7 +129,7 @@ struct ProfileHeader: View {
                 .font(.title2.bold())
                 .fixedSize(horizontal: false, vertical: true)
             Text(subtitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
