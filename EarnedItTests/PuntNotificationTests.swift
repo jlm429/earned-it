@@ -4,6 +4,22 @@ import XCTest
 
 @MainActor
 final class PuntNotificationTests: XCTestCase {
+    func testMatchingMemberNamesProjectInStableOrderAcrossRelaunch() throws {
+        let family = try TestFamily()
+        _ = try family.store.saveMember(name: family.hanna.displayName, role: .parent, avatar: .sun)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        let matchingIDs = reopened.snapshot.members.filter {
+            $0.displayName == family.hanna.displayName
+        }.map { $0.id.uuidString }
+        XCTAssertEqual(matchingIDs.count, 2)
+        XCTAssertEqual(matchingIDs, matchingIDs.sorted())
+        XCTAssertEqual(family.store.snapshot, reopened.snapshot)
+    }
+
+    func testBuiltAppEnablesBackgroundActivityDelivery() {
+        XCTAssertTrue(BackgroundActivityDelivery.isEnabled)
+    }
+
     func testAppleSubscriptionAndNotificationUseExistingFactTypeAndGenericPrivateContent() {
         let subscription = CloudKitHouseholdTransport.activitySubscription()
         XCTAssertEqual(subscription.recordType, "HouseholdFact")
@@ -21,6 +37,114 @@ final class PuntNotificationTests: XCTestCase {
         try family.store.selectProfile(try XCTUnwrap(row.turnOwnerID))
         try family.store.requestPunt(choreID: chore, occurrenceID: row.occurrenceID, recipientID: recipient.id)
         return try XCTUnwrap(family.store.puntProjection(for: row)?.pending?.id)
+    }
+
+    func testPuntCapabilityRestoresScheduledRequirementAcrossRelaunch() throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        _ = try request(family, chore: chore, recipient: family.alek)
+        XCTAssertFalse(family.store.snapshot.orderedFacts.contains {
+            if case .journalCapability = $0.body { return true }
+            return false
+        })
+        try family.store.selectProfile(family.parent.id)
+        for _ in 0..<2 {
+            try family.store.markOccurrenceNotNeeded(choreID: chore, date: family.clock.now,
+                                                     alternatingSkipBehavior: .keepTurn)
+            try family.store.restoreScheduledRequirement(choreID: chore, date: family.clock.now)
+            let row = try XCTUnwrap(family.store.dailyList().first)
+            XCTAssertFalse(row.isNotNeeded)
+            XCTAssertTrue(row.isActionableOccurrence)
+            XCTAssertNil(family.store.snapshot.scheduledNotNeededFactID(
+                choreID: chore, revisionID: row.configuration.id, on: row.day))
+        }
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertFalse(try XCTUnwrap(reopened.dailyList().first).isNotNeeded)
+        try reopened.selectProfile(family.hanna.id)
+        XCTAssertTrue(reopened.puntRecipients(for: try XCTUnwrap(reopened.dailyList().first)).isEmpty)
+        try reopened.setCompletion(choreID: chore, memberID: family.hanna.id, date: family.clock.now, state: .done)
+        XCTAssertEqual(reopened.dailyList().first?.state(for: family.hanna.id), .done)
+    }
+
+    func testCompletedLegacyOccurrenceDoesNotCloseFreshSameDayPunt() throws {
+        for explicitOwner in [true, false] {
+            let family = try TestFamily()
+            let chore = try family.store.saveChore(weekday: .monday, title: "Bins", mode: .alternating,
+                memberIDs: [family.hanna.id, family.alek.id], schedulingMode: .asNeeded)
+            let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
+            let activation = HouseholdFact(id: UUID(), householdID: family.store.household!.id,
+                sequence: family.store.snapshot.orderedFacts.last!.sequence + 1,
+                authorDeviceID: family.store.session.deviceID, authorMemberID: family.parent.id,
+                body: .occurrence(ChoreOccurrenceDisposition(choreID: chore, revisionID: revision.id,
+                    day: family.store.day, state: .available, alternatingSkipBehavior: nil,
+                    recordedByMemberID: family.parent.id, assignedMemberID: explicitOwner ? family.hanna.id : nil)))
+            let completion = HouseholdFact(id: UUID(), householdID: activation.householdID,
+                sequence: activation.sequence + 1, authorDeviceID: activation.authorDeviceID,
+                authorMemberID: family.hanna.id, body: .completion(DatedCompletion(
+                    choreID: chore, revisionID: revision.id, memberID: family.hanna.id, day: family.store.day,
+                    state: .done, eligibleMemberIDs: [family.hanna.id], mode: .alternating,
+                    recordedByMemberID: family.hanna.id)))
+            try family.repository.commit(facts: [activation, completion])
+            let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+            XCTAssertEqual(reopened.dailyList().first?.state(for: family.hanna.id), .done)
+            try reopened.selectProfile(family.parent.id)
+            XCTAssertEqual(reopened.nextAlternatingOwner(choreID: chore)?.id, family.alek.id)
+            try reopened.skipNextAlternatingChild(choreID: chore)
+            try reopened.activateAsNeededChore(choreID: chore)
+            let fresh = try XCTUnwrap(reopened.dailyList().first { $0.isActionableOccurrence })
+            XCTAssertNotEqual(fresh.occurrenceID, activation.id)
+            XCTAssertEqual(fresh.turnOwnerID, family.hanna.id)
+            try reopened.selectProfile(family.hanna.id)
+            XCTAssertEqual(reopened.puntRecipients(for: fresh).map(\.id), [family.alek.id])
+            try reopened.requestPunt(choreID: chore, occurrenceID: fresh.occurrenceID, recipientID: family.alek.id)
+            let requestID = try XCTUnwrap(reopened.puntProjection(for: fresh)?.pending?.id)
+            try reopened.selectProfile(family.alek.id)
+            try reopened.decidePunt(requestFactID: requestID, kind: .accepted)
+            try reopened.setCompletion(choreID: chore, occurrenceID: fresh.occurrenceID,
+                memberID: family.alek.id, date: family.clock.now, state: .done)
+            XCTAssertEqual(reopened.dailyList().first { $0.occurrenceID == activation.id }?.state(for: family.hanna.id), .done)
+            XCTAssertEqual(reopened.dailyList().first { $0.occurrenceID == fresh.occurrenceID }?.state(for: family.alek.id), .done)
+            XCTAssertEqual(reopened.nextAlternatingOwner(choreID: chore)?.id, family.alek.id)
+            XCTAssertThrowsError(try reopened.decidePunt(requestFactID: requestID, kind: .accepted))
+        }
+    }
+
+    func testFormerOwnerOfflineDoneCannotOverrideRecipientNotNeeded() throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let requestID = try request(family, chore: chore, recipient: family.alek)
+        try family.store.selectProfile(family.alek.id)
+        try family.store.decidePunt(requestFactID: requestID, kind: .accepted)
+        let row = try XCTUnwrap(family.store.dailyList().first)
+        let stale = HouseholdFact(id: UUID(), householdID: family.store.household!.id,
+            sequence: family.store.snapshot.orderedFacts.last!.sequence + 1,
+            authorDeviceID: UUID(), authorMemberID: family.hanna.id,
+            body: .completion(DatedCompletion(choreID: chore, revisionID: row.configuration.id,
+                memberID: family.hanna.id, day: row.day, state: .done,
+                eligibleMemberIDs: [family.hanna.id], mode: .alternating, recordedByMemberID: family.hanna.id)))
+        try family.repository.commit(facts: [stale])
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        try reopened.selectProfile(family.parent.id)
+        try reopened.markOccurrenceNotNeeded(choreID: chore, date: family.clock.now, alternatingSkipBehavior: .keepTurn)
+        let disposed = try XCTUnwrap(reopened.dailyList().first)
+        XCTAssertEqual(disposed.turnOwnerID, family.alek.id)
+        XCTAssertTrue(disposed.isNotNeeded)
+        XCTAssertTrue(ChoreRules.visibleList([disposed], to: family.alek).isEmpty)
+        try reopened.selectProfile(family.alek.id)
+        XCTAssertThrowsError(try reopened.setCompletion(choreID: chore, memberID: family.alek.id,
+            date: family.clock.now, state: .done))
+        XCTAssertTrue(disposed.completedMembers.isEmpty)
+        XCTAssertTrue(disposed.historicalContributions.contains {
+            $0.member.id == family.hanna.id && $0.state == .done
+        })
+        XCTAssertTrue(reopened.snapshot.orderedFacts.contains(stale))
+        family.move(to: "2026-09-08T16:00:00Z")
+        reopened.refreshDate()
+        XCTAssertTrue(try XCTUnwrap(reopened.dailyList(on: row.day.date(in: reopened.calendar)).first).isNotNeeded)
+        XCTAssertFalse(reopened.allowanceWeek(for: family.alek.id).items.contains { $0.choreID == chore && $0.state == .missed })
+        family.move(to: "2026-09-14T16:00:00Z")
+        reopened.refreshDate()
+        XCTAssertEqual(reopened.dailyList().first?.turnOwnerID, family.hanna.id)
     }
 
     func testScheduledApprovalChangesOnlyTodayAndCreditWithoutMovingRotation() throws {
@@ -231,6 +355,8 @@ final class PuntNotificationTests: XCTestCase {
         try await family.store.synchronize()
         XCTAssertEqual(family.store.dailyList().first?.turnOwnerID, family.alek.id)
         XCTAssertEqual(family.store.dailyList().first?.state(for: family.alek.id), .done)
+        let invitationIDs = family.store.snapshot.invitations.map { $0.id.uuidString }
+        XCTAssertEqual(invitationIDs, invitationIDs.sorted())
         XCTAssertEqual(hanna.snapshot, alek.snapshot)
         XCTAssertEqual(family.store.snapshot, alek.snapshot)
         XCTAssertEqual(alek.pendingCount, 0)

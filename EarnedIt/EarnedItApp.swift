@@ -137,7 +137,7 @@ struct EarnedItApp: App {
                 accountDataResetJournal: journal
             )
             #endif
-            if !readOnlyPreflight { BackgroundActivityDelivery.shared.store = initialStore }
+            if !readOnlyPreflight && !isUITest { BackgroundActivityDelivery.shared.store = initialStore }
             return initialStore
         }
 

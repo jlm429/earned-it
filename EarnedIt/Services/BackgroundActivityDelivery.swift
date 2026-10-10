@@ -1,15 +1,19 @@
 import CloudKit
 import UIKit
 
-/// Configuration remains a release-owner prerequisite. No production subscription is
-/// created unless the built application explicitly enables remote notification work.
 @MainActor
 final class BackgroundActivityDelivery {
     static let shared = BackgroundActivityDelivery()
     weak var store: HouseholdStore?
 
     static var isEnabled: Bool {
-        (Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String])?
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard !arguments.contains("--ui-test-store"),
+              !arguments.contains("--owner-transition-preflight"),
+              !arguments.contains("--child-recovery-preflight") else { return false }
+        #endif
+        return (Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String])?
             .contains("remote-notification") == true
     }
 

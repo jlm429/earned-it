@@ -57,14 +57,7 @@ extension HouseholdSnapshot {
             if case .occurrenceAwareChoreDeletion(let deletion) = fact.body { return deletion.choreID == choreID }
             return false
         } ?? facts.endIndex
-        let capabilityIndex = facts.firstIndex { fact in
-            if case .puntRequest = fact.body { return true }
-            if case .puntDecision = fact.body { return true }
-            if case .journalCapability(let capability) = fact.body {
-                return capability.minimumVersion >= JournalCapability.occurrenceAwareChores
-            }
-            return false
-        } ?? facts.endIndex
+        let capabilityIndex = occurrenceCapabilityIndex
 
         var legacyWinnerByDay: [CivilDay: UUID] = [:]
         for (index, fact) in facts.enumerated() where index < deletionIndex && index < capabilityIndex {

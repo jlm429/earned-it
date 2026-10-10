@@ -65,7 +65,8 @@ enum PuntRules {
                 .weekday, from: scope.day.date(in: household.calendar))
         var closed = !matchesConfiguration || !eligible.contains(originalOwnerID)
         var controlHeadID: UUID?
-        for fact in snapshot.orderedFacts {
+        let capabilityIndex = snapshot.occurrenceCapabilityIndex
+        for (index, fact) in snapshot.orderedFacts.enumerated() {
             switch fact.body {
             case .asNeededOccurrence(let value) where value.id == scope.occurrenceID
                 && value.choreID == scope.choreID && value.revisionID == scope.revisionID && value.day == scope.day:
@@ -86,7 +87,8 @@ enum PuntRules {
                 if value.expectedControlHeadID == controlHeadID,
                    fact.authorMemberID == value.recordedByMemberID,
                    snapshot.member(value.recordedByMemberID)?.role == .parent { closed = true }
-            case .completion(let value) where (scope.occurrenceID == nil || revision.schedulingMode == .asNeeded)
+            case .completion(let value) where activated && (scope.occurrenceID == nil
+                || (revision.schedulingMode == .asNeeded && index < capabilityIndex))
                 && value.choreID == scope.choreID && value.revisionID == scope.revisionID && value.day == scope.day:
                 if value.memberID == result.ownerID, fact.authorMemberID == value.recordedByMemberID,
                    value.recordedByMemberID == value.memberID || snapshot.member(value.recordedByMemberID)?.role == .parent {

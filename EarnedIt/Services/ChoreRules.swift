@@ -216,16 +216,19 @@ enum ChoreRules {
                     )
                 }
             }
-            let disposition = snapshot.scheduledOccurrence(choreID: choreID, revisionID: revision.id, on: day)
             let scheduled = revision.schedulingMode == .scheduled
                 && revision.weekday.rawValue == weekday
-            let notNeeded = scheduled && disposition?.state == .notNeeded
             guard scheduled || !recorded.isEmpty else { return [] }
             let occurrenceExists = scheduled
             let scheduledMembers = occurrenceExists ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
             let occurrence = resolveOccurrence(revision: revision, scheduledMembers: scheduledMembers,
                                                choreID: choreID, day: day, snapshot: snapshot,
                                                calendar: household.calendar)
+            let disposition = snapshot.scheduledOccurrence(
+                choreID: choreID, revisionID: revision.id, on: day,
+                hasDone: occurrence.activeContributions.contains { $0.state == .done }
+            )
+            let notNeeded = scheduled && disposition?.state == .notNeeded
             var members = revision.mode == .alternating
                 ? occurrence.scheduledOwner.map { [$0] } ?? [] : scheduledMembers
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
