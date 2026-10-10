@@ -31,6 +31,8 @@ A parent creates the family, adds children, and sets up chores. They can invite 
 
 Children check their list and mark chores complete. Parents manage the family name and assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
 
+Removing the app leaves the iCloud family intact. If a parent reinstalls after an interrupted family deletion and sees **Finish Deleting Your Family**, choose **Finish Deleting Family** to complete it. If it fails, retry or choose **Try Reconnecting**. Children can confirm **Reset App** once the app verifies that the family was deleted.
+
 ## Privacy
 
 **Free. No ads. No tracking.**

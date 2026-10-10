@@ -92,7 +92,7 @@ See [the authority contract's schema and security section](family-lifecycle-auth
 
 ### Remaining captain action in CloudKit Console
 
-Follow [the authority contract's schema and security section](family-lifecycle-authority.md#cloudkit-schema-and-security), including signed former-participant Development proof before any authorized human Production role change. No record-type or field deployment is required for this focused recovery fix, and no one-off Production data record should be created.
+Follow the staged role-verification procedure in [Family lifecycle authority](family-lifecycle-authority.md#cloudkit-schema-and-security) before any authorized human Production change. No one-off Production data record should be created.
 
 Apple documents schema inspection and editing at [Inspecting and editing an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/inspecting-and-editing-an-icloud-container-s-schema) and deployment at [Deploying an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/deploying-an-icloud-container-s-schema).
 
@@ -126,7 +126,7 @@ The focused recovery UI flows verify that transient access loss remains a reconn
 
 ## Real-device captain procedure
 
-First satisfy [the authority contract's access-policy prerequisites](family-lifecycle-authority.md#cloudkit-schema-and-security). These historical retained-receipt checks do not cover receipt loss after uninstall; follow [the final release checklist](app-store/release-readiness.md#remaining-release-blockers) for integration and signed candidate requirements before relying on recovery in Production.
+The Production lifecycle type and fields were human-reported, not independently verified by the agent. Complete the signed Development former-participant checks before a human Production role change, then bounded signed Production checks before relying on this behavior.
 
 1. On the creating parent's device, use Settings, `Delete All Data`, and wait for completion. Confirm Welcome appears and remains after relaunch.
 2. Bring an existing child device online. Confirm `Family No Longer Available`, choose `Reset App`, and confirm Welcome remains after relaunch.
@@ -143,3 +143,13 @@ Validation used an iPhone 17 Pro simulator and an iPad Pro 13-inch simulator:
 - Release iPad simulator build: succeeded. Its app metadata declares device families 1 and 2. Release device-family metadata, build-number semantics, and App Store profile entitlement semantics passed their repository validation scripts.
 
 No signed two-account Production deletion was run. The captain will perform the first real account cleanup only through the completed UI. The no-mistakes delivery report will be added when Firstmate requests the shipping gate.
+
+## Recovery after owner reinstall during deletion
+
+The authoritative recovery contract, including exact identity checks and direct retry after a lost lock-release acknowledgement or read failure, is in [Family lifecycle authority](family-lifecycle-authority.md#state-transitions). User-facing reinstall guidance is in [README](../README.md#how-families-use-it). The signed acceptance procedure below is required for the [release blocker](app-store/release-readiness.md#blocking).
+
+Focused regression covers reinstall, offline child reset and fresh reinvite, interrupted finalization/release/local cleanup, account switches including switch-away-and-back, stale attempts and replacement families, non-owner binding, missing/foreign authority, present zones, idempotence, and prevention of the account-wide reset bypass. The existing pending-deletion native UI flow also exercises the recovered empty-owner screen at largest Dynamic Type, an enabled 44-point retry, and error retention using a DEBUG-only synthetic fixture. Simulator has no real CloudKit transport; these checks do not replace signed account testing.
+
+Signed acceptance must distinguish OS uninstall from household deletion: uninstall A alone leaves B's cloud family active; same-account A then B reinstall recovers their exact profiles. In-app deletion by A while B is offline must finish before B can receive authenticated deletion and confirm Reset App. Test retained-receipt interruption and separately approved Development uninstall/reinstall in the zone-absent/deleting window. Verify changed accounts/generations refuse cleanup, old links cannot restore the deleted family, completed-reset reinstall may ask for reset again without restoring facts, and a fresh family uses new identities. Do not perform a destructive Production test until the lifecycle fix is included in the tested release candidate and the required signed environment evidence is available.
+
+The implementation-pass focused verification on the dedicated synthetic iPhone 17 iOS 26.5 Simulator passed 217 lifecycle unit tests and the extended pending/recovered-owner UI flow (1 test), with zero failures. Signed CloudKit and Production roles remain unverified. Earlier diagnostic assertion failures and the provisional existing child text-clipping accessibility result are retained in the independent task report; neither is silently converted into signed-device evidence.

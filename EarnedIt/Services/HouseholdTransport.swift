@@ -101,6 +101,9 @@ protocol HouseholdTransport: AccountDataResetCloudBoundary {
         -> FamilyLifecycleState
     func beginFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws
     func finalizeFamilyDeletion(householdID: UUID, expectedParticipantID: String) async throws
+    func finalizeRecoveredFamilyDeletion(expectedLock: AccountMembershipLock,
+                                         expectedParticipantID: String,
+                                         expectedAccountGeneration: UInt64) async throws
     func familyLifecycleState(householdID: UUID, ownerAuthorityBinding: String,
                               expectedParticipantID: String) async throws -> FamilyLifecycleState?
     func publishMembershipRevocation(householdID: UUID, claimBinding: String,
@@ -126,4 +129,31 @@ protocol HouseholdTransport: AccountDataResetCloudBoundary {
         -> OwnerTransitionPreflightSnapshot
     func childRecoveryPreflight(localSession: DeviceSession, localFacts: [HouseholdFact]) async
         -> ChildRecoveryPreflightSnapshot
+}
+
+extension HouseholdTransport {
+    /// The surviving private lock identifies the original deletion generation after sandbox loss.
+    /// Missing access alone never permits publication of terminal deletion proof.
+    func requireRecoveredOwnerDeletion(
+        expectedLock: AccountMembershipLock,
+        expectedParticipantID: String,
+        expectedAccountGeneration: UInt64
+    ) async throws {
+        let ownerBinding = AccountMembershipBinding.ownerAuthority(participantID: expectedParticipantID)
+        guard expectedLock.state == .active || expectedLock.state == .released,
+              expectedLock.claimBinding == AccountMembershipBinding.owner(householdID: expectedLock.householdID),
+              expectedLock.ownerAuthorityBinding == nil || expectedLock.ownerAuthorityBinding == ownerBinding else {
+            throw HouseholdError.accountMembershipConflict
+        }
+        try await requireAccountForReset(expectedParticipantID, generation: expectedAccountGeneration)
+        let lock = try await accountMembershipLock()
+        try await requireAccountForReset(expectedParticipantID, generation: expectedAccountGeneration)
+        guard lock == expectedLock else { throw HouseholdError.accountMembershipConflict }
+        let location = try await membershipLocation(householdID: expectedLock.householdID)
+        try await requireAccountForReset(expectedParticipantID, generation: expectedAccountGeneration)
+        guard location == nil else { throw HouseholdError.accountMembershipConflict }
+        let currentLock = try await accountMembershipLock()
+        try await requireAccountForReset(expectedParticipantID, generation: expectedAccountGeneration)
+        guard currentLock == expectedLock else { throw HouseholdError.accountMembershipConflict }
+    }
 }
