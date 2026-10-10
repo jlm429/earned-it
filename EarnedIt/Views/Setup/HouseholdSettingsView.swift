@@ -35,14 +35,16 @@ struct HouseholdSettingsView: View {
             }
             if store.canDeleteAllFamilyData {
                 Section("Delete All Data") {
-                    Text("Permanently deletes this entire family for everyone, including chores, profiles, completion history, invitations, memberships, cloud shares, and local data.")
+                    Text(store.session.pendingFamilyDeletion == true
+                         ? "Deletion is incomplete. Finish deleting this same family before creating or joining another family."
+                         : "Permanently deletes this entire family for everyone, including chores, profiles, completion history, invitations, memberships, cloud shares, and local data.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Button("Delete All Data", role: .destructive) {
+                    Button(store.session.pendingFamilyDeletion == true ? "Finish Deleting" : "Delete All Data",
+                           role: .destructive) {
                         confirmingDeletion = true
                     }
-                    .disabled(deletingFamily || store.isDeletingAllEarnedItData
-                        || store.session.pendingFamilyDeletion == true)
+                    .disabled(deletingFamily || store.isDeletingAllEarnedItData)
                     .accessibilityIdentifier("delete-all-data")
                     if deletingFamily { ProgressView("Deleting all data…") }
                 }
@@ -57,11 +59,15 @@ struct HouseholdSettingsView: View {
         }
         .refreshable { await refreshFamily() }
         .navigationTitle("Settings")
-        .alert("Delete All Data?", isPresented: $confirmingDeletion) {
-            Button("Delete All Data", role: .destructive) { deleteAllData() }
+        .alert(store.session.pendingFamilyDeletion == true ? "Finish Deleting?" : "Delete All Data?",
+               isPresented: $confirmingDeletion) {
+            Button(store.session.pendingFamilyDeletion == true ? "Finish Deleting" : "Delete All Data",
+                   role: .destructive) { deleteAllData() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently deletes the entire family for everyone. All chores, profiles, completion history, invitations, memberships, cloud shares, and local data will be removed. This cannot be undone.")
+            Text(store.session.pendingFamilyDeletion == true
+                 ? "This continues the deletion already started for this family. It cannot be undone."
+                 : "This permanently deletes the entire family for everyone. All chores, profiles, completion history, invitations, memberships, cloud shares, and local data will be removed. This cannot be undone.")
         }
     }
 

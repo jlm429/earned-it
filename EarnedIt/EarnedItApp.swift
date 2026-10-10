@@ -104,6 +104,10 @@ struct EarnedItApp: App {
                 initialStore.prepareMembershipRecoveryProgressUITest()
             }
             if !readOnlyPreflight && isUITest
+                && arguments.contains("--ui-test-pending-family-deletion") {
+                try initialStore.preparePendingFamilyDeletionUITest()
+            }
+            if !readOnlyPreflight && isUITest
                 && arguments.contains("--ui-test-family-access-lost") {
                 if initialStore.household == nil {
                     try initialStore.createFamily(name: "Orphaned Family", parentName: "Parent")

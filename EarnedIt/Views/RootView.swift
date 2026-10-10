@@ -204,6 +204,7 @@ struct RootView: View {
                 catch { store.errorMessage = error.localizedDescription }
                 return
             }
+            if store.session.pendingFamilyDeletion == true { return }
             if store.hasUnavailableFamilyRecovery { return }
             store.refreshDate()
             if store.hasPendingInvitationPackage {

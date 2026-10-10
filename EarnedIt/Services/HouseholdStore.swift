@@ -337,6 +337,27 @@ final class HouseholdStore {
         canReleaseStaleOwnerMembership = false
     }
 
+    func preparePendingFamilyDeletionUITest() throws {
+        guard let household else { return }
+        var updated = session
+        updated.location = CloudLocation(
+            householdID: household.id,
+            zoneName: "EarnedIt-\(household.id.uuidString)",
+            ownerName: "synthetic-owner",
+            isOwner: true
+        )
+        updated.cloudParticipantID = "synthetic-owner"
+        updated.accountMembershipLockAttemptID = UUID()
+        updated.pendingFamilyDeletion = true
+        try repository.commit(facts: [], session: updated)
+        session = updated
+        syncTask?.cancel()
+        syncTask = nil
+        syncAgain = false
+        deferredAutomaticSync = false
+        isCheckingAccountMembership = false
+    }
+
     func prepareFamilyAccessLostUITest() throws {
         guard let household else { return }
         var updated = session
@@ -4320,7 +4341,8 @@ final class HouseholdStore {
 
     func scheduleSync() {
         guard automaticSync, session.location != nil,
-              !isDeletingAllEarnedItData, !hasPendingAccountDataReset else { return }
+              !isDeletingAllEarnedItData, !hasPendingAccountDataReset,
+              session.pendingFamilyDeletion != true else { return }
         if isSyncing { syncAgain = true; return }
         syncTask?.cancel()
         syncTask = Task { [weak self] in
@@ -4442,6 +4464,10 @@ final class HouseholdStore {
             updated.pendingFamilyDeletion = true
             try repository.commit(facts: [], session: updated)
             session = updated
+            syncTask?.cancel()
+            syncTask = nil
+            syncAgain = false
+            deferredAutomaticSync = false
         }
 
         _ = try await transport.ensureFamilyLifecycleAuthority(

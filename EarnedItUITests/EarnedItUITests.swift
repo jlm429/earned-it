@@ -356,6 +356,25 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertEqual(app.textFields["family-name"].value as? String, "Renamed Family")
     }
 
+    func testPendingFamilyDeletionOffersFinishActionAfterRelaunch() {
+        app.terminate()
+        app.launchArguments = [
+            "--ui-test-store",
+            "--ui-test-reset",
+            "--ui-test-weekly-fixture",
+            "--ui-test-pending-family-deletion"
+        ]
+        app.launch()
+
+        assertFinishDeletingAction()
+
+        app.terminate()
+        app.launchArguments = ["--ui-test-store"]
+        app.launch()
+
+        assertFinishDeletingAction()
+    }
+
     func testPrivacyAndSupportLinksRemainAvailableFromFirstRunThroughParentUse() {
         let setupPrivacy = screen("privacy-policy-link")
         let setupSupport = screen("support-link")
@@ -919,6 +938,27 @@ final class EarnedItUITests: XCTestCase {
         let current = field.value as? String ?? ""
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count) + text)
         if app.keyboards.buttons["Return"].exists { app.keyboards.buttons["Return"].tap() }
+    }
+
+    private func assertFinishDeletingAction() {
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        XCTAssertFalse(app.alerts["Unable to Update"].exists)
+        tap("family-management")
+        tap("household-settings")
+        let finish = app.buttons["delete-all-data"]
+        reveal(finish)
+        XCTAssertEqual(finish.label, "Finish Deleting")
+        XCTAssertTrue(finish.isEnabled)
+        XCTAssertTrue(finish.isHittable)
+        XCTAssertGreaterThanOrEqual(finish.frame.height, 44 - 0.01)
+        finish.tap()
+        let alert = app.alerts["Finish Deleting?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.buttons["Finish Deleting"].exists)
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS 'continues the deletion already started for this family'"
+        )).firstMatch.exists)
+        alert.buttons["Cancel"].tap()
     }
 
     private func relaunch(largeType: Bool = false) {

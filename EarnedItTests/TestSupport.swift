@@ -135,6 +135,7 @@ final class TestTransport: HouseholdTransport {
     var accountLockActivationFailures = 0
     var accountLockReplacementFailures = 0
     var accountLockReplacementPostCommitFailures = 0
+    var lifecycleEnsureFailures = 0
     var lifecycleBeginFailures = 0
     var lifecycleFinalizeFailures = 0
     var lifecycleStateError: Error?
@@ -692,6 +693,10 @@ final class TestTransport: HouseholdTransport {
             familyTransitionDiagnostics.record(stage: .lifecycleAuthorityPrepare, outcome: .failed,
                                                 householdID: householdID, error: HouseholdError.wrongAccount)
             throw HouseholdError.wrongAccount
+        }
+        if lifecycleEnsureFailures > 0 {
+            lifecycleEnsureFailures -= 1
+            throw CKError(.networkFailure)
         }
         if let existing = server.lifecycleAuthorities[householdID] {
             let comparison = CloudKitHouseholdTransport.familyLifecycleAuthorityComparison(
