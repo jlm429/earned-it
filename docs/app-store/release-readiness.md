@@ -11,6 +11,7 @@ Updated October 10, 2026 against `origin/main` at `d88d9749ddbf087e75346e6fffd0e
 - [ ] Replace or approve the current icon treatment before submission. It is a valid opaque 1024 by 1024 PNG, but the artwork includes its own rounded tile and white corners before iOS applies the system mask.
 - [ ] Capture accurate App Store screenshots from the release candidate at accepted iPhone and iPad sizes. The tracked `assets/earned-it-preview.png` is stale, shows an older interface and icon, says iOS 17+, and incorrectly says data stays only on device.
 - [ ] Complete a signed release-candidate pass on physical devices with two separate iCloud accounts. Cover owner creation, parent and child invitations, cold and warm acceptance, QR and link delivery, completion sync, relaunch, recovery, read-only behavior, and revocation.
+- [ ] Complete the [notification signing and independent-account device checks](../punt-notifications.md#background-delivery-and-release-prerequisites), including the remaining scenarios in that guide's verification section.
 - [ ] Confirm the production CloudKit schema contains every record type and field used by `CloudKitHouseholdTransport.swift`. Existing reports say a production schema was deployed and used by TestFlight, but this repository audit cannot inspect the live container.
 - [x] Captain-reported Production lifecycle type and field inspection is recorded in [Family lifecycle authority](../family-lifecycle-authority.md#cloudkit-schema-and-security); the agent has not independently verified the environment.
 - [ ] Confirm Production lifecycle security compliance using the staged procedure in [Family lifecycle authority](../family-lifecycle-authority.md#cloudkit-schema-and-security). Signed Development former-participant read access must be proven before an authorized human changes Production roles, followed by bounded signed Production verification.
@@ -46,7 +47,7 @@ If notifications land, check explicit contextual opt-in, denial/revocation, devi
 - [x] Opaque sRGB 1024 by 1024 app icon wired to the application target.
 - [x] No Swift package, CocoaPods, binary framework, advertising, analytics, telemetry, crash-reporting, ATT, or IDFA dependency.
 - [x] Camera purpose string accurately describes invitation QR scanning.
-- [x] No location, contacts, photos, microphone, notifications, health, Bluetooth, or other protected-data permission in source or configuration.
+- [x] Protected API usage is documented in the [privacy audit](privacy-audit.md#implementation-findings).
 - [x] UI-test store, reset arguments, synthetic invitations, dark-mode control, and weekly fixture are guarded by `DEBUG`; the weekly fixture file is also compile-gated.
 - [x] Production store creation does not seed sample data.
 - [x] Settings exposes one confirmed Delete All Data action to the creating parent. Authoritatively deleted or revoked participant installations expose a separate confirmed local Reset App recovery action.

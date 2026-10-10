@@ -221,7 +221,9 @@ struct RootView: View {
                     .onAppear { store.recordJoinRootRoute(.profileSelection) }
             }
         }
-        .tint(AppTheme.accent)
+        .task(id: "\(store.activityRevision)/\(scenePhase)") {
+            if !readOnlyPreflightMode && scenePhase == .active { await store.processActivityAlerts() }
+        }
         #if DEBUG
         .preferredColorScheme(WeeklyUITestFixture.enabled && ProcessInfo.processInfo.arguments.contains("--ui-test-dark") ? .dark : nil)
         #endif

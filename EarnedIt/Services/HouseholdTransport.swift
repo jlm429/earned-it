@@ -112,6 +112,7 @@ protocol HouseholdTransport: AccountDataResetCloudBoundary {
                                              ownerAuthorityBinding: String,
                                              expectedParticipantID: String) async throws -> Bool
     func fetch(from location: CloudLocation) async throws -> [HouseholdFact]
+    func prepareActivitySubscription(in location: CloudLocation) async throws
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws
     func share(for location: CloudLocation, title: String) async throws -> CKShare
     func createInvitationAccess(for location: CloudLocation, title: String, role: UserRole) async throws -> CloudInvitationAccess

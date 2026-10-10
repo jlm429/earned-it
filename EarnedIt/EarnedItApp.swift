@@ -88,9 +88,11 @@ struct EarnedItApp: App {
             }
             #endif
             #if DEBUG
+            if !readOnlyPreflight { try PuntUITestFixture.prepare(repository: repository) }
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
                 clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
                 automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight,
+                activityAlerts: isUITest || readOnlyPreflight ? DisabledActivityAlerts() : AppleActivityAlerts.shared,
                 localDataResetter: localDataResetter,
                 accountDataResetCloudBoundary: resetBoundary,
                 accountDataResetJournal: journal)
@@ -134,10 +136,12 @@ struct EarnedItApp: App {
             let initialStore = try HouseholdStore(
                 repository: repository,
                 transport: transport,
+                activityAlerts: AppleActivityAlerts.shared,
                 localDataResetter: localDataResetter,
                 accountDataResetJournal: journal
             )
             #endif
+            if !readOnlyPreflight && !isUITest { BackgroundActivityDelivery.shared.store = initialStore }
             return initialStore
         }
 

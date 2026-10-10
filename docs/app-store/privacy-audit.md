@@ -1,6 +1,6 @@
 # Privacy Implementation Audit
 
-Audit date: October 10, 2026, against `origin/main` at `d88d9749ddbf087e75346e6fffd0e64f11d7af03` (1.0.4). This describes the audited source; reassess permissions, retained data, and disclosures when the separate notification/activity work is integrated. See [the final release audit](../final-release-readiness.md).
+Audit date: September 24, 2026. Notification findings updated October 10, 2026.
 
 ## Implementation findings
 
@@ -12,7 +12,7 @@ Audit date: October 10, 2026, against `origin/main` at `d88d9749ddbf087e75346e6f
 | Dependencies | No Swift packages, CocoaPods dependencies, binary frameworks, or third-party libraries are configured. |
 | Network services | Apple's CloudKit is the only application data service. The system share sheet can deliver an invitation through services the person chooses. |
 | Camera | VisionKit's data scanner reads Earned It QR invitations. The app declares `NSCameraUsageDescription`, does not retain images, and offers manual code/link entry. |
-| Notifications | No user-notification framework, permission request, or push-notification entitlement was found. Synchronization is foreground/local-change/pull-to-refresh driven. |
+| Notifications | UserNotifications and optional alert permission are now implemented. See [notification privacy and delivery prerequisites](../punt-notifications.md) for content, local receipts, background synchronization, and signed APNs evidence limits. |
 | Other protected APIs | No location, contacts, photos, microphone, speech, health, motion, HomeKit, Bluetooth, NFC, calendar, or biometric access was found. |
 | Local data | SwiftData stores family facts and a device session in Application Support. Debug UI tests use a separate Documents store only under `DEBUG`. Account-wide deletion clears the journal, current and historical stores, the app cache, and the app's UserDefaults domain after cloud cleanup completes. |
 | iCloud data | Family facts use the owner's private CloudKit zone and invited participants' shared database. Private account-membership and validation records bind the iCloud participant to one household membership. Public lifecycle records prevent deleted families from being restored as active. |

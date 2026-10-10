@@ -6,7 +6,7 @@ This document keeps implementation context out of the public README. The authori
 
 Earned It persists immutable typed facts in a local SwiftData journal. The local store is `shared-household-v1.store`. SwiftData CloudKit mirroring is disabled. `CloudKitHouseholdTransport` explicitly exchanges the same facts through one custom zone in the owner's private database and invited participants' shared database.
 
-Synchronization is eventual. Foreground activity, local changes, and pull to refresh initiate synchronization. Offline facts remain pending for retry. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
+Synchronization is eventual. Foreground activity, local changes, and pull to refresh initiate synchronization. Offline facts remain pending for retry. The [punt and activity guide](punt-notifications.md) owns background synchronization, alert delivery, and their release prerequisites. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
 
 The CloudKit schema used by the current transport includes the fact journal envelope and private account-membership records. The exact implementation is in `CloudKitHouseholdTransport.swift`. Production schema changes are manual release operations.
 

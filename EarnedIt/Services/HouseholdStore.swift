@@ -6,7 +6,7 @@ import UIKit
 @MainActor
 @Observable
 final class HouseholdStore {
-    static let supportedJournalCapability = JournalCapability.occurrenceAwareChores
+    static let supportedJournalCapability = JournalCapability.puntApprovals
     @TaskLocal private static var cloudMutationToken: UUID?
 
     private enum MissingFamilyAccessOutcome: Equatable {
@@ -28,6 +28,9 @@ final class HouseholdStore {
     private let localDataResetter: any AccountLocalDataResetting
     private let clock: () -> Date
     private let automaticSync: Bool
+    private let activityAlerts: any ActivityAlerting
+    private var processingActivityAlerts = false
+    private(set) var activityAlertPermission: ActivityAlertPermission = .notDetermined
     private(set) var snapshot = HouseholdSnapshot()
     private(set) var session: DeviceSession
     private(set) var midnightTimerRevision = UUID()
@@ -61,6 +64,7 @@ final class HouseholdStore {
     init(repository: HouseholdRepository, transport: (any HouseholdTransport)? = nil,
          clock: @escaping () -> Date = { .now }, automaticSync: Bool = true,
          performLocalMigrations: Bool = true,
+         activityAlerts: (any ActivityAlerting)? = nil,
          localDataResetter: any AccountLocalDataResetting = NoOpAccountLocalDataResetter(),
          accountDataResetCloudBoundary: (any AccountDataResetCloudBoundary)? = nil,
          accountDataResetJournal: FileAccountDataResetJournal? = nil) throws {
@@ -84,6 +88,7 @@ final class HouseholdStore {
         accountDataResetCoordinator = resetCoordinator
         self.clock = clock
         self.automaticSync = automaticSync
+        self.activityAlerts = activityAlerts ?? DisabledActivityAlerts()
         session = try repository.session()
         if let resetCoordinator {
             _ = try resetCoordinator.restoredProgress()
@@ -558,6 +563,85 @@ final class HouseholdStore {
         updated.selectedMemberID = id
         try repository.commit(facts: [], session: updated)
         session = updated
+        Task { await activityAlerts.clear() }
+    }
+
+    var activity: [FamilyActivity] {
+        guard let member = selectedMember, !familyAccessLost, !hasPendingAccountDataReset,
+              !requiresAppUpdate else { return [] }
+        return FamilyActivityRules.activity(snapshot: snapshot, today: day)
+            .filter { $0.recipientIDs.contains(member.id) }
+    }
+
+    var unreadActivityCount: Int { activity.filter { !isActivityRead($0) }.count }
+    var activityRevision: String {
+        "\(session.householdID?.uuidString ?? "")/\(selectedMember?.id.uuidString ?? "")/\(snapshot.orderedFacts.count)/\(day)/\(cloudAccessBlocked)/\(familyAccessLost)"
+    }
+
+    private func activityKey(_ item: FamilyActivity, memberID: UUID) -> String {
+        "\(session.householdID?.uuidString ?? "")/\(memberID)/\(item.id)"
+    }
+
+    func isActivityRead(_ item: FamilyActivity) -> Bool {
+        guard let member = selectedMember else { return true }
+        return session.readActivityKeys?.contains(activityKey(item, memberID: member.id)) == true
+    }
+
+    func markActivityRead(_ item: FamilyActivity) throws {
+        guard let member = selectedMember, activity.contains(where: { $0.id == item.id }) else { return }
+        var updated = session
+        updated.readActivityKeys = Array(Set((updated.readActivityKeys ?? []) + [activityKey(item, memberID: member.id)]))
+        try repository.commit(facts: [], session: updated)
+        session = updated
+    }
+
+    func requestActivityAlertPermission() async {
+        do { activityAlertPermission = try await activityAlerts.requestPermission() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Alert receipts are local, profile-scoped, and independent of unread activity.
+    /// A denied alert never removes the source fact or blocks chore mutations.
+    func processActivityAlerts() async {
+        guard !processingActivityAlerts else { return }
+        let startingRevision = activityRevision
+        processingActivityAlerts = true
+        defer {
+            processingActivityAlerts = false
+            if activityRevision != startingRevision {
+                Task { await processActivityAlerts() }
+            }
+        }
+        activityAlertPermission = await activityAlerts.permission()
+        guard let member = selectedMember, !cloudAccessBlocked, !familyAccessLost,
+              !hasPendingAccountDataReset, !requiresAppUpdate else {
+            await activityAlerts.clear()
+            return
+        }
+        let expectedHouseholdID = session.householdID
+        let unprocessed = activity.filter {
+            session.processedActivityAlertKeys?.contains(activityKey($0, memberID: member.id)) != true
+        }
+        guard !unprocessed.isEmpty else { return }
+        let incoming = unprocessed.filter { item in
+            snapshot.orderedFacts.first(where: { $0.id == item.id })?.authorMemberID != member.id
+                && (item.punt == nil || item.punt?.status == .pending)
+        }
+        do {
+            if activityAlertPermission == .allowed, let latest = incoming.first {
+                try await activityAlerts.deliver(identifier: activityKey(latest, memberID: member.id))
+            }
+            guard selectedMember?.id == member.id, session.householdID == expectedHouseholdID,
+                  !familyAccessLost, !hasPendingAccountDataReset else {
+                await activityAlerts.clear()
+                return
+            }
+            var updated = session
+            updated.processedActivityAlertKeys = Array(Set((updated.processedActivityAlertKeys ?? [])
+                + unprocessed.map { activityKey($0, memberID: member.id) }))
+            try repository.commit(facts: [], session: updated)
+            session = updated
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func createFamily(name: String, parentName: String, timeZone: TimeZone = .current) throws {
@@ -934,7 +1018,7 @@ final class HouseholdStore {
             guard let occurrence = projected.occurrences.first(where: { $0.id == occurrenceID }),
                   occurrence.status != .withdrawn else { throw HouseholdError.permission }
             if occurrence.isLegacy,
-               snapshot.requiredJournalCapability < Self.supportedJournalCapability {
+               snapshot.requiredJournalCapability < JournalCapability.occurrenceAwareChores {
                 try append(.completion(DatedCompletion(
                     choreID: choreID, revisionID: chore.configuration.id,
                     memberID: memberID, day: chore.day, state: state,
@@ -974,6 +1058,56 @@ final class HouseholdStore {
         guard dateDay <= day, let member = snapshot.member(memberID), member.role == .child,
               member.isActive(on: dateDay) else { throw HouseholdError.unavailableDay }
         try append(.excuse(Excuse(memberID: memberID, day: dateDay, isExcused: excused)))
+    }
+
+    func puntProjection(for chore: DailyChore) -> PuntProjection? {
+        guard chore.configuration.mode == .alternating else { return nil }
+        let original: UUID?
+        if let occurrenceID = chore.occurrenceID {
+            original = snapshot.asNeededProjection(choreID: chore.choreID, through: chore.day)
+                .occurrences.first { $0.id == occurrenceID }?.assignedMemberID
+        } else {
+            original = ChoreRules.rotationOwner(choreID: chore.choreID, on: chore.day, snapshot: snapshot)?.id
+        }
+        guard let original else { return nil }
+        return PuntRules.project(scope: PuntRules.scope(for: chore), originalOwnerID: original,
+                                 snapshot: snapshot, today: day)
+    }
+
+    func puntRecipients(for chore: DailyChore) -> [FamilyMember] {
+        guard let actor = selectedMember,
+              PermissionService.canRequestPunt(actor: actor, chore: chore, today: day),
+              let projection = puntProjection(for: chore), !projection.isClosed,
+              projection.pending == nil, projection.accepted == nil else { return [] }
+        return ChoreRules.eligibleMembers(for: chore.configuration, on: day, snapshot: snapshot)
+            .filter { $0.id != actor.id }
+    }
+
+    func requestPunt(choreID: UUID, occurrenceID: UUID? = nil, recipientID: UUID) throws {
+        try requireWriteAccess()
+        guard let actor = selectedMember,
+              let chore = dailyList().first(where: { $0.choreID == choreID && $0.occurrenceID == occurrenceID }),
+              puntRecipients(for: chore).contains(where: { $0.id == recipientID }) else {
+            throw HouseholdError.puntUnavailable
+        }
+        try append(.puntRequest(PuntRequest(scope: PuntRules.scope(for: chore),
+                                            requesterID: actor.id, recipientID: recipientID)))
+    }
+
+    func decidePunt(requestFactID: UUID, kind: PuntDecisionKind) throws {
+        try requireWriteAccess()
+        guard let actor = selectedMember,
+              let source = snapshot.orderedFacts.first(where: { $0.id == requestFactID }),
+              case .puntRequest(let request) = source.body,
+              request.scope.day == day,
+              let chore = dailyList().first(where: { PuntRules.scope(for: $0) == request.scope }),
+              let projection = puntProjection(for: chore), !projection.isClosed,
+              projection.pending?.id == requestFactID,
+              PermissionService.canDecidePunt(actor: actor, request: request, kind: kind) else {
+            throw HouseholdError.puntUnavailable
+        }
+        try append(.puntDecision(PuntDecision(requestFactID: requestFactID, scope: request.scope,
+                                              day: day, memberID: actor.id, kind: kind)))
     }
 
     func requestProfiles(_ ids: [UUID], deviceName: String) throws {
@@ -4565,6 +4699,10 @@ final class HouseholdStore {
             }
             lastSyncedAt = clock()
             syncMessage = "Up to date"
+            if BackgroundActivityDelivery.isEnabled {
+                do { try await transport.prepareActivitySubscription(in: location) }
+                catch { syncMessage = "Up to date. Background alerts need attention." }
+            }
         } catch {
             let missingAccessOutcome: MissingFamilyAccessOutcome
             if let participant = expectedSession.cloudParticipantID {
@@ -4873,12 +5011,12 @@ final class HouseholdStore {
     private func appendOccurrenceAware(_ occurrenceAwareBodies: [HouseholdFactBody],
                                        recordedByMemberID: UUID) throws {
         var bodies: [HouseholdFactBody] = []
-        if snapshot.requiredJournalCapability < Self.supportedJournalCapability {
+        if snapshot.requiredJournalCapability < JournalCapability.occurrenceAwareChores {
             guard snapshot.member(recordedByMemberID)?.role == .parent else {
                 throw HouseholdError.permission
             }
             bodies.append(.journalCapability(JournalCapability(
-                minimumVersion: Self.supportedJournalCapability,
+                minimumVersion: JournalCapability.occurrenceAwareChores,
                 recordedByMemberID: recordedByMemberID
             )))
         }
@@ -4936,6 +5074,10 @@ final class HouseholdStore {
             guard let memberID = fact.authorMemberID, approvedIDs.contains(memberID),
                   let author = snapshot.member(memberID) else { throw HouseholdError.missingProfile }
             switch fact.body {
+            case .puntRequest(let request):
+                guard author.role == .child, request.requesterID == author.id else { throw HouseholdError.permission }
+            case .puntDecision(let decision):
+                guard author.role == .child, decision.memberID == author.id else { throw HouseholdError.permission }
             case .completion(let completion):
                 guard author.role == .parent || completion.memberID == author.id else { throw HouseholdError.permission }
             case .asNeededOccurrenceCompletion(let completion):
@@ -4950,6 +5092,19 @@ final class HouseholdStore {
         if let author = fact.authorMemberID, available.member(author) == nil { return false }
         func hasMembers(_ ids: [UUID]) -> Bool { ids.allSatisfy { available.member($0) != nil } }
         switch fact.body {
+        case .puntRequest(let request):
+            return hasMembers([request.requesterID, request.recipientID])
+                && available.revisions.contains { $0.id == request.scope.revisionID && $0.choreID == request.scope.choreID }
+                && (request.scope.occurrenceID == nil || available.orderedFacts.contains {
+                    if case .asNeededOccurrence(let occurrence) = $0.body { return occurrence.id == request.scope.occurrenceID }
+                    return $0.id == request.scope.occurrenceID
+                })
+        case .puntDecision(let decision):
+            return hasMembers([decision.memberID]) && available.orderedFacts.contains { source in
+                guard source.id == decision.requestFactID,
+                      case .puntRequest(let request) = source.body else { return false }
+                return request.scope == decision.scope
+            }
         case .household, .member: return true
         case .journalCapability(let value):
             return hasMembers([value.recordedByMemberID])
@@ -5064,6 +5219,8 @@ final class HouseholdStore {
         }
         let ordered = facts.sorted(by: HouseholdFact.precedes)
         let capabilityIndex = ordered.firstIndex { fact in
+            if case .puntRequest = fact.body { return true }
+            if case .puntDecision = fact.body { return true }
             if case .journalCapability(let capability) = fact.body {
                 return capability.minimumVersion >= JournalCapability.occurrenceAwareChores
             }
@@ -5085,6 +5242,11 @@ final class HouseholdStore {
         }
         for fact in facts {
             switch fact.body {
+            case .puntRequest(let request):
+                guard fact.authorMemberID == request.requesterID,
+                      request.requesterID != request.recipientID else { throw HouseholdError.malformedData }
+            case .puntDecision(let decision):
+                guard fact.authorMemberID == decision.memberID else { throw HouseholdError.malformedData }
             case .household(let value):
                 guard value.id == householdID, TimeZone(identifier: value.timeZoneID) != nil else { throw HouseholdError.malformedData }
             case .allowance(let value):
@@ -5187,6 +5349,41 @@ final class HouseholdStore {
             }
         }
         let resolved = HouseholdSnapshot(facts: facts)
+        for fact in facts {
+            let scope: PuntScope
+            switch fact.body {
+            case .puntRequest(let request):
+                scope = request.scope
+                guard resolved.member(request.requesterID)?.role == .child,
+                      resolved.member(request.recipientID)?.role == .child else { throw HouseholdError.malformedData }
+            case .puntDecision(let decision):
+                scope = decision.scope
+                guard resolved.member(decision.memberID)?.role == .child,
+                      facts.contains(where: { candidate in
+                          guard candidate.id == decision.requestFactID,
+                                case .puntRequest(let request) = candidate.body else { return false }
+                          return request.scope == scope
+                              && (decision.kind == .cancelled ? request.requesterID : request.recipientID) == decision.memberID
+                      }) else { throw HouseholdError.malformedData }
+            default: continue
+            }
+            guard let revision = resolved.revisions.first(where: {
+                $0.id == scope.revisionID && $0.choreID == scope.choreID
+            }), revision.mode == .alternating,
+                  revision.effectiveDay <= scope.day,
+                  (revision.schedulingMode == .asNeeded) == (scope.occurrenceID != nil),
+                  scope.occurrenceID == nil || facts.contains(where: { source in
+                      if case .asNeededOccurrence(let value) = source.body {
+                          return value.id == scope.occurrenceID && value.choreID == scope.choreID
+                              && value.revisionID == scope.revisionID && value.day == scope.day
+                      }
+                      if case .occurrence(let value) = source.body {
+                          return source.id == scope.occurrenceID && value.choreID == scope.choreID
+                              && value.revisionID == scope.revisionID && value.day == scope.day && value.state == .available
+                      }
+                      return false
+                  }) else { throw HouseholdError.malformedData }
+        }
         let revisions = facts.compactMap { fact -> ChoreRevision? in
             if case .chore(let revision) = fact.body { return revision }
             return nil
@@ -5288,8 +5485,9 @@ final class HouseholdStore {
                 }
                 let sourceAllowsMember: Bool
                 if let source, case .asNeededOccurrence(let occurrence) = source.body {
-                    sourceAllowsMember = occurrence.assignedMemberID.map { $0 == completion.memberID }
-                        ?? occurrence.eligibleMemberIDs.contains(completion.memberID)
+                    // Stale completions remain audit facts. The occurrence projection admits only
+                    // the effective owner after replaying approvals in deterministic journal order.
+                    sourceAllowsMember = occurrence.eligibleMemberIDs.contains(completion.memberID)
                 } else {
                     sourceAllowsMember = source != nil
                 }

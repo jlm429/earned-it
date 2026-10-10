@@ -195,7 +195,7 @@ enum ChoreRules {
                     $0.day == day && $0.isExcused
                 }.map(\.memberID))
                 return projected.compactMap { occurrence in
-                    let ownerID = occurrence.assignedMemberID ?? (revision.mode == .alternating
+                    let ownerID = occurrence.responsibilityOwnerID ?? occurrence.assignedMemberID ?? (revision.mode == .alternating
                         ? alternatingOwner(choreID: choreID, on: occurrence.day, snapshot: snapshot,
                                            calendar: household.calendar)?.id : nil)
                     let members = revision.mode == .alternating
@@ -216,16 +216,19 @@ enum ChoreRules {
                     )
                 }
             }
-            let disposition = snapshot.scheduledOccurrence(choreID: choreID, revisionID: revision.id, on: day)
             let scheduled = revision.schedulingMode == .scheduled
                 && revision.weekday.rawValue == weekday
-            let notNeeded = scheduled && disposition?.state == .notNeeded
             guard scheduled || !recorded.isEmpty else { return [] }
             let occurrenceExists = scheduled
             let scheduledMembers = occurrenceExists ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
             let occurrence = resolveOccurrence(revision: revision, scheduledMembers: scheduledMembers,
                                                choreID: choreID, day: day, snapshot: snapshot,
                                                calendar: household.calendar)
+            let disposition = snapshot.scheduledOccurrence(
+                choreID: choreID, revisionID: revision.id, on: day,
+                hasDone: occurrence.activeContributions.contains { $0.state == .done }
+            )
+            let notNeeded = scheduled && disposition?.state == .notNeeded
             var members = revision.mode == .alternating
                 ? occurrence.scheduledOwner.map { [$0] } ?? [] : scheduledMembers
             var requiredIDs = Set(revision.mode != .anyOne ? members.map(\.id) : [])
@@ -270,6 +273,12 @@ enum ChoreRules {
                                 calendar: snapshot.household?.calendar ?? AppCalendar.current)
     }
 
+    static func rotationOwner(choreID: UUID, on day: CivilDay,
+                              snapshot: HouseholdSnapshot) -> FamilyMember? {
+        alternatingOwner(choreID: choreID, on: day, snapshot: snapshot,
+                         calendar: snapshot.household?.calendar ?? AppCalendar.current)
+    }
+
     static func expectedAsNeededOwner(choreID: UUID, on day: CivilDay,
                                       snapshot: HouseholdSnapshot,
                                       projection: AsNeededControlProjection) -> UUID? {
@@ -287,6 +296,11 @@ enum ChoreRules {
         var owner: FamilyMember?
         if revision.mode == .alternating, !scheduledMembers.isEmpty {
             owner = alternatingOwner(choreID: choreID, on: day, snapshot: snapshot, calendar: calendar)
+            if let originalOwner = owner {
+                let scope = PuntScope(choreID: choreID, revisionID: revision.id, day: day, occurrenceID: nil)
+                owner = snapshot.member(PuntRules.project(scope: scope, originalOwnerID: originalOwner.id,
+                                                          snapshot: snapshot).ownerID)
+            }
         }
         func isActive(_ contribution: DatedCompletion) -> Bool {
             guard contribution.revisionID == revision.id else { return false }
@@ -395,9 +409,14 @@ enum ChoreRules {
                                               eligibleIDs: eligibleIDs) else { continue }
                 if eventDay == day { activeOwnerID = ownerID }
                 let disposition = snapshot.occurrence(choreID: choreID, on: eventDay)
+                let responsibleID = PuntRules.project(
+                    scope: PuntScope(choreID: choreID, revisionID: revision.id,
+                                     day: eventDay, occurrenceID: nil),
+                    originalOwnerID: ownerID, snapshot: snapshot
+                ).ownerID
                 let hasDone = snapshot.completions.contains {
                     $0.choreID == choreID && $0.revisionID == revision.id
-                        && $0.day == eventDay && $0.state == .done
+                        && $0.day == eventDay && $0.state == .done && $0.memberID == responsibleID
                 }
                 let keepsTurn = disposition?.revisionID == revision.id
                     && disposition?.state == .notNeeded

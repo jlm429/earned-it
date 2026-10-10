@@ -15,6 +15,7 @@ struct ProjectedAsNeededOccurrence: Equatable, Identifiable {
     let eligibleMemberIDs: [UUID]
     let requiredMemberIDs: [UUID]
     let assignedMemberID: UUID?
+    var responsibilityOwnerID: UUID? = nil
     let isLegacy: Bool
     var status: AsNeededOccurrenceStatus
     var contributions: [UUID: DatedCompletion]
@@ -22,6 +23,7 @@ struct ProjectedAsNeededOccurrence: Equatable, Identifiable {
     var consumedTurn: Bool
 
     var isFullyComplete: Bool {
+        if let owner = responsibilityOwnerID { return contributions[owner]?.state == .done }
         if requiredMemberIDs.isEmpty {
             return contributions.values.contains { $0.state == .done }
         }
@@ -55,12 +57,7 @@ extension HouseholdSnapshot {
             if case .occurrenceAwareChoreDeletion(let deletion) = fact.body { return deletion.choreID == choreID }
             return false
         } ?? facts.endIndex
-        let capabilityIndex = facts.firstIndex { fact in
-            if case .journalCapability(let capability) = fact.body {
-                return capability.minimumVersion >= JournalCapability.occurrenceAwareChores
-            }
-            return false
-        } ?? facts.endIndex
+        let capabilityIndex = occurrenceCapabilityIndex
 
         var legacyWinnerByDay: [CivilDay: UUID] = [:]
         for (index, fact) in facts.enumerated() where index < deletionIndex && index < capabilityIndex {
@@ -96,7 +93,8 @@ extension HouseholdSnapshot {
                       completion.day <= day, completion.state == .done,
                       let revision = revisions.first(where: { $0.id == completion.revisionID }),
                       completion.mode == revision.mode else { return false }
-                let eligible = occurrence.assignedMemberID.map { [$0] } ?? occurrence.eligibleMemberIDs
+                let eligible = (occurrence.responsibilityOwnerID ?? occurrence.assignedMemberID)
+                    .map { [$0] } ?? occurrence.eligibleMemberIDs
                 return eligible.contains(completion.memberID) && completion.eligibleMemberIDs == eligible
             }
         }
@@ -127,6 +125,7 @@ extension HouseholdSnapshot {
                     consumedTurn: legacy.assignedMemberID == nil
                 ))
                 openIndex = result.occurrences.indices.last
+                applyPunt(to: &result.occurrences[result.occurrences.count - 1])
                 result.controlHeadID = fact.id
 
             case .completion(let legacy):
@@ -187,6 +186,7 @@ extension HouseholdSnapshot {
                     consumedTurn: false
                 ))
                 openIndex = result.occurrences.indices.last
+                applyPunt(to: &result.occurrences[result.occurrences.count - 1])
                 result.controlHeadID = fact.id
 
             case .asNeededOccurrenceCompletion(let completion):
@@ -198,7 +198,7 @@ extension HouseholdSnapshot {
                       let revision = revisions.first(where: { $0.id == completion.revisionID }),
                       completion.mode == revision.mode else { continue }
                 let occurrence = result.occurrences[occurrenceIndex]
-                let contributionEligible = occurrence.assignedMemberID.map { [$0] }
+                let contributionEligible = (occurrence.responsibilityOwnerID ?? occurrence.assignedMemberID).map { [$0] }
                     ?? occurrence.eligibleMemberIDs
                 guard contributionEligible.contains(completion.memberID),
                       completion.eligibleMemberIDs == contributionEligible,
@@ -279,6 +279,15 @@ extension HouseholdSnapshot {
             }
         }
         return result
+    }
+
+    private func applyPunt(to occurrence: inout ProjectedAsNeededOccurrence) {
+        guard let original = occurrence.assignedMemberID else { return }
+        let scope = PuntScope(choreID: occurrence.choreID, revisionID: occurrence.revisionID,
+                              day: occurrence.day, occurrenceID: occurrence.id)
+        occurrence.responsibilityOwnerID = PuntRules.project(
+            scope: scope, originalOwnerID: original, snapshot: self
+        ).ownerID
     }
 }
 

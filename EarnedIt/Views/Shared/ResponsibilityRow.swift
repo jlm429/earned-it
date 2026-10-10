@@ -28,6 +28,7 @@ struct ResponsibilityRow: View {
                 if !chore.configuration.notes.isEmpty {
                     Text(chore.configuration.notes).font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }
+                PuntControls(chore: chore, actor: actor)
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }

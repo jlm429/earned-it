@@ -170,6 +170,8 @@ struct OwnerConnectionBootstrap: Codable, Equatable {
 }
 
 struct DeviceSession: Codable, Equatable {
+    var readActivityKeys: [String]?
+    var processedActivityAlertKeys: [String]?
     var deviceID = UUID()
     var householdID: UUID?
     var selectedMemberID: UUID?
