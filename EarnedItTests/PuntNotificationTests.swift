@@ -362,6 +362,33 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(alek.pendingCount, 0)
     }
 
+    func testEveryActivityUpdateBeyondFiftyCanBeDisplayedAndMarkedRead() throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let requestID = try request(family, chore: chore, recipient: family.alek)
+        try family.store.selectProfile(family.parent.id)
+        for _ in 0..<51 { _ = try family.chore(.all) }
+        try family.store.selectProfile(family.alek.id)
+        let activity = family.store.activity
+        XCTAssertEqual(activity.count, 53)
+        XCTAssertEqual(family.store.unreadActivityCount, activity.count)
+        let displayed = FamilyActivityView.items(from: activity)
+        XCTAssertEqual(displayed.count, activity.count)
+        XCTAssertEqual(Set(displayed.map(\.id)), Set(activity.map(\.id)))
+        XCTAssertEqual(displayed.first?.id, requestID)
+        for item in displayed { try family.store.markActivityRead(item) }
+        XCTAssertEqual(family.store.unreadActivityCount, 0)
+        XCTAssertEqual(family.store.puntProjection(for: try XCTUnwrap(family.store.dailyList().first {
+            $0.choreID == chore
+        }))?.pending?.id, requestID)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.unreadActivityCount, 0)
+        XCTAssertEqual(Set(FamilyActivityView.items(from: reopened.activity).map(\.id)), Set(activity.map(\.id)))
+        XCTAssertTrue(reopened.activity.allSatisfy { reopened.isActivityRead($0) })
+        try reopened.selectProfile(family.hanna.id)
+        XCTAssertEqual(reopened.unreadActivityCount, 53)
+    }
+
     func testDeniedAlertsKeepUnreadActivityAndAllowedAlertsDoNotRepeatAcrossRelaunch() async throws {
         let family = try TestFamily()
         let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])

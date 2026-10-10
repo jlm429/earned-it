@@ -5,13 +5,14 @@ struct FamilyActivityView: View {
     @Environment(HouseholdStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
-    private var items: [FamilyActivity] {
-        let pending = store.activity.filter { $0.punt?.status == .pending }
-        let other = store.activity.filter { $0.punt?.status != .pending }
-        return pending + other.prefix(50)
+    static func items(from activity: [FamilyActivity]) -> [FamilyActivity] {
+        let pending = activity.filter { $0.punt?.status == .pending }
+        let other = activity.filter { $0.punt?.status != .pending }
+        return pending + other
     }
 
     var body: some View {
+        let items = Self.items(from: store.activity)
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
