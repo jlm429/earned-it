@@ -48,7 +48,7 @@ Every historical synced household uses a custom zone named exactly `EarnedIt-<UU
 
 | Record type | Identity and fields | Historical contents |
 | --- | --- | --- |
-| `HouseholdFact` | Introduced with sharing at `1c12a8d`. Record name is the stable fact UUID. Fields are `formatVersion = 1` and JSON `payload` bytes. Every semantic object below is a case inside this one record type, not a separate CloudKit type. | Household configuration and setup; member and profile definitions, roles, avatars, activation and archive dates; chore or responsibility revisions; dated completions and reversals; occurrence activation and disposition; alternating-turn advances; permanent chore deletions; allowance revisions; excuses; legacy profile requests and grants; family invitations; exact invitation claims; and invitation revocations. |
+| `HouseholdFact` | Introduced with sharing at `1c12a8d`. Record name is the stable fact UUID. Fields are a `formatVersion` integer and JSON `payload` bytes. Existing facts use format 1; occurrence-aware capability, action, restoration, and deletion facts use format 2. Every semantic object below is a case inside this one record type, not a separate CloudKit type. | Household configuration and setup; member and profile definitions, roles, avatars, activation and archive dates; chore or responsibility revisions; dated and occurrence-scoped completions and reversals; legacy occurrence activation and disposition; occurrence-aware activation, withdrawal, and turn advances; scheduled restoration; permanent chore deletions and occurrence-aware deletion snapshots; allowance revisions; excuses; legacy profile requests and grants; family invitations; exact invitation claims; and invitation revocations. |
 | `InvitationValidationTime` | A temporary record with a server-generated record name and no app fields. | Server-time validation during invitation issue or redemption. A crash can leave a remnant. |
 | `CKShare` | The system zone-wide share uses record name `CKRecordNameZoneWideShare`. | Share metadata, owner, current and stale participant entries, participant status and permission, and Apple invitation metadata. Private invitations use read/write transport permission. App role permissions remain separate client checks. |
 
@@ -60,14 +60,21 @@ The current `HouseholdFactBody` cases are the historical superset:
 4. `completion`
 5. `occurrence`
 6. `alternatingTurnAdvance`
-7. `choreDeletion`
-8. `allowance`
-9. `excuse`
-10. `request`
-11. `grant`
-12. `invitation`
-13. `invitationClaim`
-14. `invitationRevocation`
+7. `journalCapability`
+8. `asNeededOccurrence`
+9. `asNeededOccurrenceCompletion`
+10. `asNeededOccurrenceResolution`
+11. `asNeededTurnAdvance`
+12. `scheduledOccurrenceRestoration`
+13. `choreDeletion`
+14. `occurrenceAwareChoreDeletion`
+15. `allowance`
+16. `excuse`
+17. `request`
+18. `grant`
+19. `invitation`
+20. `invitationClaim`
+21. `invitationRevocation`
 
 Invitation generations are represented by new invitation identities plus their deterministic claim and revocation facts. Chore generations are immutable chore revisions and dated transition facts. Household deletion generations use the public lifecycle record described below. There has never been a separate cloud record type named `Family`, `Profile`, `Member`, `Responsibility`, `Chore`, `Completion`, `Allowance`, `Journal`, `Invitation`, `InvitationClaim`, `InvitationRevocation`, `Generation`, or `Revocation`.
 

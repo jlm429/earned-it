@@ -20,9 +20,9 @@ See the production invitation and membership reports under `docs/production-*` f
 
 ## Dates, recurrence, and history
 
-Family dates use a fixed Gregorian timezone chosen at household creation. Facts store civil date keys rather than relying on the device's current timezone. Recurring chore configuration, dated completions, occurrence dispositions, excuses, assignments, and allowance revisions remain separate so edits do not rewrite history.
+Family dates use a fixed Gregorian timezone chosen at household creation. Facts store civil date keys rather than relying on the device's current timezone. Recurring chore configuration, scheduled and occurrence-scoped completion and control facts, excuses, assignments, and allowance revisions remain separate so edits do not rewrite history.
 
-Scheduled chores recur by weekday. As-needed chores appear only after a parent activates an occurrence. Alternating chores use persisted participant order. A parent can mark a scheduled occurrence not needed and explicitly decide whether an alternating turn advances.
+Scheduled chores recur by weekday. Parents explicitly activate as-needed availability. The authoritative rules for distinct same-day occurrences, withdrawal, correction, scheduled restoration, and alternating-turn advancement are in [shared-household-architecture.md](shared-household-architecture.md).
 
 ## Progress and allowance
 
