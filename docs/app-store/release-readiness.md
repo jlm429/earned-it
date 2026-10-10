@@ -33,7 +33,24 @@ On the integrated signed candidate, check launch/relaunch and background/foregro
 
 If notifications land, check explicit contextual opt-in, denial/revocation, device-local settings, privacy of lock-screen content, correct eligible-child targeting, duplicate suppression/relaunch, and the app's usable experience with alerts disabled. The prepared Info.plist `UIBackgroundModes` `remote-notification` code-only edit is accepted normal implementation in the separate notification lane, remains pending and absent from audited main, and needs no separate approval for that edit. Signing/APNs entitlements or provisioning changes, CloudKit schema promotion, private/shared subscriptions for receiving accounts, and signed two-account/device evidence remain human release prerequisites. Delivery is best effort, not guaranteed; local alerts after refresh do not prove remote/background delivery.
 
-## Submission references
+- [x] Native iPhone and iPad target with iOS 18.0 minimum deployment, both device families enabled, and all four iPad multitasking orientations declared.
+- [x] Marketing version configured in [project settings](../../EarnedIt.xcodeproj/project.pbxproj) and a CI build-number strategy based on GitHub run number and attempt.
+- [x] Release builds select the Production iCloud environment. Debug builds select Development.
+- [x] Explicit iCloud, CloudKit, sharing, custom invitation URL, and one-time-link entitlement configuration.
+- [x] Generated launch screen and app display name configuration.
+- [x] Opaque sRGB 1024 by 1024 app icon wired to the application target.
+- [x] No Swift package, CocoaPods, binary framework, advertising, analytics, telemetry, crash-reporting, ATT, or IDFA dependency.
+- [x] Camera purpose string accurately describes invitation QR scanning.
+- [x] No location, contacts, photos, microphone, notifications, health, Bluetooth, or other protected-data permission in source or configuration.
+- [x] UI-test store, reset arguments, synthetic invitations, dark-mode control, and weekly fixture are guarded by `DEBUG`; the weekly fixture file is also compile-gated.
+- [x] Production store creation does not seed sample data.
+- [x] Settings exposes one confirmed Delete All Data action to the creating parent. Authoritatively deleted or revoked participant installations expose a separate confirmed local Reset App recovery action.
+- [x] No application logging calls were found that expose family names, chore content, invitation URLs, or invitation codes.
+- [x] App Store upload workflow manually signs with supplied distribution assets, validates the certificate and profile before archiving, reserves temporary API-key material for upload, cleans temporary release material on exit, and overrides the build number without committing signing credentials.
+- [x] App Store profile validation accepts scalar or flat string allowlists, recognizes the CloudKit service wildcard, and fails closed unless the profile authorizes Production iCloud, the Earned It container, CloudKit, and `InProcessOneTimeLinks`.
+- [x] Build products, Derived Data, Xcode user state, `.env` files, and local artifacts are ignored.
+- [x] Existing unit, service, UI, sharing, invitation, onboarding, scheduling, allowance, and business-rule tests are present.
+- [x] Attributed daily quotations were replaced with unattributed product microcopy. The remaining rights and attribution findings are documented in `quotes-and-attribution.md`.
 
 Apple sources were checked October 10, 2026. Recheck at submission if requirements change.
 

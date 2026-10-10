@@ -9,7 +9,7 @@ struct ParentDashboardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SectionCard {
+                SectionCard(tint: AppTheme.accent) {
                     VStack(alignment: .leading, spacing: 14) {
                         ProfileHeader(
                             user: parent,
@@ -31,13 +31,13 @@ struct ParentDashboardView: View {
                         if let selectedDate, !store.calendar.isDate(selectedDate, inSameDayAs: today) {
                             Button("Back to Today", systemImage: "arrow.uturn.backward") { self.selectedDate = nil }
                                 .buttonStyle(.bordered)
+                                .controlSize(.large)
                         }
                         SyncStatusView()
                     }
                 }
                 SharedDailyList(actor: parent, date: selectedDate ?? today)
-                Label("Weekly progress", systemImage: "chart.bar.fill")
-                    .font(.title2.bold())
+                SectionHeading(title: "Weekly progress", systemImage: "chart.bar.fill")
                 if let child = store.snapshot.members.first(where: { $0.role == .child }) {
                     WeekHeading(week: store.allowanceWeek(for: child.id))
                 }
@@ -46,7 +46,7 @@ struct ParentDashboardView: View {
                     NavigationLink {
                         ParentChildDetailView(parent: parent, child: child, today: today)
                     } label: {
-                        SectionCard {
+                        SectionCard(tint: week.earned ? AppTheme.success : nil) {
                             HStack(spacing: 12) {
                                 AvatarView(user: child)
                                 VStack(alignment: .leading, spacing: 8) {
@@ -60,7 +60,7 @@ struct ParentDashboardView: View {
                                     }
                                     Label(week.amount?.formatted() ?? "Allowance not set", systemImage: "banknote")
                                         .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(AppTheme.secondaryText)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)
@@ -75,7 +75,7 @@ struct ParentDashboardView: View {
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(AppTheme.canvas)
         .navigationTitle("Family Today")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {

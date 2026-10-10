@@ -783,6 +783,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(parentHeader.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(parentHeader.frame.minX, app.frame.minX)
         XCTAssertLessThanOrEqual(parentHeader.frame.maxX, app.frame.maxX)
+        keepScreenshot("ui-polish-parent-largest-text")
 
         let category = screen("category-water-plants")
         reveal(category)
@@ -792,6 +793,7 @@ final class EarnedItUITests: XCTestCase {
         reveal(stateMenu)
         XCTAssertGreaterThanOrEqual(stateMenu.frame.width, 44 - 0.01)
         XCTAssertGreaterThanOrEqual(stateMenu.frame.height, 44 - 0.01)
+        keepScreenshot("ui-polish-chore-controls-largest-text")
         stateMenu.tap()
         XCTAssertTrue(app.buttons["Missed"].waitForExistence(timeout: 5))
         app.buttons["Missed"].tap()
@@ -817,10 +819,11 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(childHeader.frame.minX, app.frame.minX)
         XCTAssertLessThanOrEqual(childHeader.frame.maxX, app.frame.maxX)
         keepScreenshot("ui-polish-parent-child-largest-text")
-        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
     }
 
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
+        keepScreenshot("ui-polish-parent-today")
         tap("parent-child-hanna")
         tap("edit-allowance")
         fill("allowance-amount", with: "12.345")

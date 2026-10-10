@@ -14,11 +14,21 @@ struct SetupView: View {
             Form {
                 if store.household == nil {
                     Section {
-                        Text("Earned It").font(.largeTitle.bold())
-                        Text("One family. The right view for everyone.")
-                            .font(.title3)
-                        Text("Parents manage the shared week. Children see and complete only the work connected to their invited profile.")
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.largeTitle)
+                                .foregroundStyle(AppTheme.accent)
+                                .padding(12)
+                                .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                                .accessibilityHidden(true)
+                            Text("Earned It").font(.largeTitle.bold())
+                            Text("One family. The right view for everyone.")
+                                .font(.title3.weight(.medium))
+                            Text("Parents manage the shared week. Children see and complete only the work connected to their invited profile.")
+                                .foregroundStyle(AppTheme.secondaryText)
+                        }
+                        .padding(.vertical, 8)
+                        .listRowBackground(AppTheme.surface)
                     }
                     if creatingFamily {
                         Section {
@@ -28,7 +38,7 @@ struct SetupView: View {
                                 .textContentType(.name)
                                 .accessibilityIdentifier("parent-name")
                             Text("You’ll start as a parent. Add children next, even if they don’t have a device.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                             Button("Create Family") {
                                 do { try store.createFamily(name: familyName, parentName: parentName) }
                                 catch { errorMessage = error.localizedDescription }
@@ -46,7 +56,7 @@ struct SetupView: View {
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text("Create a New Family")
                                         Text("I’m the first parent setting up this family")
-                                            .font(.footnote).foregroundStyle(.secondary)
+                                            .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                                     }
                                 } icon: { Image(systemName: "house.fill") }
                             }
@@ -56,7 +66,7 @@ struct SetupView: View {
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text("Join an Existing Family")
                                         Text("I have a parent-issued invitation")
-                                            .font(.footnote).foregroundStyle(.secondary)
+                                            .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                                     }
                                 } icon: { Image(systemName: "person.2.badge.key") }
                             }
@@ -66,7 +76,7 @@ struct SetupView: View {
                     Section {
                         Label("Joining never creates a second copy of a family or lets a device choose its own authority.",
                               systemImage: "lock.shield")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.secondaryText)
                     }
                     Section("About") {
                         LegalLinksView()
@@ -102,6 +112,7 @@ struct SetupView: View {
                     }
                 }
             }
+            .themedListBackground()
             .navigationTitle(store.household == nil ? "Welcome" : "Family Setup")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
