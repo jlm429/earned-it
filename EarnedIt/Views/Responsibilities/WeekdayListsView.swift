@@ -23,6 +23,7 @@ struct WeekdayListsView: View {
                 Text("One shared recurring list per weekday. Completions are kept by date and person.")
             }
         }
+        .themedListBackground()
         .navigationTitle("Chores")
         .accessibilityIdentifier("weekday-lists")
     }
@@ -161,6 +162,7 @@ private struct AsNeededConfigurationView: View {
                 Text("Each availability is kept separately. Completion advances an alternating turn, withdrawal keeps it, and Skip uses one turn without credit.")
             }
         }
+        .themedListBackground()
         .navigationTitle("As Needed")
         .sheet(isPresented: $addingChore) { ResponsibilityFormView(weekday: .monday, schedulingMode: .asNeeded) }
         .sheet(item: $editing) { chore in ResponsibilityFormView(weekday: chore.weekday, existing: chore) }
@@ -236,6 +238,7 @@ private struct WeekdayConfigurationView: View {
                 Text("This list repeats every \(weekday.title). Edits start tomorrow. Deleted chores leave current lists immediately.")
             }
         }
+        .themedListBackground()
         .navigationTitle(weekday.title)
         .sheet(isPresented: $addingChore) { ResponsibilityFormView(weekday: weekday) }
         .sheet(item: $editing) { chore in ResponsibilityFormView(weekday: weekday, existing: chore) }

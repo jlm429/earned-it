@@ -18,6 +18,7 @@ struct FamilyInvitationView: View {
                 if let issued { invitationReady(issued) }
                 else { invitationForm }
             }
+            .themedListBackground()
             .navigationTitle(issued == nil ? "Invite Family" : "Invitation Ready")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -212,6 +213,7 @@ struct RecoveredFamilyInvitationView: View {
                 shareMessage: recovered.shareMessage,
                 validityMessage: recovered.validityMessage
             )
+            .themedListBackground()
             .navigationTitle("Invitation Ready")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

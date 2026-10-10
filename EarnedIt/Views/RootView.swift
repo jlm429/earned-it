@@ -221,6 +221,7 @@ struct RootView: View {
                     .onAppear { store.recordJoinRootRoute(.profileSelection) }
             }
         }
+        .tint(AppTheme.accent)
         #if DEBUG
         .preferredColorScheme(WeeklyUITestFixture.enabled && ProcessInfo.processInfo.arguments.contains("--ui-test-dark") ? .dark : nil)
         #endif
@@ -436,12 +437,14 @@ private struct ScrollableUnavailableView<Actions: View>: View {
                     VStack(spacing: 12) {
                         Image(systemName: systemImage)
                             .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 80, height: 80)
+                            .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
                             .accessibilityHidden(true)
                         Text(title)
                             .font(.title.bold())
                         Text(description)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.secondaryText)
                     }
                     actions
                 }
@@ -451,6 +454,9 @@ private struct ScrollableUnavailableView<Actions: View>: View {
                 .frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
             .scrollBounceBehavior(.basedOnSize)
+            .background(AppTheme.canvas)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
         }
     }
 }

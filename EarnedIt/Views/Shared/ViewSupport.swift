@@ -17,10 +17,10 @@ struct LegalLinksView: View {
 extension ProgressStatus {
     var tint: Color {
         switch self {
-        case .green: .green
-        case .yellow: .orange
-        case .red: .red
-        case .neutral: .secondary
+        case .green: AppTheme.success
+        case .yellow: AppTheme.warning
+        case .red: AppTheme.danger
+        case .neutral: AppTheme.secondaryText
         }
     }
 
@@ -37,11 +37,11 @@ extension ProgressStatus {
 extension DayStatus {
     var tint: Color {
         switch self {
-        case .green: .green
-        case .yellow: .orange
-        case .red: .red
-        case .excused: .blue
-        case .neutral, .future: .secondary
+        case .green: AppTheme.success
+        case .yellow: AppTheme.warning
+        case .red: AppTheme.danger
+        case .excused: AppTheme.info
+        case .neutral, .future: AppTheme.secondaryText
         }
     }
 
@@ -60,10 +60,10 @@ extension DayStatus {
 extension ResponsibilityCategory {
     var tint: Color {
         switch self {
-        case .home: .teal
-        case .school: .indigo
-        case .activities: .orange
-        case .personal: .purple
+        case .home: AppTheme.success
+        case .school: AppTheme.info
+        case .activities: AppTheme.warning
+        case .personal: AppTheme.personal
         }
     }
 }
@@ -71,10 +71,10 @@ extension ResponsibilityCategory {
 extension DailyStateKind {
     var tint: Color {
         switch self {
-        case .unmarked: .secondary
-        case .done: .green
-        case .notNeeded: .blue
-        case .missed: .red
+        case .unmarked: AppTheme.secondaryText
+        case .done: AppTheme.success
+        case .notNeeded: AppTheme.info
+        case .missed: AppTheme.danger
         }
     }
 }
@@ -96,7 +96,8 @@ struct AvatarView: View {
         Text(user.avatar.rawValue)
             .font(.system(size: size * 0.58))
             .frame(width: size, height: size)
-            .background(Color.accentColor.opacity(0.12), in: Circle())
+            .background(AppTheme.accent.opacity(0.12), in: Circle())
+            .overlay(Circle().strokeBorder(AppTheme.accent.opacity(0.18), lineWidth: 1))
             .accessibilityHidden(true)
     }
 }
@@ -106,16 +107,26 @@ struct ProfileHeader: View {
     let title: String
     let subtitle: String
     var accessibilityIdentifier: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                AvatarView(user: user, size: 58)
-                titleStack
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                AvatarView(user: user, size: 58)
-                titleStack
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    AvatarView(user: user, size: 58)
+                    titleStack
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        AvatarView(user: user, size: 58)
+                        titleStack
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        AvatarView(user: user, size: 58)
+                        titleStack
+                    }
+                }
             }
         }
         .accessibilityElement(children: .combine)
@@ -128,7 +139,7 @@ struct ProfileHeader: View {
                 .font(.title2.bold())
                 .fixedSize(horizontal: false, vertical: true)
             Text(subtitle)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -167,12 +178,30 @@ struct StatusBadge: View {
 }
 
 struct SectionCard<Content: View>: View {
+    var tint: Color? = nil
     @ViewBuilder let content: Content
 
     var body: some View {
         content
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+            .background(ThemedSurface(tint: tint))
+    }
+}
+
+struct SectionHeading: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(AppTheme.accent)
+                .accessibilityHidden(true)
+            Text(title).foregroundStyle(.primary)
+        }
+        .font(.title2.bold())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }

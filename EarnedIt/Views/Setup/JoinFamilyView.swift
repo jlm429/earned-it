@@ -75,6 +75,7 @@ struct JoinFamilyView: View {
                     Text("Use this if you created the family on another device. If Earned It cannot identify one family safely, ask another parent for a new invitation.")
                 }
             }
+            .themedListBackground()
             .navigationTitle("Join Existing Family")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

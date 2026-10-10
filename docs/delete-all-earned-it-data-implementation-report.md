@@ -86,9 +86,9 @@ That trace is evidence that the running Production schema did not permit creatio
 
 The available `cktool` installation was used only for a read-only authentication check. `xcrun cktool get-teams` reported that no management token was available. No authenticated CloudKit Console session or management token was available in this worktree, so the Production schema was not directly inspected. No schema or Production data mutation was attempted.
 
-### Current Production verification
+### Human-reported Production inspection
 
-On October 10, 2026, the captain manually verified in CloudKit Console that the Production public database for `iCloud.com.jlm429.EarnedIt` contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String. This closes the missing-record-type concern from the earlier trace. The observed security roles are World Read, iCloud Create, and Creator Write. World Read conflicts with the required policy that public unauthenticated access remain disabled, so security-role compliance remains open for an authorized human to correct and verify before release. The focused interrupted-deletion recovery fix requires no record-type or field deployment.
+See [the authority contract's schema and security section](family-lifecycle-authority.md#cloudkit-schema-and-security) for the October 10 human-reported inspection and its proof limits. The earlier missing-record-type trace does not establish current Production configuration. The focused interrupted-deletion recovery fix requires no record-type or field deployment.
 
 ### Remaining captain action in CloudKit Console
 

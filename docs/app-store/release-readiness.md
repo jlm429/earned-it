@@ -1,8 +1,8 @@
-# App Store Release Readiness
+# App Store release checklist
 
-Audit date: September 16, 2026. Release metadata entries were updated October 2, 2026 for version 1.0.3. This checklist does not assert the state of Apple Developer or App Store Connect accounts unless repository evidence supports it.
+Updated October 10, 2026 against `origin/main` at `d88d9749ddbf087e75346e6fffd0e64f11d7af03`, version 1.0.4, source build 16. This is a submission checklist, not a claim of App Store availability or signed Production readiness. See [the final audit](../final-release-readiness.md) for evidence and proof limits. Release remains blocked by the receipt-lost-after-uninstall deletion gap until the separate [recovery fix](https://github.com/jlm429/earned-it/pull/44) is integrated and signed two-account/device parent/child validation passes; this documentation lane neither implements nor validates that fix.
 
-## Blocking
+## Remaining release blockers
 
 - [ ] Publish the privacy policy at a stable public URL and enter that URL in App Store Connect. The repository is public, so the merged `docs/app-store/privacy-policy.md` page can serve as the URL if that hosting choice is accepted.
 - [ ] Add the same privacy policy URL to the shipping app. The source now includes a link, but it becomes valid only after this branch is merged to `main`.
@@ -18,30 +18,28 @@ Audit date: September 16, 2026. Release metadata entries were updated October 2,
 - [ ] Confirm that the archived app contains the expected iCloud and extended-share-access entitlements.
 - [ ] Complete required App Store Connect values, agreements, tax and banking status where applicable, age rating, privacy responses, pricing set to Free, territories, export compliance, content rights, copyright, review contact, and release method.
 
-## Should do before release
+## Verified repository evidence
 
-- [ ] Run an Xcode Organizer archive validation and inspect the exported privacy report, entitlements, icon warnings, and embedded `PrivacyInfo.xcprivacy`.
-- [ ] Test camera denial and the manual invitation-code fallback on a physical iPhone.
-- [ ] Verify the final app name and bundle ID are registered to the intended App Store Connect record. Current source values are `Earned It` and `com.jlm429.EarnedIt`.
-- [ ] Use the TestFlight workflow to upload a release candidate, then complete internal TestFlight smoke testing before selecting the build for review.
-- [ ] Confirm the GitHub Issues page is an acceptable public Support URL, or provide another real support page. Do not submit a placeholder.
-- [ ] Confirm the App Store privacy answers against the generated privacy report. The likely declarations are listed in [privacy-audit.md](privacy-audit.md).
-- [ ] Decide whether the repository will remain source-available with no license or receive an explicit license from the rights holder.
-- [ ] Review historical engineering reports for public tone and remove machine-specific paths in a later documentation-only cleanup. They are not linked from the public README.
-- [ ] Consider running CI on pull requests rather than only by manual dispatch. The present workflow is deterministic but `workflow_dispatch` only.
+- [x] Current complete domain suite: 383 tests passed with zero failures on a task-only iPhone Simulator. Release generic-iOS build and static analysis passed unsigned. Synthetic build-number and entitlement tests passed.
+- [x] iOS 18 minimum deployment, iPhone and iPad device families, and all four required iPad orientations. Release device-family validation passed against the built application.
+- [x] Release configuration selects Production iCloud; Debug selects Development. Required sharing/custom invitation URL configuration is present. Signing configuration and capabilities were not changed by this audit.
+- [x] Human-reported October 10 Console inspection of `FamilyLifecycleAuthority` Production type and fields: `formatVersion` Int64 and `state` String. This audit did not independently verify current Production configuration, security roles or device behavior.
+- [x] Privacy manifest lists linked names, optional allowance financial information, user/device identifiers, and household/chore content for app functionality, with no tracking and UserDefaults reason `CA92.1`. Final archive/report and store responses still need confirmation.
+- [x] No advertising, analytics, ATT/IDFA, telemetry SDK, third-party dependencies, developer account service, or custom family-data backend in the audited source.
+- [x] Camera permission explains invitation scanning and has a manual fallback. Notification authorization/push delivery is absent from this base; reassess after the notification lane lands.
+- [x] Production has no sample-family seeding, debug clocks, UI-test resets, or synthetic invitation fixtures. Tests use a separate compile-gated store. The preserved nuke checkout is outside this release work.
+- [x] Creator-only confirmed Delete All Data and retained-receipt Finish Deleting recovery are present. Authenticated deleted/exactly revoked installations have local Reset App recovery; transient failures do not enable it. These historical local results do not close the receipt-lost-after-uninstall gap: `deleting` authority alone cannot authorize child reset.
+- [x] Current date/archive, reassignment history, and exclusive-lifecycle regression coverage supersedes the three queued historical followups. No failure reproduced in the current domain suite.
+- [x] Privacy/support links are wired into first-run and role UI; daily-thought copy has no named attribution. [The privacy audit](privacy-audit.md) and [content review](quotes-and-attribution.md) describe the details.
 
-## Nice to have
+## Final device and accessibility pass
 
-- [ ] Produce a simple wordmark or horizontal lockup derived from approved brand artwork.
-- [ ] Add localized App Store metadata and screenshots if the app is marketed outside English-speaking storefronts.
-- [ ] Add optional dark and tinted icon appearances after the primary icon is approved.
-- [ ] Add a dedicated support page with private contact instructions instead of relying on public GitHub Issues.
-- [ ] Add a short App Store preview video only if it accurately improves the listing. Apple does not require one.
+On the integrated signed candidate, check launch/relaunch and background/foreground recovery, camera denial/manual entry, airplane-mode queued work and later convergence, longest chore/member text, largest Dynamic Type, dark mode, reduced motion, status contrast, 44-point controls, and physical-device VoiceOver reading/action order. Include iPad portrait and landscape. Existing Simulator/accessibility evidence is useful but does not prove this final combined UI or physical-device experience.
 
-## Already complete
+If notifications land, check explicit contextual opt-in, denial/revocation, device-local settings, privacy of lock-screen content, correct eligible-child targeting, duplicate suppression/relaunch, and the app's usable experience with alerts disabled. The prepared Info.plist `UIBackgroundModes` `remote-notification` code-only edit is accepted normal implementation in the separate notification lane, remains pending and absent from audited main, and needs no separate approval for that edit. Signing/APNs entitlements or provisioning changes, CloudKit schema promotion, private/shared subscriptions for receiving accounts, and signed two-account/device evidence remain human release prerequisites. Delivery is best effort, not guaranteed; local alerts after refresh do not prove remote/background delivery.
 
 - [x] Native iPhone and iPad target with iOS 18.0 minimum deployment, both device families enabled, and all four iPad multitasking orientations declared.
-- [x] Marketing version 1.0.3 and a CI build-number strategy based on GitHub run number and attempt.
+- [x] Marketing version configured in [project settings](../../EarnedIt.xcodeproj/project.pbxproj) and a CI build-number strategy based on GitHub run number and attempt.
 - [x] Release builds select the Production iCloud environment. Debug builds select Development.
 - [x] Explicit iCloud, CloudKit, sharing, custom invitation URL, and one-time-link entitlement configuration.
 - [x] Generated launch screen and app display name configuration.
@@ -59,20 +57,12 @@ Audit date: September 16, 2026. Release metadata entries were updated October 2,
 - [x] Existing unit, service, UI, sharing, invitation, onboarding, scheduling, allowance, and business-rule tests are present.
 - [x] Attributed daily quotations were replaced with unattributed product microcopy. The remaining rights and attribution findings are documented in `quotes-and-attribution.md`.
 
-## Manual archive inspection
+Apple sources were checked October 10, 2026. Recheck at submission if requirements change.
 
-Before submission, inspect the selected archive rather than relying on project settings alone:
+- [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/): completeness and accurate metadata, privacy/deletion, review access, notification privacy, artwork rights, and family/Kids positioning. See [the system artwork review](quotes-and-attribution.md#system-artwork-and-names) for emoji restrictions.
+- [Upcoming submission requirements](https://developer.apple.com/news/upcoming-requirements/): Xcode 26 or later with the corresponding iOS/iPadOS 26 SDK or later, plus the current age-rating questionnaire. Minimum deployment and build SDK are different settings.
+- [Required App Store properties](https://developer.apple.com/help/app-store-connect/reference/app-information/required-localizable-and-editable-properties), [app privacy details](https://developer.apple.com/app-store/app-privacy-details/), and [managing app privacy](https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy).
+- [Screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications): follow [the visual asset specification](visual-assets.md#required-app-store-screenshots) for required sets and image constraints.
+- [Notification authorization](https://developer.apple.com/documentation/usernotifications/asking-permission-to-use-notifications), [CloudKit sharing permissions](https://developer.apple.com/documentation/cloudkit/ckshare), and [database subscriptions](https://developer.apple.com/documentation/cloudkit/ckdatabasesubscription). Silent delivery requires the background-mode configuration and a subscription for the receiving account; notifications signal changes to fetch and may coalesce.
 
-1. Confirm `CFBundleIdentifier`, `CFBundleShortVersionString`, and `CFBundleVersion`.
-2. Confirm the signed entitlements use the intended production container and include `InProcessOneTimeLinks`.
-3. Confirm `PrivacyInfo.xcprivacy`, the app icon, and the camera purpose string are embedded.
-4. Generate the privacy report and reconcile it with App Store Connect.
-5. Validate and upload through the authorized signing workflow. Do not let a local agent alter certificates, profiles, containers, or schema.
-
-## Apple submission references
-
-- [Required App Store metadata](https://developer.apple.com/help/app-store-connect/reference/app-information/required-localizable-and-editable-properties)
-- [Screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)
-- [Age rating questionnaire](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating)
-- [CloudKit production deployment](https://developer.apple.com/icloud/cloudkit/designing/)
-- [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
+The configured no-mistakes pipeline owns validation and PR delivery. It does not authorize signing changes, Production operations, App Store Connect writes, uploads, merging, or submission.

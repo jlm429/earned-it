@@ -1,7 +1,5 @@
 <p align="center">
-  <a href="https://apps.apple.com/us/app/earned-it-chore-tracker/id6809452728">
-    <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
-  </a>
+  <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
 </p>
 
 # Earned It
@@ -20,6 +18,12 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 - Shows weekly progress and streaks.
 - Optionally tracks weekly allowance eligibility without moving money.
 - Shares through iCloud, synchronizes automatically, and works offline.
+
+Coming in the next release:
+
+- Optional notifications when a chore becomes available or a turn-change request needs attention.
+- As-needed chore history that shows who did a chore last.
+- Punt an alternating turn to another child, with that child's approval before responsibility changes.
 
 ## How families use it
 
