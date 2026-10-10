@@ -1,6 +1,9 @@
 #!/bin/bash
 set -Eeuo pipefail
 
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+project_path="$script_directory/../EarnedIt.xcodeproj"
+
 target="${1:-}"
 if [[ -z "$target" ]]; then
   echo "Usage: $0 <release-app-or-xcarchive>" >&2
@@ -41,8 +44,20 @@ if /usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily:2' "$info_plist" >/dev/null
 fi
 
 marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
-if [[ "$marketing_version" != "1.0.3" ]]; then
-  echo "Release application marketing version must be 1.0.3." >&2
+expected_marketing_version="$(
+  xcodebuild \
+    -project "$project_path" \
+    -target EarnedIt \
+    -configuration Release \
+    -showBuildSettings 2>/dev/null \
+    | awk '$1 == "MARKETING_VERSION" { print $3; exit }'
+)"
+if [[ -z "$expected_marketing_version" ]]; then
+  echo "Could not resolve the Release MARKETING_VERSION from $project_path." >&2
+  exit 1
+fi
+if [[ "$marketing_version" != "$expected_marketing_version" ]]; then
+  echo "Release application marketing version must be $expected_marketing_version." >&2
   exit 1
 fi
 
