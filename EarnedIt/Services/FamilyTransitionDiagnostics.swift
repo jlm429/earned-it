@@ -1008,6 +1008,7 @@ final class FamilyTransitionDiagnostics {
         case .pendingChanges: "pendingChanges"
         case .malformedData: "malformedData"
         case .familyStillSyncing: "familyStillSyncing"
+        case .updateRequired: "updateRequired"
         }
     }
 

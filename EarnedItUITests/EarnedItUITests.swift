@@ -595,25 +595,39 @@ final class EarnedItUITests: XCTestCase {
         tap("save-responsibility")
 
         tap("make-available-unload-dishwasher")
-        XCTAssertTrue(app.staticTexts["Available Today"].waitForExistence(timeout: 5))
-        app.buttons["Manage Chore"].tap()
-        app.buttons["Edit"].tap()
-        tap("save-responsibility")
-        XCTAssertTrue(app.staticTexts["Available Today"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Available Now"].waitForExistence(timeout: 5))
+        tap("withdraw-availability-unload-dishwasher")
+        let withdrawDialog = app.sheets["Withdraw this availability?"]
+        XCTAssertTrue(withdrawDialog.buttons["Withdraw Availability"].waitForExistence(timeout: 5))
+        withdrawDialog.buttons["Withdraw Availability"].tap()
+        XCTAssertTrue(app.buttons["make-available-unload-dishwasher"].waitForExistence(timeout: 5))
+        tap("make-available-unload-dishwasher")
+        XCTAssertTrue(app.staticTexts["Available Now"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["make-available-unload-dishwasher"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        tap("state-unload-dishwasher-hanna")
-        XCTAssertTrue(waitForLabel(app.buttons["state-unload-dishwasher-hanna"], containing: "Done"))
+        let firstOccurrence = asNeededStateButton("state-unload-dishwasher-hanna", state: "Unmarked")
+        firstOccurrence.tap()
+        XCTAssertTrue(asNeededStateButton("state-unload-dishwasher-hanna", state: "Done")
+            .waitForExistence(timeout: 5))
 
         tap("weekday-lists-link")
         tap("as-needed-chores")
-        XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Completed 1 time today"].waitForExistence(timeout: 5))
+        tap("make-available-unload-dishwasher")
+        XCTAssertTrue(app.staticTexts["Completed 1 time today"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Available Now"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        asNeededStateButton("state-unload-dishwasher-hanna", state: "Unmarked").tap()
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        XCTAssertTrue(app.staticTexts["Completed 2 times today"].waitForExistence(timeout: 5))
         keepScreenshot("as-needed-completed-today")
         relaunch()
         tap("weekday-lists-link")
         tap("as-needed-chores")
-        XCTAssertTrue(app.staticTexts["Completed Today"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Completed 2 times today"].waitForExistence(timeout: 5))
         keepScreenshot("as-needed-completed-after-relaunch")
     }
 
@@ -668,25 +682,41 @@ final class EarnedItUITests: XCTestCase {
         tap("skip-next-empty-dishwasher")
         XCTAssertEqual(app.staticTexts["next-turn-empty-dishwasher"].label, "Whose Turn: Alek")
         tap("make-available-empty-dishwasher")
-        XCTAssertTrue(app.staticTexts["Available Today for Alek"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Available Now for Alek"].waitForExistence(timeout: 5))
         keepScreenshot("as-needed-alternating-active-owner")
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["state-empty-dishwasher-alek"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["state-empty-dishwasher-hanna"].exists)
+        XCTAssertTrue(asNeededStateButton("state-empty-dishwasher-alek", state: "Unmarked")
+            .waitForExistence(timeout: 5))
+        XCTAssertFalse(asNeededStateButtons("state-empty-dishwasher-hanna").firstMatch.exists)
         tap("switch-user")
         tap("user-card-alek")
-        XCTAssertTrue(app.buttons["state-empty-dishwasher-alek"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["state-empty-dishwasher-hanna"].exists)
+        let alekOccurrence = asNeededStateButton("state-empty-dishwasher-alek", state: "Unmarked")
+        XCTAssertTrue(alekOccurrence.waitForExistence(timeout: 5))
+        XCTAssertFalse(asNeededStateButtons("state-empty-dishwasher-hanna").firstMatch.exists)
+        alekOccurrence.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-empty-dishwasher"], containing: "Complete"))
         tap("switch-user")
         tap("user-card-test-parent")
 
         tap("weekday-lists-link")
         tap("as-needed-chores")
+        XCTAssertEqual(app.staticTexts["next-turn-empty-dishwasher"].label, "Whose Turn: Hanna")
+        tap("make-available-empty-dishwasher")
+        XCTAssertTrue(app.staticTexts["Available Now for Hanna"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(asNeededStateButton("state-empty-dishwasher-hanna", state: "Unmarked")
+            .waitForExistence(timeout: 5))
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
         app.buttons["Manage Chore"].tap()
         app.buttons["Delete Chore"].tap()
         XCTAssertTrue(app.alerts["Delete \"Empty dishwasher\"?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts.staticTexts[
+            "Deletion is immediate and cannot be undone. Already resolved history and allowance results are preserved."
+        ].exists)
         app.alerts.buttons["Delete"].tap()
         XCTAssertFalse(app.staticTexts["Empty dishwasher"].waitForExistence(timeout: 2))
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -723,12 +753,16 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.buttons["keep-turn"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["advance-rotation"].firstMatch.exists)
         app.buttons["keep-turn"].firstMatch.tap()
-        XCTAssertEqual(app.staticTexts["full-status-set-the-table"].label, "Not needed today")
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-set-the-table"], containing: "Not needed today"))
         XCTAssertFalse(app.buttons["state-set-the-table-alek"].exists)
         keepScreenshot("alternating-not-needed-today")
+        tap("restore-requirement-set-the-table")
+        XCTAssertTrue(app.buttons["state-set-the-table-alek"].waitForExistence(timeout: 5))
+        tap("state-set-the-table-alek")
+        XCTAssertFalse(app.buttons["not-needed-set-the-table"].exists)
         tap("switch-user")
         tap("user-card-alek")
-        XCTAssertFalse(app.staticTexts["Set the table"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Set the table"].waitForExistence(timeout: 5))
     }
 
     func testManageFamilyUsesPullToRefreshWithoutDedicatedRefreshButton() {
@@ -976,6 +1010,16 @@ final class EarnedItUITests: XCTestCase {
             reveal(element)
         }
         element.tap()
+    }
+
+    private func asNeededStateButtons(_ identifierPrefix: String) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "\(identifierPrefix)-"))
+    }
+
+    private func asNeededStateButton(_ identifierPrefix: String, state: String) -> XCUIElement {
+        asNeededStateButtons(identifierPrefix)
+            .matching(NSPredicate(format: "label CONTAINS %@", state))
+            .firstMatch
     }
 
     private func reveal(_ element: XCUIElement) {

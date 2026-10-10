@@ -30,13 +30,17 @@ struct DailyChore: Identifiable, Equatable {
     let historicalContributions: [HistoricalContribution]
     let excusedMemberIDs: Set<UUID>
     let occurrenceDisposition: ChoreOccurrenceDisposition?
+    let occurrenceID: UUID?
+    let asNeededStatus: AsNeededOccurrenceStatus?
     let isActiveOccurrence: Bool
     let isDeleted: Bool
     let today: CivilDay
 
-    var id: UUID { configuration.choreID }
+    var id: UUID { occurrenceID ?? configuration.choreID }
+    var choreID: UUID { configuration.choreID }
     var isScheduledOccurrence: Bool { isActiveOccurrence && configuration.schedulingMode == .scheduled }
-    var isAsNeededOccurrence: Bool { isActiveOccurrence && configuration.schedulingMode == .asNeeded }
+    var isAsNeededOccurrence: Bool { occurrenceID != nil && configuration.schedulingMode == .asNeeded }
+    var isActionableOccurrence: Bool { asNeededStatus == nil || asNeededStatus == .open }
     var requiredMembers: [FamilyMember] { eligibleMembers.filter { requiredMemberIDs.contains($0.id) } }
     var turnOwner: FamilyMember? { turnOwnerID.flatMap { id in eligibleMembers.first { $0.id == id } } }
     var isNotNeeded: Bool { occurrenceDisposition?.state == .notNeeded }
@@ -97,15 +101,35 @@ enum ChoreRules {
         guard let household = snapshot.household else { return [] }
         let weekday = household.calendar.component(.weekday, from: day.date(in: household.calendar))
         let choreIDs = Set(snapshot.revisions.map(\.choreID))
-        return choreIDs.compactMap { choreID -> DailyChore? in
-            guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return nil }
+        return choreIDs.flatMap { choreID -> [DailyChore] in
+            guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return [] }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
             if snapshot.isChoreDeleted(choreID, on: day) {
+                if let deletion = snapshot.occurrenceAwareChoreDeletions.first(where: {
+                    $0.choreID == choreID && $0.day == day
+                }), let original = snapshot.revisions.first(where: { $0.id == deletion.revisionID }) {
+                    let membersByID = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
+                    return deletion.resolvedOccurrences.compactMap { occurrence in
+                        let members = occurrence.eligibleMemberIDs.compactMap { membersByID[$0] }
+                        guard !members.isEmpty else { return nil }
+                        return DailyChore(
+                            configuration: original, day: occurrence.day, eligibleMembers: members,
+                            requiredMemberIDs: Set(occurrence.requiredMemberIDs),
+                            turnOwnerID: occurrence.assignedMemberID,
+                            contributions: occurrence.contributions,
+                            historicalContributions: [],
+                            excusedMemberIDs: Set(occurrence.excusedMemberIDs),
+                            occurrenceDisposition: nil, occurrenceID: occurrence.id,
+                            asNeededStatus: .completed, isActiveOccurrence: false,
+                            isDeleted: true, today: today
+                        )
+                    }
+                }
                 guard let deletion = snapshot.choreDeletions.first(where: {
                     $0.choreID == choreID && $0.day <= day
                 }), deletion.day == day,
                       let winningRevisionID = deletion.revisionID,
-                      let original = snapshot.revisions.first(where: { $0.id == winningRevisionID }) else { return nil }
+                      let original = snapshot.revisions.first(where: { $0.id == winningRevisionID }) else { return [] }
                 let retained: [DatedCompletion]
                 if let resolved = deletion.resolvedContributions {
                     retained = resolved
@@ -121,7 +145,7 @@ enum ChoreRules {
                     $0.day == day && $0.isExcused
                 }.map(\.memberID))
                 guard !retained.isEmpty || !resolvedExcusedIDs.isEmpty
-                        || deletion.wasNotNeeded == true else { return nil }
+                        || deletion.wasNotNeeded == true else { return [] }
                 let eligibleIDs = Set(deletion.eligibleMemberIDs
                     ?? (retained.flatMap(\.eligibleMemberIDs) + Array(resolvedExcusedIDs)))
                 let requiredIDs = original.mode == .anyOne ? [] : Set(retained.map(\.memberID))
@@ -131,44 +155,73 @@ enum ChoreRules {
                     alternatingSkipBehavior: original.mode == .alternating ? .keepTurn : nil,
                     recordedByMemberID: deletion.recordedByMemberID
                 ) : nil
-                return DailyChore(
+                return [DailyChore(
                     configuration: original, day: day, eligibleMembers: members,
                     requiredMemberIDs: requiredIDs,
                     turnOwnerID: deletion.turnOwnerID,
                     contributions: retained, historicalContributions: [],
                     excusedMemberIDs: resolvedExcusedIDs, occurrenceDisposition: disposition,
+                    occurrenceID: nil, asNeededStatus: nil,
                     isActiveOccurrence: false, isDeleted: true, today: today
-                )
+                )]
             }
             if revision.isArchived {
                 guard let previous = previousConfiguration(before: revision, on: day, snapshot: snapshot) else {
-                    return nil
+                    return []
                 }
                 let retained = snapshot.completions.filter {
                     $0.choreID == choreID && $0.day == day && $0.revisionID == previous.id
                         && $0.state.isAccountedFor
                 }
-                guard !retained.isEmpty else { return nil }
+                guard !retained.isEmpty else { return [] }
                 let retainedIDs = Set(retained.map(\.memberID))
                 let members = snapshot.members.filter { retainedIDs.contains($0.id) }
-                return DailyChore(
+                return [DailyChore(
                     configuration: previous, day: day, eligibleMembers: members,
                     requiredMemberIDs: retainedIDs,
                     turnOwnerID: previous.mode == .alternating ? retained.first?.memberID : nil,
                     contributions: retained, historicalContributions: [], excusedMemberIDs: [], occurrenceDisposition: nil,
+                    occurrenceID: nil, asNeededStatus: nil,
                     isActiveOccurrence: false, isDeleted: true, today: today
-                )
+                )]
             }
-            let disposition = snapshot.occurrence(choreID: choreID, on: day).flatMap {
-                $0.revisionID == revision.id ? $0 : nil
+
+            if revision.schedulingMode == .asNeeded {
+                let projected = snapshot.asNeededProjection(choreID: choreID, through: day).occurrences.filter {
+                    $0.day == day && $0.revisionID == revision.id && $0.status != .withdrawn
+                }
+                let membersByID = Dictionary(uniqueKeysWithValues: snapshot.members.map { ($0.id, $0) })
+                let excusedIDs = Set(snapshot.excuses.filter {
+                    $0.day == day && $0.isExcused
+                }.map(\.memberID))
+                return projected.compactMap { occurrence in
+                    let ownerID = occurrence.assignedMemberID ?? (revision.mode == .alternating
+                        ? alternatingOwner(choreID: choreID, on: occurrence.day, snapshot: snapshot,
+                                           calendar: household.calendar)?.id : nil)
+                    let members = revision.mode == .alternating
+                        ? ownerID.flatMap { membersByID[$0] }.map { [$0] } ?? []
+                        : occurrence.eligibleMemberIDs.compactMap { membersByID[$0] }
+                    guard !members.isEmpty else { return nil }
+                    let requiredIDs = revision.mode == .alternating
+                        ? Set(ownerID.map { [$0] } ?? []) : Set(occurrence.requiredMemberIDs)
+                    return DailyChore(
+                        configuration: revision, day: day, eligibleMembers: members,
+                        requiredMemberIDs: requiredIDs,
+                        turnOwnerID: ownerID,
+                        contributions: occurrence.contributions.values.sorted { $0.key < $1.key },
+                        historicalContributions: [], excusedMemberIDs: excusedIDs,
+                        occurrenceDisposition: nil, occurrenceID: occurrence.id,
+                        asNeededStatus: occurrence.status, isActiveOccurrence: true,
+                        isDeleted: false, today: today
+                    )
+                }
             }
+            let disposition = snapshot.scheduledOccurrence(choreID: choreID, revisionID: revision.id, on: day)
             let scheduled = revision.schedulingMode == .scheduled
                 && revision.weekday.rawValue == weekday
-            let activated = revision.schedulingMode == .asNeeded
-                && disposition?.state == .available
             let notNeeded = scheduled && disposition?.state == .notNeeded
-            guard scheduled || activated || !recorded.isEmpty else { return nil }
-            let occurrenceExists = scheduled || activated
+            guard scheduled || !recorded.isEmpty else { return [] }
+            let occurrenceExists = scheduled
             let scheduledMembers = occurrenceExists ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
             let occurrence = resolveOccurrence(revision: revision, scheduledMembers: scheduledMembers,
                                                choreID: choreID, day: day, snapshot: snapshot,
@@ -183,16 +236,17 @@ enum ChoreRules {
                 let recordedIDs = Set(restorable.flatMap(\.eligibleMemberIDs))
                 members += snapshot.members.filter { recordedIDs.contains($0.id) && !members.contains($0) }
             }
-            return DailyChore(configuration: occurrence.winningRevision, day: day, eligibleMembers: members,
+            return [DailyChore(configuration: occurrence.winningRevision, day: day, eligibleMembers: members,
                               requiredMemberIDs: requiredIDs, turnOwnerID: occurrence.scheduledOwner?.id,
                               contributions: occurrence.activeContributions,
                               historicalContributions: occurrence.displacedHistoricalContributions,
                               excusedMemberIDs: Set(snapshot.excuses.filter {
                                   $0.day == day && $0.isExcused
                               }.map(\.memberID)),
-                              occurrenceDisposition: notNeeded || activated ? disposition : nil,
+                              occurrenceDisposition: notNeeded ? disposition : nil,
+                              occurrenceID: nil, asNeededStatus: nil,
                               isActiveOccurrence: occurrenceExists, isDeleted: false,
-                              today: today)
+                              today: today)]
         }.sorted {
             let titleOrder = $0.configuration.title.localizedStandardCompare($1.configuration.title)
             if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
@@ -201,7 +255,9 @@ enum ChoreRules {
     }
 
     static func activeOccurrence(for revision: ChoreRevision, in chores: [DailyChore]) -> DailyChore? {
-        chores.first { $0.configuration.id == revision.id && $0.isActiveOccurrence }
+        chores.first {
+            $0.configuration.id == revision.id && $0.isActiveOccurrence && $0.isActionableOccurrence
+        }
     }
 
     static func nextAlternatingOwner(choreID: UUID, on day: CivilDay,
@@ -212,6 +268,17 @@ enum ChoreRules {
               revision.schedulingMode == .asNeeded else { return nil }
         return alternatingOwner(choreID: choreID, on: day, snapshot: snapshot,
                                 calendar: snapshot.household?.calendar ?? AppCalendar.current)
+    }
+
+    static func expectedAsNeededOwner(choreID: UUID, on day: CivilDay,
+                                      snapshot: HouseholdSnapshot,
+                                      projection: AsNeededControlProjection) -> UUID? {
+        guard let revision = snapshot.configuration(choreID: choreID, on: day),
+              !revision.isArchived, revision.mode == .alternating,
+              revision.schedulingMode == .asNeeded else { return nil }
+        return alternatingOwner(choreID: choreID, on: day, snapshot: snapshot,
+                                calendar: snapshot.household?.calendar ?? AppCalendar.current,
+                                asNeededProjection: projection)?.id
     }
 
     private static func resolveOccurrence(revision: ChoreRevision, scheduledMembers: [FamilyMember],
@@ -264,7 +331,8 @@ enum ChoreRules {
 
     private static func alternatingOwner(choreID: UUID, on day: CivilDay,
                                          snapshot: HouseholdSnapshot,
-                                         calendar: Calendar) -> FamilyMember? {
+                                         calendar: Calendar,
+                                         asNeededProjection: AsNeededControlProjection? = nil) -> FamilyMember? {
         var revisionsByDay: [CivilDay: ChoreRevision] = [:]
         for revision in snapshot.revisions where revision.choreID == choreID && revision.effectiveDay <= day {
             revisionsByDay[revision.effectiveDay] = revision
@@ -300,12 +368,10 @@ enum ChoreRules {
                 occurrence = occurrence.adding(days: 7, calendar: calendar)
             }
         }
-        eventDays.formUnion(snapshot.occurrenceDispositions.filter {
-            $0.choreID == choreID && $0.state == .available && $0.day <= day
-        }.map(\.day))
-        eventDays.formUnion(snapshot.alternatingTurnAdvances.filter {
-            $0.choreID == choreID && $0.day <= day
-        }.map(\.day))
+        let asNeeded = asNeededProjection ?? snapshot.asNeededProjection(choreID: choreID, through: day)
+        eventDays.formUnion(asNeeded.occurrences.map(\.day))
+        eventDays.formUnion(asNeeded.turnAdvances.map(\.day))
+        let factOrder = Dictionary(uniqueKeysWithValues: snapshot.orderedFacts.enumerated().map { ($0.element.id, $0.offset) })
 
         var priorOwnerID: UUID?
         var activeEraStart: CivilDay?
@@ -329,35 +395,45 @@ enum ChoreRules {
                                               eligibleIDs: eligibleIDs) else { continue }
                 if eventDay == day { activeOwnerID = ownerID }
                 let disposition = snapshot.occurrence(choreID: choreID, on: eventDay)
+                let hasDone = snapshot.completions.contains {
+                    $0.choreID == choreID && $0.revisionID == revision.id
+                        && $0.day == eventDay && $0.state == .done
+                }
                 let keepsTurn = disposition?.revisionID == revision.id
                     && disposition?.state == .notNeeded
                     && disposition?.alternatingSkipBehavior == .keepTurn
+                    && !hasDone
                 if !keepsTurn { priorOwnerID = ownerID }
             case .asNeeded:
-                let activation = snapshot.occurrenceDispositions.first {
-                    $0.choreID == choreID && $0.revisionID == revision.id
-                        && $0.day == eventDay && $0.state == .available
+                enum Event {
+                    case occurrence(ProjectedAsNeededOccurrence)
+                    case advance(AcceptedAsNeededTurnAdvance)
                 }
-                if activation?.assignedMemberID != nil || activation == nil {
-                    for advance in snapshot.alternatingTurnAdvances where advance.choreID == choreID
-                        && advance.revisionID == revision.id && advance.day == eventDay {
-                        guard let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
-                                                      eligibleIDs: eligibleIDs),
-                              ownerID != activation?.assignedMemberID,
-                              ownerID == advance.expectedMemberID else { continue }
-                        priorOwnerID = ownerID
+                var events: [(Int, Event)] = []
+                events += asNeeded.occurrences.filter {
+                    $0.revisionID == revision.id && $0.day == eventDay
+                }.map { (factOrder[$0.activationFactID] ?? .max, .occurrence($0)) }
+                events += asNeeded.turnAdvances.filter {
+                    $0.revisionID == revision.id && $0.day == eventDay
+                }.map { (factOrder[$0.factID] ?? .max, .advance($0)) }
+                for (_, event) in events.sorted(by: { $0.0 < $1.0 }) {
+                    switch event {
+                    case .advance(let advance):
+                        guard eligibleIDs.count > 1,
+                              nextOwner(after: priorOwnerID, participants: revision.memberIDs,
+                                        eligibleIDs: eligibleIDs) == advance.ownerID else { continue }
+                        priorOwnerID = advance.ownerID
+                    case .occurrence(let occurrence):
+                        guard let ownerID = occurrence.assignedMemberID
+                                ?? nextOwner(after: priorOwnerID, participants: revision.memberIDs,
+                                             eligibleIDs: eligibleIDs),
+                              eligibleIDs.contains(ownerID) else { continue }
+                        if eventDay == day && occurrence.status == .open { activeOwnerID = ownerID }
+                        if occurrence.consumedTurn || occurrence.isLegacy && occurrence.assignedMemberID == nil {
+                            priorOwnerID = ownerID
+                        }
                     }
                 }
-                guard let activation,
-                      let ownerID = activation.assignedMemberID
-                        ?? nextOwner(after: priorOwnerID, participants: revision.memberIDs,
-                                     eligibleIDs: eligibleIDs) else { continue }
-                if eventDay == day { activeOwnerID = ownerID }
-                let completed = snapshot.recordedAssignments.last {
-                    $0.choreID == choreID && $0.revisionID == revision.id && $0.day == eventDay
-                        && $0.memberID == ownerID
-                }?.state.isAccountedFor == true
-                if completed || activation.assignedMemberID == nil { priorOwnerID = ownerID }
             }
         }
         if let activeOwnerID { return snapshot.member(activeOwnerID) }

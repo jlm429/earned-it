@@ -212,6 +212,77 @@ struct AlternatingTurnAdvance: Codable, Equatable {
     let recordedByMemberID: UUID
 }
 
+/// Declares the minimum journal protocol needed to interpret every later fact safely.
+/// Older clients fail decoding this explicit fact case instead of silently collapsing
+/// occurrence-aware actions into their legacy chore/day projection.
+struct JournalCapability: Codable, Equatable {
+    static let occurrenceAwareChores = 2
+
+    let minimumVersion: Int
+    let recordedByMemberID: UUID
+}
+
+struct AsNeededOccurrence: Codable, Equatable, Identifiable {
+    let id: UUID
+    let choreID: UUID
+    let revisionID: UUID
+    let day: CivilDay
+    let eligibleMemberIDs: [UUID]
+    let requiredMemberIDs: [UUID]
+    let assignedMemberID: UUID?
+    let expectedControlHeadID: UUID?
+    let recordedByMemberID: UUID
+}
+
+struct AsNeededOccurrenceCompletion: Codable, Equatable {
+    let occurrenceID: UUID
+    let choreID: UUID
+    let revisionID: UUID
+    let memberID: UUID
+    let day: CivilDay
+    let state: DailyStateKind
+    let eligibleMemberIDs: [UUID]
+    let mode: RequirementMode
+    let recordedByMemberID: UUID
+
+    var datedCompletion: DatedCompletion {
+        DatedCompletion(choreID: choreID, revisionID: revisionID, memberID: memberID,
+                        day: day, state: state, eligibleMemberIDs: eligibleMemberIDs,
+                        mode: mode, recordedByMemberID: recordedByMemberID)
+    }
+}
+
+enum AsNeededOccurrenceResolutionState: String, Codable, Equatable {
+    case withdrawn
+}
+
+struct AsNeededOccurrenceResolution: Codable, Equatable {
+    let occurrenceID: UUID
+    let choreID: UUID
+    let revisionID: UUID
+    let day: CivilDay
+    let state: AsNeededOccurrenceResolutionState
+    let expectedControlHeadID: UUID
+    let recordedByMemberID: UUID
+}
+
+struct AsNeededTurnAdvance: Codable, Equatable {
+    let choreID: UUID
+    let revisionID: UUID
+    let expectedMemberID: UUID
+    let day: CivilDay
+    let expectedControlHeadID: UUID?
+    let recordedByMemberID: UUID
+}
+
+struct ScheduledOccurrenceRestoration: Codable, Equatable {
+    let choreID: UUID
+    let revisionID: UUID
+    let day: CivilDay
+    let dispositionFactID: UUID
+    let recordedByMemberID: UUID
+}
+
 /// A durable removal boundary that a later offline configuration cannot undo.
 struct ChoreDeletion: Codable, Equatable {
     let choreID: UUID
@@ -237,6 +308,25 @@ struct ChoreDeletion: Codable, Equatable {
         self.resolvedContributions = resolvedContributions
         self.resolvedExcusedMemberIDs = resolvedExcusedMemberIDs
     }
+}
+
+struct ResolvedAsNeededDeletionOccurrence: Codable, Equatable, Identifiable {
+    let id: UUID
+    let revisionID: UUID
+    let day: CivilDay
+    let eligibleMemberIDs: [UUID]
+    let requiredMemberIDs: [UUID]
+    let assignedMemberID: UUID?
+    let contributions: [DatedCompletion]
+    let excusedMemberIDs: [UUID]
+}
+
+struct OccurrenceAwareChoreDeletion: Codable, Equatable {
+    let choreID: UUID
+    let day: CivilDay
+    let recordedByMemberID: UUID
+    let revisionID: UUID
+    let resolvedOccurrences: [ResolvedAsNeededDeletionOccurrence]
 }
 
 struct DatedCompletion: Codable, Equatable {
@@ -314,7 +404,14 @@ enum HouseholdFactBody: Codable, Equatable {
     case completion(DatedCompletion)
     case occurrence(ChoreOccurrenceDisposition)
     case alternatingTurnAdvance(AlternatingTurnAdvance)
+    case journalCapability(JournalCapability)
+    case asNeededOccurrence(AsNeededOccurrence)
+    case asNeededOccurrenceCompletion(AsNeededOccurrenceCompletion)
+    case asNeededOccurrenceResolution(AsNeededOccurrenceResolution)
+    case asNeededTurnAdvance(AsNeededTurnAdvance)
+    case scheduledOccurrenceRestoration(ScheduledOccurrenceRestoration)
     case choreDeletion(ChoreDeletion)
+    case occurrenceAwareChoreDeletion(OccurrenceAwareChoreDeletion)
     case allowance(AllowanceRevision)
     case excuse(Excuse)
     case request(ProfileRequest)
@@ -339,6 +436,7 @@ struct HouseholdFact: Codable, Equatable, Identifiable {
 }
 
 struct HouseholdSnapshot: Equatable {
+    private(set) var orderedFacts: [HouseholdFact] = []
     var household: Household?
     var members: [FamilyMember] = []
     var revisions: [ChoreRevision] = []
@@ -347,6 +445,7 @@ struct HouseholdSnapshot: Equatable {
     var occurrenceDispositions: [ChoreOccurrenceDisposition] = []
     var alternatingTurnAdvances: [AlternatingTurnAdvance] = []
     var choreDeletions: [ChoreDeletion] = []
+    var occurrenceAwareChoreDeletions: [OccurrenceAwareChoreDeletion] = []
     private(set) var creatorMemberID: UUID?
     private var parentCreationOrder: [UUID] = []
     var allowances: [AllowanceRevision] = []
@@ -356,6 +455,13 @@ struct HouseholdSnapshot: Equatable {
     var invitations: [FamilyInvitation] = []
     var invitationClaims: [InvitationClaim] = []
     var invitationRevocations: [InvitationRevocation] = []
+
+    var requiredJournalCapability: Int {
+        orderedFacts.compactMap { fact in
+            guard case .journalCapability(let capability) = fact.body else { return nil }
+            return capability.minimumVersion
+        }.max() ?? 1
+    }
 
     init(facts: [HouseholdFact] = []) {
         var membersByID: [UUID: FamilyMember] = [:]
@@ -369,7 +475,8 @@ struct HouseholdSnapshot: Equatable {
         var claimsByInvitationID: [UUID: InvitationClaim] = [:]
         var revocationsByInvitationID: [UUID: InvitationRevocation] = [:]
         var deletedChoreIDs: Set<UUID> = []
-        for fact in facts.sorted(by: HouseholdFact.precedes) {
+        orderedFacts = facts.sorted(by: HouseholdFact.precedes)
+        for fact in orderedFacts {
             switch fact.body {
             case .household(let value):
                 household = value
@@ -390,9 +497,24 @@ struct HouseholdSnapshot: Equatable {
             case .alternatingTurnAdvance(let value):
                 guard !deletedChoreIDs.contains(value.choreID) else { continue }
                 alternatingTurnAdvances.append(value)
+            case .journalCapability:
+                break
+            case .asNeededOccurrence(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+            case .asNeededOccurrenceCompletion(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+            case .asNeededOccurrenceResolution(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+            case .asNeededTurnAdvance(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
+            case .scheduledOccurrenceRestoration(let value):
+                guard !deletedChoreIDs.contains(value.choreID) else { continue }
             case .choreDeletion(let value):
                 guard deletedChoreIDs.insert(value.choreID).inserted else { continue }
                 choreDeletions.append(value)
+            case .occurrenceAwareChoreDeletion(let value):
+                guard deletedChoreIDs.insert(value.choreID).inserted else { continue }
+                occurrenceAwareChoreDeletions.append(value)
             case .allowance(let value): allowances.append(value)
             case .excuse(let value): excusesByKey[value.key] = value
             case .request(let value): requestsByID[value.id] = value
@@ -430,6 +552,7 @@ struct HouseholdSnapshot: Equatable {
 
     func isChoreDeleted(_ choreID: UUID, on day: CivilDay) -> Bool {
         choreDeletions.contains { $0.choreID == choreID && $0.day <= day }
+            || occurrenceAwareChoreDeletions.contains { $0.choreID == choreID && $0.day <= day }
     }
 
     func isActive(_ member: FamilyMember, on day: CivilDay) -> Bool {
@@ -444,6 +567,66 @@ struct HouseholdSnapshot: Equatable {
 
     func occurrence(choreID: UUID, on day: CivilDay) -> ChoreOccurrenceDisposition? {
         occurrenceDispositions.first { $0.choreID == choreID && $0.day == day }
+    }
+
+    func scheduledOccurrence(choreID: UUID, revisionID: UUID,
+                             on day: CivilDay) -> ChoreOccurrenceDisposition? {
+        var active: (factID: UUID, value: ChoreOccurrenceDisposition)?
+        var occurrenceCapabilityEnabled = false
+        factsLoop: for fact in orderedFacts {
+            switch fact.body {
+            case .choreDeletion(let deletion) where deletion.choreID == choreID:
+                break factsLoop
+            case .occurrenceAwareChoreDeletion(let deletion) where deletion.choreID == choreID:
+                break factsLoop
+            case .occurrence(let value) where value.choreID == choreID
+                && value.revisionID == revisionID && value.day == day
+                && value.state == .notNeeded:
+                active = (fact.id, value)
+            case .journalCapability(let capability):
+                occurrenceCapabilityEnabled = occurrenceCapabilityEnabled
+                    || capability.minimumVersion >= JournalCapability.occurrenceAwareChores
+            case .scheduledOccurrenceRestoration(let restoration) where restoration.choreID == choreID
+                && restoration.revisionID == revisionID && restoration.day == day
+                && restoration.dispositionFactID == active?.factID && occurrenceCapabilityEnabled:
+                active = nil
+            default:
+                continue
+            }
+        }
+        let hasDone = completions.contains {
+            $0.choreID == choreID && $0.revisionID == revisionID
+                && $0.day == day && $0.state == .done
+        }
+        return hasDone ? nil : active?.value
+    }
+
+    func scheduledNotNeededFactID(choreID: UUID, revisionID: UUID,
+                                  on day: CivilDay) -> UUID? {
+        var activeID: UUID?
+        var occurrenceCapabilityEnabled = false
+        factsLoop: for fact in orderedFacts {
+            switch fact.body {
+            case .choreDeletion(let deletion) where deletion.choreID == choreID:
+                break factsLoop
+            case .occurrenceAwareChoreDeletion(let deletion) where deletion.choreID == choreID:
+                break factsLoop
+            case .occurrence(let value) where value.choreID == choreID
+                && value.revisionID == revisionID && value.day == day
+                && value.state == .notNeeded:
+                activeID = fact.id
+            case .journalCapability(let capability):
+                occurrenceCapabilityEnabled = occurrenceCapabilityEnabled
+                    || capability.minimumVersion >= JournalCapability.occurrenceAwareChores
+            case .scheduledOccurrenceRestoration(let restoration) where restoration.choreID == choreID
+                && restoration.revisionID == revisionID && restoration.day == day
+                && restoration.dispositionFactID == activeID && occurrenceCapabilityEnabled:
+                activeID = nil
+            default:
+                continue
+            }
+        }
+        return activeID
     }
 
     func invitation(_ id: UUID) -> FamilyInvitation? { invitations.first { $0.id == id } }

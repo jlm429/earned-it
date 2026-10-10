@@ -57,10 +57,11 @@ struct AllowanceRevision: Codable, Equatable {
 
 struct WeeklyItem: Identifiable, Equatable {
     let choreID: UUID
+    let occurrenceID: UUID?
     let day: CivilDay
     let title: String
     let state: DailyStateKind
-    var id: String { "\(day)/\(choreID)" }
+    var id: String { "\(day)/\(choreID)/\(occurrenceID?.uuidString ?? "scheduled")" }
 }
 
 struct AllowanceWeek: Identifiable, Equatable {
@@ -100,7 +101,10 @@ enum AllowanceService {
                 }) { return [] }
             return chores
                 .filter { !$0.isNotNeeded && $0.requiredMemberIDs.contains(childID) }
-                .map { WeeklyItem(choreID: $0.id, day: day, title: $0.configuration.title, state: $0.state(for: childID)) }
+                .map {
+                    WeeklyItem(choreID: $0.choreID, occurrenceID: $0.occurrenceID, day: day,
+                               title: $0.configuration.title, state: $0.state(for: childID))
+                }
         }
         let revision = snapshot.allowances.filter { $0.memberID == childID && $0.effectiveWeek <= start }
             .enumerated().max {

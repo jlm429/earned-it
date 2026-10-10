@@ -51,6 +51,18 @@ struct ResponsibilityRow: View {
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("not-needed-\(chore.configuration.title.accessibilitySlug)")
                 }
+                if canRestoreRequirement {
+                    Button("Restore Requirement", systemImage: "arrow.uturn.backward.circle") {
+                        store.perform {
+                            try store.restoreScheduledRequirement(
+                                choreID: chore.choreID,
+                                date: chore.day.date(in: store.calendar)
+                            )
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("restore-requirement-\(chore.configuration.title.accessibilitySlug)")
+                }
             }
         }
         .confirmationDialog("What should happen to the next turn?", isPresented: $choosingRotationBehavior,
@@ -105,7 +117,7 @@ struct ResponsibilityRow: View {
                 .accessibilityValue(state.rawValue)
                 .accessibilityHint(state == .done ? "Tap to undo completion." : "Tap to mark done.")
                 .accessibilityAddTraits(state == .done ? .isSelected : [])
-                .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+                .accessibilityIdentifier(stateIdentifier(for: member))
                 .contextMenu { stateActions(for: member, excluding: state) }
                 .accessibilityActions { stateActions(for: member, excluding: state) }
                 Menu {
@@ -119,14 +131,14 @@ struct ResponsibilityRow: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("More states for \(member.displayName), \(chore.configuration.title)")
                 .accessibilityHint("Choose another chore state.")
-                .accessibilityIdentifier("state-menu-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+                .accessibilityIdentifier(stateMenuIdentifier(for: member))
             }
         } else {
             memberLabel(member, state: state)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
                 .accessibilityValue("View only")
-                .accessibilityIdentifier("state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)")
+                .accessibilityIdentifier(stateIdentifier(for: member))
         }
     }
 
@@ -177,14 +189,39 @@ struct ResponsibilityRow: View {
 
     private func update(_ member: FamilyMember, state: DailyStateKind) {
         store.perform {
-            try store.setCompletion(choreID: chore.id, memberID: member.id,
+            try store.setCompletion(choreID: chore.choreID, occurrenceID: chore.occurrenceID,
+                                    memberID: member.id,
                                     date: chore.day.date(in: store.calendar), state: state)
         }
+    }
+
+    private func stateIdentifier(for member: FamilyMember) -> String {
+        occurrenceIdentifier(
+            base: "state-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)"
+        )
+    }
+
+    private func stateMenuIdentifier(for member: FamilyMember) -> String {
+        occurrenceIdentifier(
+            base: "state-menu-\(chore.configuration.title.accessibilitySlug)-\(member.displayName.accessibilitySlug)"
+        )
+    }
+
+    private func occurrenceIdentifier(base: String) -> String {
+        guard let occurrenceID = chore.occurrenceID else { return base }
+        return "\(base)-\(occurrenceID.uuidString.lowercased())"
     }
 
     private var canMarkNotNeeded: Bool {
         actor.role == .parent && chore.isScheduledOccurrence
             && chore.day == chore.today && !chore.isNotNeeded
+            && chore.completedMembers.isEmpty
+            && !store.cloudIsReadOnly && !store.cloudAccessBlocked
+    }
+
+    private var canRestoreRequirement: Bool {
+        actor.role == .parent && chore.isScheduledOccurrence && chore.isNotNeeded
+            && chore.day == chore.today
             && !store.cloudIsReadOnly && !store.cloudAccessBlocked
     }
 

@@ -34,6 +34,7 @@ private struct AsNeededConfigurationView: View {
     @State private var editing: ChoreRevision?
     @State private var deleting: ChoreRevision?
     @State private var updatingChoreID: UUID?
+    @State private var withdrawing: DailyChore?
 
     private var chores: [ChoreRevision] {
         Set(store.snapshot.revisions.map(\.choreID)).compactMap {
@@ -43,8 +44,17 @@ private struct AsNeededConfigurationView: View {
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 
-    private func todayOccurrence(_ chore: ChoreRevision) -> DailyChore? {
-        store.dailyList().first { $0.id == chore.choreID && $0.isAsNeededOccurrence }
+    private func todayOccurrences(_ chore: ChoreRevision) -> [DailyChore] {
+        store.dailyList().filter { $0.choreID == chore.choreID && $0.isAsNeededOccurrence }
+    }
+
+    private func openOccurrence(_ chore: ChoreRevision) -> DailyChore? {
+        guard let projected = store.snapshot.asNeededProjection(
+            choreID: chore.choreID, through: store.day
+        ).openOccurrence else { return nil }
+        return store.dailyList(on: projected.day.date(in: store.calendar)).first {
+            $0.occurrenceID == projected.id
+        }
     }
 
     private func hasEligibleChildrenToday(_ chore: ChoreRevision) -> Bool {
@@ -61,14 +71,35 @@ private struct AsNeededConfigurationView: View {
                         if chore.effectiveDay > store.day {
                             Text("Starts tomorrow").font(.caption).foregroundStyle(.secondary)
                         }
-                        if let occurrence = todayOccurrence(chore) {
-                            let owner = occurrence.turnOwner?.displayName
-                            Label(occurrence.isFullyComplete
-                                  ? "Completed Today\(owner.map { " by \($0)" } ?? "")"
-                                  : "Available Today\(owner.map { " for \($0)" } ?? "")",
+                        let occurrences = todayOccurrences(chore)
+                        let completedCount = occurrences.filter { $0.asNeededStatus == .completed }.count
+                        if completedCount > 0 {
+                            Label("Completed \(completedCount) \(completedCount == 1 ? "time" : "times") today",
                                   systemImage: "checkmark.circle.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.green)
+                        }
+                        if let occurrence = openOccurrence(chore) {
+                            let owner = occurrence.turnOwner?.displayName
+                            let openDay = occurrence.day.date(in: store.calendar).formatted(
+                                date: .abbreviated, time: .omitted
+                            )
+                            let availability = occurrence.day == store.day ? "Available Now"
+                                : "Available since \(openDay)"
+                            Label("\(availability)\(owner.map { " for \($0)" } ?? "")",
+                                  systemImage: "circle.dotted")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.blue)
+                            Button("Withdraw Availability", systemImage: "xmark.circle") {
+                                withdrawing = occurrence
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!occurrence.completedMembers.isEmpty || updatingChoreID != nil)
+                            .accessibilityIdentifier("withdraw-availability-\(chore.title.accessibilitySlug)")
+                            if !occurrence.completedMembers.isEmpty {
+                                Text("Correct completed contributions before withdrawing.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         } else {
                             if chore.mode == .alternating,
                                let next = store.nextAlternatingOwner(choreID: chore.choreID) {
@@ -76,7 +107,8 @@ private struct AsNeededConfigurationView: View {
                                     .font(.subheadline.weight(.semibold))
                                     .accessibilityIdentifier("next-turn-\(chore.title.accessibilitySlug)")
                             }
-                            Button("Make Available", systemImage: "plus.circle") {
+                            Button(completedCount > 0 ? "Make Available Again" : "Make Available",
+                                   systemImage: "plus.circle") {
                                 guard updatingChoreID == nil else { return }
                                 updatingChoreID = chore.choreID
                                 Task {
@@ -90,7 +122,9 @@ private struct AsNeededConfigurationView: View {
                                       || !hasEligibleChildrenToday(chore))
                             .accessibilityIdentifier("make-available-\(chore.title.accessibilitySlug)")
                             if chore.mode == .alternating,
-                               let next = store.nextAlternatingOwner(choreID: chore.choreID) {
+                               let next = store.nextAlternatingOwner(choreID: chore.choreID),
+                               Set(ChoreRules.eligibleMembers(for: chore, on: store.day,
+                                                             snapshot: store.snapshot).map(\.id)).count > 1 {
                                 Button("Skip \(next.displayName)", systemImage: "arrow.right.circle") {
                                     guard updatingChoreID == nil else { return }
                                     updatingChoreID = chore.choreID
@@ -124,7 +158,7 @@ private struct AsNeededConfigurationView: View {
                 Button("Add As Needed Chore", systemImage: "plus") { addingChore = true }
                     .accessibilityIdentifier("add-as-needed-chore")
             } footer: {
-                Text("An available chore appears with today’s chores and closes when its required work is complete. You can make it available again on a later day.")
+                Text("Each availability is kept separately. Completion advances an alternating turn, withdrawal keeps it, and Skip uses one turn without credit.")
             }
         }
         .navigationTitle("As Needed")
@@ -138,7 +172,28 @@ private struct AsNeededConfigurationView: View {
                 deleting = nil
             }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("This will remove it from the family’s chore lists.") }
+        } message: {
+            Text("Deletion is immediate and cannot be undone. Already resolved history and allowance results are preserved.")
+        }
+        .confirmationDialog("Withdraw this availability?", isPresented: Binding(
+            get: { withdrawing != nil }, set: { if !$0 { withdrawing = nil } }
+        ), titleVisibility: .visible) {
+            Button("Withdraw Availability", role: .destructive) {
+                guard let occurrence = withdrawing, let occurrenceID = occurrence.occurrenceID else { return }
+                updatingChoreID = occurrence.choreID
+                Task {
+                    defer { updatingChoreID = nil; withdrawing = nil }
+                    do {
+                        try await store.withdrawAsNeededOccurrenceAfterRefreshing(
+                            choreID: occurrence.choreID, occurrenceID: occurrenceID
+                        )
+                    } catch { store.errorMessage = error.localizedDescription }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This records no completion and keeps the current alternating turn.")
+        }
     }
 }
 
@@ -192,6 +247,8 @@ private struct WeekdayConfigurationView: View {
                 deleting = nil
             }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("This will remove it from the family’s chore lists.") }
+        } message: {
+            Text("Deletion is immediate and cannot be undone. Already resolved history and allowance results are preserved.")
+        }
     }
 }

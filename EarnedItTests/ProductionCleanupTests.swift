@@ -20,7 +20,7 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[1])
         try family.store.activateAsNeededChore(choreID: chore)
 
-        let active = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        let active = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore })
         XCTAssertEqual(active.turnOwnerID, order[1])
         XCTAssertEqual(active.eligibleMembers.map(\.id), [order[1]])
         XCTAssertEqual(active.requiredMembers.map(\.id), [order[1]])
@@ -51,18 +51,18 @@ final class ProductionCleanupTests: XCTestCase {
         )
         let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
         let order = original.memberIDs
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[0])
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[0])
 
         try family.store.saveChore(
             choreID: chore, weekday: .monday, title: original.title,
             mode: .alternating, memberIDs: order, schedulingMode: .asNeeded
         )
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[0])
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[0])
 
         family.move(to: "2026-09-08T16:00:00Z")
         XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, order[1])
         try family.store.activateAsNeededChore(choreID: chore)
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[1])
     }
 
     func testAsNeededToScheduledEditPreservesNextAlternatingChild() throws {
@@ -82,10 +82,10 @@ final class ProductionCleanupTests: XCTestCase {
             choreID: chore, weekday: .tuesday, title: original.title,
             mode: .alternating, memberIDs: order, schedulingMode: .scheduled
         )
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[0])
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[0])
 
         family.move(to: "2026-09-08T16:00:00Z")
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[1])
     }
 
     func testReenteringAlternatingHonorsNewFirstChildSelection() throws {
@@ -98,7 +98,7 @@ final class ProductionCleanupTests: XCTestCase {
             firstAlternatingMemberID: family.hanna.id
         )
         try family.store.activateAsNeededChore(choreID: chore)
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, family.hanna.id)
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, family.hanna.id)
         try family.complete(chore, as: family.hanna)
         try family.store.selectProfile(family.parent.id)
         try family.store.saveChore(
@@ -116,7 +116,7 @@ final class ProductionCleanupTests: XCTestCase {
         family.move(to: "2026-09-09T16:00:00Z")
         XCTAssertEqual(family.store.nextAlternatingOwner(choreID: chore)?.id, family.hanna.id)
         try family.store.activateAsNeededChore(choreID: chore)
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, family.hanna.id)
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, family.hanna.id)
     }
 
     func testIncompleteActivationDoesNotConsumeTurnAfterMergedOfflineActivation() throws {
@@ -128,7 +128,7 @@ final class ProductionCleanupTests: XCTestCase {
         )
         let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
         try family.store.activateAsNeededChore(choreID: chore)
-        let firstOwner = try XCTUnwrap(family.store.dailyList().first { $0.id == chore }?.turnOwnerID)
+        let firstOwner = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID)
         let facts = try family.repository.facts(householdID: revision.householdID)
         let secondDay = CivilDay(rawValue: "2026-09-08")!
         let mergedActivation = HouseholdFact(
@@ -145,9 +145,7 @@ final class ProductionCleanupTests: XCTestCase {
         let merged = try HouseholdStore(repository: family.repository,
                                         clock: { family.clock.now }, automaticSync: false)
         let secondDate = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
-        let secondOwner = try XCTUnwrap(merged.dailyList(on: secondDate).first { $0.id == chore }?.turnOwnerID)
-
-        XCTAssertEqual(secondOwner, firstOwner)
+        XCTAssertFalse(merged.dailyList(on: secondDate).contains { $0.choreID == chore })
         XCTAssertEqual(firstOwner, revision.memberIDs[0])
         let thirdDay = CivilDay(rawValue: "2026-09-09")!
         XCTAssertEqual(ChoreRules.nextAlternatingOwner(choreID: chore, on: thirdDay,
@@ -218,8 +216,9 @@ final class ProductionCleanupTests: XCTestCase {
         let revision = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
         let firstOwner = try XCTUnwrap(family.store.nextAlternatingOwner(choreID: chore))
         try family.store.activateAsNeededChore(choreID: chore)
-        XCTAssertEqual(family.store.snapshot.occurrence(choreID: chore, on: family.store.day)?.assignedMemberID,
-                       firstOwner.id)
+        XCTAssertEqual(family.store.snapshot.asNeededProjection(
+            choreID: chore, through: family.store.day
+        ).openOccurrence?.assignedMemberID, firstOwner.id)
 
         let facts = try family.repository.facts(householdID: revision.householdID)
         let staleSkip = HouseholdFact(
@@ -235,7 +234,7 @@ final class ProductionCleanupTests: XCTestCase {
         let merged = try HouseholdStore(repository: family.repository,
                                         clock: { family.clock.now }, automaticSync: false)
 
-        XCTAssertEqual(merged.dailyList().first { $0.id == chore }?.turnOwnerID, firstOwner.id)
+        XCTAssertEqual(merged.dailyList().first { $0.choreID == chore }?.turnOwnerID, firstOwner.id)
         try merged.setCompletion(choreID: chore, memberID: firstOwner.id,
                                  date: family.clock.now, state: .done)
         let tomorrow = ISO8601DateFormatter().date(from: "2026-09-08T16:00:00Z")!
@@ -252,7 +251,7 @@ final class ProductionCleanupTests: XCTestCase {
         )
         let winning = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: family.store.day))
         try family.store.activateAsNeededChore(choreID: chore)
-        let owner = try XCTUnwrap(family.store.dailyList().first { $0.id == chore }?.turnOwnerID)
+        let owner = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID)
         try family.store.setCompletion(choreID: chore, memberID: owner, date: family.clock.now, state: .done)
 
         let displaced = ChoreRevision(
@@ -315,7 +314,7 @@ final class ProductionCleanupTests: XCTestCase {
 
         XCTAssertEqual(scheduledRevision.memberIDs, expected)
         XCTAssertEqual(asNeededRevision.memberIDs, expected)
-        XCTAssertEqual(family.store.dailyList().first { $0.id == scheduled }?.turnOwnerID, first)
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == scheduled }?.turnOwnerID, first)
         XCTAssertEqual(family.store.nextAlternatingOwner(choreID: asNeeded)?.id, first)
         XCTAssertFalse(scheduledRevision.memberIDs.contains(archived.id))
         XCTAssertThrowsError(try family.store.saveChore(
@@ -346,7 +345,7 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(edited.title, "Set Table Carefully")
         XCTAssertEqual(edited.memberIDs, remaining)
         XCTAssertEqual(family.store.snapshot.configuration(choreID: chore, on: family.store.day)?.id, original.id)
-        XCTAssertEqual(family.store.dailyList().first { $0.id == chore }?.turnOwnerID, archivedFirst)
+        XCTAssertEqual(family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, archivedFirst)
     }
 
     func testConvertingExistingChoreToAlternatingRequiresChosenFirstChild() throws {
@@ -405,7 +404,7 @@ final class ProductionCleanupTests: XCTestCase {
 
         for (offset, day) in legacyDays.enumerated() {
             let date = day.date(in: upgraded.calendar)
-            XCTAssertEqual(upgraded.dailyList(on: date).first { $0.id == chore }?.turnOwnerID,
+            XCTAssertEqual(upgraded.dailyList(on: date).first { $0.choreID == chore }?.turnOwnerID,
                            revision.memberIDs[offset])
         }
         XCTAssertEqual(upgraded.nextAlternatingOwner(choreID: chore)?.id, revision.memberIDs[2])
@@ -414,7 +413,7 @@ final class ProductionCleanupTests: XCTestCase {
         try upgraded.setCompletion(choreID: chore, memberID: revision.memberIDs[1],
                                    date: legacyDays[1].date(in: upgraded.calendar), state: .done)
         try upgraded.activateAsNeededChore(choreID: chore)
-        XCTAssertEqual(upgraded.dailyList().first { $0.id == chore }?.turnOwnerID, revision.memberIDs[2])
+        XCTAssertEqual(upgraded.dailyList().first { $0.choreID == chore }?.turnOwnerID, revision.memberIDs[2])
     }
 
     func testLegacyActivationDecodesWithoutRecordedOwner() throws {
@@ -479,18 +478,18 @@ final class ProductionCleanupTests: XCTestCase {
         let current = family.store.dailyList()
         XCTAssertTrue(ChoreRules.visibleList(current, to: family.parent).allSatisfy { !deleted.contains($0.id) })
         XCTAssertTrue(ChoreRules.visibleList(current, to: family.hanna).allSatisfy { !deleted.contains($0.id) })
-        XCTAssertNil(current.first { $0.id == scheduledIncomplete })
-        XCTAssertNil(current.first { $0.id == activeAsNeeded })
-        XCTAssertNil(current.first { $0.id == scheduledAlternating })
-        XCTAssertNil(current.first { $0.id == activeAlternating })
-        let retained = try XCTUnwrap(current.first { $0.id == scheduledDone })
+        XCTAssertNil(current.first { $0.choreID == scheduledIncomplete })
+        XCTAssertNil(current.first { $0.choreID == activeAsNeeded })
+        XCTAssertNil(current.first { $0.choreID == scheduledAlternating })
+        XCTAssertNil(current.first { $0.choreID == activeAlternating })
+        let retained = try XCTUnwrap(current.first { $0.choreID == scheduledDone })
         XCTAssertTrue(retained.isDeleted)
         XCTAssertEqual(retained.state(for: family.hanna.id), .done)
         XCTAssertFalse(PermissionService.canSetState(actor: family.hanna, target: family.hanna.id,
                                                      chore: retained, state: .unmarked))
         XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).items
             .first { $0.choreID == scheduledDone }?.state, .done)
-        XCTAssertTrue(try XCTUnwrap(current.first { $0.id == completedAsNeeded }).isDeleted)
+        XCTAssertTrue(try XCTUnwrap(current.first { $0.choreID == completedAsNeeded }).isDeleted)
         XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).items
             .first { $0.choreID == completedAsNeeded }?.state, .done)
         XCTAssertTrue(deleted.allSatisfy {
@@ -511,7 +510,7 @@ final class ProductionCleanupTests: XCTestCase {
 
         try family.store.deleteChore(chore)
 
-        let historical = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        let historical = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore })
         XCTAssertTrue(historical.isDeleted)
         XCTAssertEqual(historical.state(for: family.hanna.id), .missed)
         XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id), allowanceBefore)
@@ -555,7 +554,7 @@ final class ProductionCleanupTests: XCTestCase {
 
         try family.store.deleteChore(chore)
 
-        let hidden = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        let hidden = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore })
         XCTAssertTrue(hidden.isDeleted)
         XCTAssertTrue(hidden.requiredMemberIDs.isEmpty)
         XCTAssertEqual(Set(hidden.eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
@@ -575,7 +574,7 @@ final class ProductionCleanupTests: XCTestCase {
         try family.store.deleteChore(chore)
         family.move(to: "2026-09-08T16:00:00Z")
 
-        let hidden = try XCTUnwrap(family.store.dailyList(on: monday).first { $0.id == chore })
+        let hidden = try XCTUnwrap(family.store.dailyList(on: monday).first { $0.choreID == chore })
         XCTAssertEqual(Set(hidden.eligibleMembers.map(\.id)), [family.hanna.id, family.alek.id])
         XCTAssertEqual(hidden.requiredMemberIDs, [family.hanna.id])
         XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id, containing: monday).items
@@ -620,7 +619,7 @@ final class ProductionCleanupTests: XCTestCase {
 
         try merged.deleteChore(chore)
 
-        let hidden = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+        let hidden = try XCTUnwrap(merged.dailyList().first { $0.choreID == chore })
         XCTAssertEqual(hidden.configuration.id, winningRevision.id)
         XCTAssertEqual(hidden.eligibleMembers.map(\.id), [winningMember.id])
         XCTAssertEqual(hidden.requiredMemberIDs, [winningMember.id])
@@ -672,7 +671,7 @@ final class ProductionCleanupTests: XCTestCase {
         try family.repository.commit(facts: stale, uploaded: true)
         let merged = try HouseholdStore(repository: family.repository,
                                         clock: { family.clock.now }, automaticSync: false)
-        let hidden = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+        let hidden = try XCTUnwrap(merged.dailyList().first { $0.choreID == chore })
 
         XCTAssertEqual(hidden.configuration.title, "Water Plants")
         XCTAssertEqual(hidden.configuration.id, winning.id)
@@ -714,7 +713,7 @@ final class ProductionCleanupTests: XCTestCase {
         try family.repository.commit(facts: [staleUnmarked], uploaded: true)
         let merged = try HouseholdStore(repository: family.repository,
                                         clock: { family.clock.now }, automaticSync: false)
-        let hidden = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+        let hidden = try XCTUnwrap(merged.dailyList().first { $0.choreID == chore })
 
         XCTAssertEqual(hidden.state(for: family.hanna.id), .done)
         XCTAssertEqual(merged.allowanceWeek(for: family.hanna.id), allowanceBefore)
@@ -748,8 +747,8 @@ final class ProductionCleanupTests: XCTestCase {
         try await fixture.guest.synchronize()
         try await fixture.family.store.synchronize()
 
-        let parentHistory = try XCTUnwrap(fixture.family.store.dailyList().first { $0.id == chore })
-        let guestHistory = try XCTUnwrap(fixture.guest.dailyList().first { $0.id == chore })
+        let parentHistory = try XCTUnwrap(fixture.family.store.dailyList().first { $0.choreID == chore })
+        let guestHistory = try XCTUnwrap(fixture.guest.dailyList().first { $0.choreID == chore })
         XCTAssertEqual(parentHistory.state(for: fixture.family.hanna.id), .done)
         XCTAssertEqual(guestHistory.state(for: fixture.family.hanna.id), .done)
         XCTAssertEqual(fixture.family.store.allowanceWeek(for: fixture.family.hanna.id), allowanceBefore)
@@ -829,7 +828,7 @@ final class ProductionCleanupTests: XCTestCase {
         try family.repository.commit(facts: [staleCorrection], uploaded: true)
         let merged = try HouseholdStore(repository: family.repository,
                                         clock: { family.clock.now }, automaticSync: false)
-        let historical = try XCTUnwrap(merged.dailyList().first { $0.id == chore })
+        let historical = try XCTUnwrap(merged.dailyList().first { $0.choreID == chore })
 
         XCTAssertEqual(historical.configuration.title, "Excused Chore")
         XCTAssertTrue(historical.isExcused(family.hanna.id))
@@ -863,7 +862,7 @@ final class ProductionCleanupTests: XCTestCase {
         try await fixture.family.store.synchronize()
 
         for store in [fixture.family.store, fixture.guest] {
-            let historical = try XCTUnwrap(store.dailyList().first { $0.id == chore })
+            let historical = try XCTUnwrap(store.dailyList().first { $0.choreID == chore })
             XCTAssertEqual(historical.configuration.title, "Excused Chore")
             XCTAssertTrue(historical.isExcused(fixture.family.hanna.id))
             XCTAssertTrue(store.allowanceWeek(for: fixture.family.hanna.id).items.isEmpty)
@@ -878,7 +877,7 @@ final class ProductionCleanupTests: XCTestCase {
             memberIDs: [family.hanna.id]
         )
         try family.complete(chore, as: family.hanna)
-        let occurrence = try XCTUnwrap(family.store.dailyList().first { $0.id == chore })
+        let occurrence = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore })
         let baseFacts = try family.repository.facts(householdID: occurrence.configuration.householdID)
         let sequence = try XCTUnwrap(baseFacts.map(\.sequence).max()) + 1
         let resolved = ChoreDeletion(
@@ -927,7 +926,7 @@ final class ProductionCleanupTests: XCTestCase {
         ]
         XCTAssertEqual(stores[0].snapshot, stores[1].snapshot)
         for store in stores {
-            let history = try XCTUnwrap(store.dailyList().first { $0.id == chore })
+            let history = try XCTUnwrap(store.dailyList().first { $0.choreID == chore })
             XCTAssertEqual(history.configuration.title, "Completed Chore")
             XCTAssertEqual(history.state(for: family.hanna.id), .done)
             XCTAssertEqual(store.allowanceWeek(for: family.hanna.id), allowanceBefore)
@@ -936,7 +935,7 @@ final class ProductionCleanupTests: XCTestCase {
                                                  snapshot: store.snapshot,
                                                  today: family.clock.now), streakBefore)
             XCTAssertFalse(ChoreRules.visibleList(store.dailyList(), to: family.parent)
-                .contains { $0.id == chore })
+                .contains { $0.choreID == chore })
         }
     }
 
@@ -992,7 +991,7 @@ final class ProductionCleanupTests: XCTestCase {
         ]
         XCTAssertEqual(projections[0].0.snapshot, projections[1].0.snapshot)
         for (store, repository) in projections {
-            let history = try XCTUnwrap(store.dailyList(on: monday.date(in: store.calendar)).first { $0.id == chore })
+            let history = try XCTUnwrap(store.dailyList(on: monday.date(in: store.calendar)).first { $0.choreID == chore })
             XCTAssertEqual(history.configuration.title, "Completed Chore")
             XCTAssertEqual(history.state(for: family.hanna.id), .done)
             XCTAssertEqual(store.allowanceWeek(for: family.hanna.id, containing: monday.date(in: store.calendar)),
@@ -1002,7 +1001,7 @@ final class ProductionCleanupTests: XCTestCase {
             XCTAssertEqual(MetricsService.streak(childID: family.hanna.id,
                                                  snapshot: store.snapshot,
                                                  today: family.clock.now), streakBefore)
-            XCTAssertFalse(ChoreRules.visibleList(store.dailyList(), to: family.parent).contains { $0.id == chore })
+            XCTAssertFalse(ChoreRules.visibleList(store.dailyList(), to: family.parent).contains { $0.choreID == chore })
             let retainedFacts = try repository.facts(householdID: revision.householdID)
             XCTAssertTrue(retainedFacts.contains { $0.id == staleCompletion.id })
             XCTAssertTrue(retainedFacts.contains { $0.id == staleEarlierDeletion.id })
@@ -1019,7 +1018,7 @@ final class ProductionCleanupTests: XCTestCase {
         try await fixture.guest.synchronize()
         try fixture.guest.selectProfile(fixture.family.hanna.id)
         XCTAssertTrue(ChoreRules.visibleList(fixture.guest.dailyList(), to: fixture.family.hanna)
-            .contains { $0.id == chore })
+            .contains { $0.choreID == chore })
 
         try fixture.family.store.deleteChore(chore)
         try await fixture.family.store.synchronize()
@@ -1059,8 +1058,8 @@ final class ProductionCleanupTests: XCTestCase {
         try fixture.family.store.activateAsNeededChore(choreID: chore)
         try await fixture.family.store.synchronize()
         try await fixture.guest.synchronize()
-        XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
-        XCTAssertEqual(fixture.guest.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
+        XCTAssertEqual(fixture.family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, next.id)
+        XCTAssertEqual(fixture.guest.dailyList().first { $0.choreID == chore }?.turnOwnerID, next.id)
     }
 
     func testStaleParentRefreshesChildCompletionBeforeMakingAlternatingChoreAvailable() async throws {
@@ -1127,8 +1126,9 @@ final class ProductionCleanupTests: XCTestCase {
         try await fixture.family.store.synchronize()
         try await fixture.guest.synchronize()
         XCTAssertEqual(fixture.guest.nextAlternatingOwner(choreID: chore)?.id, order[2])
-        XCTAssertEqual(fixture.family.store.snapshot.alternatingTurnAdvances.filter {
-            $0.choreID == chore
+        XCTAssertEqual(fixture.family.store.snapshot.orderedFacts.filter {
+            if case .asNeededTurnAdvance(let advance) = $0.body { return advance.choreID == chore }
+            return false
         }.count, 1)
     }
 
@@ -1149,27 +1149,68 @@ final class ProductionCleanupTests: XCTestCase {
         fixture.guestTransport.fetchError = CKError(.networkFailure)
         try await fixture.guest.skipNextAlternatingChildAfterRefreshing(choreID: chore)
         try await fixture.guest.makeAsNeededChoreAvailable(choreID: chore)
-        XCTAssertEqual(fixture.guest.pendingCount, 2)
-        XCTAssertEqual(fixture.guest.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+        XCTAssertEqual(fixture.guest.pendingCount, 3)
+        XCTAssertEqual(fixture.guest.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[1])
 
         let reopened = try HouseholdStore(
             repository: fixture.guestRepository, transport: fixture.guestTransport,
             clock: { fixture.family.clock.now }, automaticSync: false
         )
-        XCTAssertEqual(reopened.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+        XCTAssertEqual(reopened.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[1])
 
         fixture.guestTransport.fetchError = nil
         try await reopened.synchronize()
         try await fixture.family.store.synchronize()
 
         XCTAssertEqual(reopened.pendingCount, 0)
-        XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
-        XCTAssertEqual(fixture.family.store.snapshot.alternatingTurnAdvances.filter {
+        XCTAssertEqual(fixture.family.store.dailyList().first { $0.choreID == chore }?.turnOwnerID, order[1])
+        XCTAssertEqual(fixture.family.store.snapshot.orderedFacts.filter {
+            if case .asNeededTurnAdvance(let advance) = $0.body { return advance.choreID == chore }
+            return false
+        }.count, 1)
+        XCTAssertEqual(fixture.family.store.snapshot.orderedFacts.filter {
+            if case .asNeededOccurrence(let occurrence) = $0.body { return occurrence.choreID == chore }
+            return false
+        }.count, 1)
+    }
+
+    func testOfflineWithdrawalSurvivesRelaunchAndKeepsAlternatingOwnerAcrossInstallations() async throws {
+        let fixture = try await connectedParentInstallation()
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Bring in bins", mode: .alternating,
+            memberIDs: [fixture.family.hanna.id, fixture.family.alek.id],
+            schedulingMode: .asNeeded
+        )
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        let owner = try XCTUnwrap(fixture.family.store.nextAlternatingOwner(choreID: chore))
+        try fixture.family.store.activateAsNeededChore(choreID: chore)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        let occurrenceID = try XCTUnwrap(fixture.guest.dailyList().first {
             $0.choreID == chore
-        }.count, 1)
-        XCTAssertEqual(fixture.family.store.snapshot.occurrenceDispositions.filter {
-            $0.choreID == chore && $0.state == .available
-        }.count, 1)
+        }?.occurrenceID)
+
+        fixture.guestTransport.fetchError = CKError(.networkFailure)
+        try await fixture.guest.withdrawAsNeededOccurrenceAfterRefreshing(
+            choreID: chore, occurrenceID: occurrenceID
+        )
+        XCTAssertEqual(fixture.guest.pendingCount, 1)
+        XCTAssertFalse(fixture.guest.dailyList().contains { $0.choreID == chore })
+
+        let reopened = try HouseholdStore(
+            repository: fixture.guestRepository, transport: fixture.guestTransport,
+            clock: { fixture.family.clock.now }, automaticSync: false
+        )
+        XCTAssertFalse(reopened.dailyList().contains { $0.choreID == chore })
+        XCTAssertEqual(reopened.nextAlternatingOwner(choreID: chore)?.id, owner.id)
+
+        fixture.guestTransport.fetchError = nil
+        try await reopened.synchronize()
+        try await fixture.family.store.synchronize()
+        XCTAssertEqual(reopened.pendingCount, 0)
+        XCTAssertFalse(fixture.family.store.dailyList().contains { $0.choreID == chore })
+        XCTAssertEqual(fixture.family.store.nextAlternatingOwner(choreID: chore)?.id, owner.id)
     }
 
     func testSchedulingModeEditsPreserveAlternatingTurnsAcrossInstallations() async throws {
@@ -1213,9 +1254,9 @@ final class ProductionCleanupTests: XCTestCase {
                        scheduledOrder[1])
         XCTAssertEqual(fixture.guest.nextAlternatingOwner(choreID: scheduledToAsNeeded)?.id,
                        scheduledOrder[1])
-        XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == asNeededToScheduled }?.turnOwnerID,
+        XCTAssertEqual(fixture.family.store.dailyList().first { $0.choreID == asNeededToScheduled }?.turnOwnerID,
                        asNeededOrder[1])
-        XCTAssertEqual(fixture.guest.dailyList().first { $0.id == asNeededToScheduled }?.turnOwnerID,
+        XCTAssertEqual(fixture.guest.dailyList().first { $0.choreID == asNeededToScheduled }?.turnOwnerID,
                        asNeededOrder[1])
     }
 
