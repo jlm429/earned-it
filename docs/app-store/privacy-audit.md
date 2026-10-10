@@ -1,6 +1,6 @@
 # Privacy Implementation Audit
 
-Audit date: September 24, 2026. Notification findings updated October 10, 2026.
+Original audit: September 24, 2026. Notification findings updated October 10, 2026. Integration review on October 10, 2026 inspected merged `origin/main` at `6820fe9e6836df4c14aa0a1e2f44814cad18a098`. The 1.0.5 candidate adds informational Punt Stats derived from the same immutable family facts, with no additional CloudKit records, schema, or telemetry. Signed two-account/device notification delivery and the final archive privacy report remain human release prerequisites.
 
 ## Implementation findings
 

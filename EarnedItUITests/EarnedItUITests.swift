@@ -385,6 +385,7 @@ final class EarnedItUITests: XCTestCase {
             "--ui-test-store",
             "--ui-test-reset",
             "--ui-test-weekly-fixture",
+            "--ui-test-hide-clock",
             "--ui-test-pending-family-deletion"
         ]
         app.launch()
