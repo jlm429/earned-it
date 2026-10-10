@@ -85,6 +85,90 @@ final class FocusedFamilyDeletionRecoveryTests: XCTestCase {
         }
     }
 
+    func testDirectRecoveredDeletionRetryAfterReleaseAcknowledgementOrReadFailure() async throws {
+        for lostAcknowledgement in [true, false] {
+            let fixture = try await makeFixture(named: "direct-release-retry-\(lostAcknowledgement)")
+            fixture.transport.lifecycleFinalizeFailures = 1
+            await XCTAssertThrowsCloudFailure(try await fixture.store.deleteFamily())
+            let recovered = try reinstalledOwner(fixture)
+            try await recovered.reconcileAccountMembershipLock()
+            if lostAcknowledgement {
+                fixture.transport.accountLockReleasePostCommitFailures = 1
+            } else {
+                fixture.transport.afterAccountLockReleaseSubmission = {
+                    fixture.transport.afterAccountLockReleaseSubmission = nil
+                    fixture.transport.accountMembershipLockReadFailures = 1
+                }
+            }
+            await XCTAssertThrowsCloudFailure(try await recovered.finishRecoveredFamilyDeletion())
+            XCTAssertTrue(recovered.canFinishRecoveredFamilyDeletion)
+            XCTAssertNil(recovered.session.completedUnavailableFamilyRecovery)
+            XCTAssertEqual(fixture.server.accountMembershipLocks["owner"]?.state, .released)
+            let mutations = fixture.transport.accountLockMutationEnqueues
+            let publications = fixture.transport.lifecycleMutationEnqueues
+            try await recovered.finishRecoveredFamilyDeletion()
+            XCTAssertFalse(recovered.requiresMembershipRecovery)
+            XCTAssertEqual(recovered.session.completedUnavailableFamilyRecovery?.householdID, fixture.householdID)
+            XCTAssertEqual(recovered.session.completedUnavailableFamilyRecovery?.membershipAttemptID, fixture.attemptID)
+            XCTAssertEqual(fixture.transport.accountLockMutationEnqueues, mutations)
+            XCTAssertEqual(fixture.transport.lifecycleMutationEnqueues, publications)
+        }
+    }
+
+    func testDirectRecoveredDeletionRetryRejectsChangedReleasedEvidence() async throws {
+        for condition in 0..<12 {
+            let fixture = try await makeFixture(named: "direct-retry-refusal-\(condition)")
+            fixture.transport.lifecycleFinalizeFailures = 1
+            await XCTAssertThrowsCloudFailure(try await fixture.store.deleteFamily())
+            let recovered = try reinstalledOwner(fixture)
+            try await recovered.reconcileAccountMembershipLock()
+            fixture.transport.accountLockReleasePostCommitFailures = 1
+            await XCTAssertThrowsCloudFailure(try await recovered.finishRecoveredFamilyDeletion())
+            let released = try XCTUnwrap(fixture.server.accountMembershipLocks["owner"])
+            switch condition {
+            case 0: fixture.transport.account = "other"
+            case 1:
+                fixture.transport.account = "other"
+                fixture.transport.account = "owner"
+            case 2:
+                fixture.server.accountMembershipLocks["owner"] = .init(
+                    householdID: released.householdID, attemptID: UUID(), state: .released,
+                    expiresAt: released.expiresAt, claimBinding: released.claimBinding,
+                    ownerAuthorityBinding: released.ownerAuthorityBinding)
+            case 3:
+                fixture.server.accountMembershipLocks["owner"] = .init(
+                    householdID: UUID(), attemptID: released.attemptID, state: .released,
+                    expiresAt: released.expiresAt, claimBinding: released.claimBinding,
+                    ownerAuthorityBinding: released.ownerAuthorityBinding)
+            case 4: fixture.server.accountMembershipLocks["owner"]?.claimBinding = "foreign"
+            case 5: fixture.server.accountMembershipLocks["owner"]?.ownerAuthorityBinding = nil
+            case 6: fixture.server.accountMembershipLocks["owner"] = nil
+            case 7:
+                fixture.server.zones[fixture.location.zoneName] = .init(
+                    householdID: fixture.householdID, name: "Present", owner: "owner")
+            case 8: fixture.server.lifecycleAuthorities[fixture.householdID] = nil
+            case 9:
+                fixture.server.lifecycleAuthorities[fixture.householdID] = .init(
+                    state: .deleted, creator: "foreign", lastModifier: "owner")
+            case 10:
+                fixture.server.lifecycleAuthorities[fixture.householdID] = .init(
+                    state: .deleted, creator: "owner", lastModifier: "foreign")
+            default:
+                fixture.server.lifecycleAuthorities[fixture.householdID] = .init(
+                    state: .active, creator: "owner", lastModifier: "owner")
+            }
+            let locks = fixture.server.accountMembershipLocks
+            let mutations = fixture.transport.accountLockMutationEnqueues
+            let publications = fixture.transport.lifecycleMutationEnqueues
+            await assertRefused(try await recovered.finishRecoveredFamilyDeletion())
+            XCTAssertNil(recovered.session.completedUnavailableFamilyRecovery, "\(condition)")
+            XCTAssertTrue(recovered.requiresMembershipRecovery, "\(condition)")
+            XCTAssertEqual(fixture.server.accountMembershipLocks, locks, "\(condition)")
+            XCTAssertEqual(fixture.transport.accountLockMutationEnqueues, mutations, "\(condition)")
+            XCTAssertEqual(fixture.transport.lifecycleMutationEnqueues, publications, "\(condition)")
+        }
+    }
+
     func testReinstallAfterRecoveredTerminalPublicationUsesExistingConfirmedReset() async throws {
         let fixture = try await makeFixture(named: "terminal-reinstall")
         fixture.transport.lifecycleFinalizeFailures = 1

@@ -131,6 +131,8 @@ final class TestTransport: HouseholdTransport {
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
     var deleteFamilyFailures = 0
+    var accountLockReleasePostCommitFailures = 0
+    var accountMembershipLockReadFailures = 0
     var accountLockReleaseFailures = 0
     var accountLockActivationFailures = 0
     var accountLockReplacementFailures = 0
@@ -314,6 +316,10 @@ final class TestTransport: HouseholdTransport {
     }
 
     func accountMembershipLock() async throws -> AccountMembershipLock? {
+        if accountMembershipLockReadFailures > 0 {
+            accountMembershipLockReadFailures -= 1
+            throw CKError(.networkFailure)
+        }
         let lock = server.accountMembershipLocks[account]
         await afterAccountMembershipLockRead?()
         return lock
@@ -576,6 +582,10 @@ final class TestTransport: HouseholdTransport {
         existing.expiresAt = releaseTime
         server.accountMembershipLocks[account] = existing
         await afterAccountLockReleaseSubmission?()
+        if accountLockReleasePostCommitFailures > 0 {
+            accountLockReleasePostCommitFailures -= 1
+            throw CKError(.networkFailure)
+        }
         guard account == expectedParticipantID,
               accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         return true

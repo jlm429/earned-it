@@ -3990,10 +3990,30 @@ final class HouseholdStore {
 
     func finishRecoveredFamilyDeletion() async throws {
         try await withExclusiveCloudMutation {
-            guard canFinishRecoveredFamilyDeletion, let candidate = recoveredOwnerDeletionCandidate,
+            guard canFinishRecoveredFamilyDeletion, var candidate = recoveredOwnerDeletionCandidate,
                   let transport else { throw HouseholdError.accountMembershipConflict }
             let expectedSession = session
+            let receipt = UnavailableFamilyRecovery(
+                householdID: candidate.lock.householdID, membershipAttemptID: candidate.lock.attemptID,
+                claimBinding: candidate.lock.claimBinding, ownerAuthorityBinding: candidate.lock.ownerAuthorityBinding,
+                reason: .deleted, membershipReleased: true
+            )
+            try await transport.requireAccountForReset(candidate.participantID,
+                                                      generation: candidate.accountGeneration)
+            let currentLock = try await transport.accountMembershipLock()
+            try await transport.requireAccountForReset(candidate.participantID,
+                                                      generation: candidate.accountGeneration)
+            guard let currentLock,
+                  currentLock == candidate.lock || (candidate.lock.state == .active
+                    && currentLock.state == .released && receipt.matches(currentLock)) else {
+                throw HouseholdError.accountMembershipConflict
+            }
+            candidate = StaleOwnerMembershipReleaseCandidate(
+                lock: currentLock, participantID: candidate.participantID,
+                accountGeneration: candidate.accountGeneration
+            )
             try await validateRecoveredOwnerDeletion(candidate, expectedSession: expectedSession)
+            recoveredOwnerDeletionCandidate = candidate
             try await transport.finalizeRecoveredFamilyDeletion(
                 expectedLock: candidate.lock,
                 expectedParticipantID: candidate.participantID,
@@ -4014,11 +4034,6 @@ final class HouseholdStore {
             let releasedLock = try await transport.accountMembershipLock()
             try await transport.requireAccountForReset(candidate.participantID,
                                                       generation: candidate.accountGeneration)
-            let receipt = UnavailableFamilyRecovery(
-                householdID: candidate.lock.householdID, membershipAttemptID: candidate.lock.attemptID,
-                claimBinding: candidate.lock.claimBinding, ownerAuthorityBinding: candidate.lock.ownerAuthorityBinding,
-                reason: .deleted, membershipReleased: true
-            )
             guard let releasedLock, releasedLock.state == .released, receipt.matches(releasedLock),
                   session == expectedSession else { throw HouseholdError.accountMembershipConflict }
             let releasedCandidate = StaleOwnerMembershipReleaseCandidate(
