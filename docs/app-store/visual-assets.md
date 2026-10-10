@@ -19,7 +19,7 @@ Do not silently replace the shipping icon. A designer should deliver an approved
 
 ### Repository banner
 
-`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG. Its shared-chore positioning, iOS 18 requirement, and iCloud privacy language fit the product, but its provenance and commercial-use rights are undocumented. The final README pass removes the banner and its unverified App Store availability link. Reintroduce artwork only after rights and final-screen accuracy are confirmed.
+`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG. Its shared-chore positioning, iOS 18 requirement, and iCloud privacy language fit the product, but its provenance and commercial-use rights are undocumented. The final README retains this original banner and removes its unverified App Store availability link. Confirm rights and final-screen accuracy before using the artwork for release marketing or App Store distribution.
 
 ### Public preview
 
@@ -34,8 +34,6 @@ Capture screenshots that accurately represent the final release candidate with f
 [Apple's current screenshot specification](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications), checked October 10, 2026, requires at least one screenshot for iPhone with Dynamic Island (medium display) and, because this app supports iPad, at least one for the iPad 13-inch display. Up to ten screenshots per device size are accepted as JPEG or PNG without alpha. Accepted portrait examples are 1179 by 2556 or 1206 by 2622 for that iPhone group, and 2064 by 2752 or 2048 by 2732 for iPad 13-inch. Confirm the final upload slots and Apple's scaling rules rather than assuming an older 6.5-inch-only set remains sufficient.
 
 Existing native weekly captures under `docs/weekly-allowance-evidence/` are engineering examples with fictional fixture data, not an approved final submission set. The UI polish lane owns updated screen evidence. Final public marketing and store images must use the integrated candidate and cleared assets; repository development previews must be labeled as such. Follow [the system artwork review](quotes-and-attribution.md#system-artwork-and-names) for emoji and SF Symbols restrictions.
-
-The README also includes explicitly labeled UI-candidate previews under [`assets/screenshots/`](../../assets/screenshots/README.md), supplied through the supervisor's October 10 handoff. They show the running native interface with fictional fixtures, without banner/icon marketing artwork or live invitations. Their capture/source details distinguish pending UI work from tested `main`; they must be rechecked after integration and are not final listing assets.
 
 Recommended set:
 
