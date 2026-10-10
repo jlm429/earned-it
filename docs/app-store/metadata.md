@@ -34,7 +34,7 @@ Earned It contains no advertising, behavioral analytics, or third-party tracking
 
 ## URLs
 
-These URLs work after the release-readiness branch is merged to the public `main` branch:
+These destinations already exist on public `main`. Confirm that they will remain maintained and enter the final URLs in App Store Connect:
 
 - Privacy Policy URL: `https://github.com/jlm429/earned-it/blob/main/docs/app-store/privacy-policy.md`
 - Support URL: `https://github.com/jlm429/earned-it/issues`
@@ -46,7 +46,7 @@ If the repository will not remain public, host the policy and support material e
 
 Complete the current App Store Connect questionnaire honestly. Based on the inspected content, the app has no violence, sexual content, profanity, gambling, contests, unrestricted web browsing, advertising, or user-generated public content. A low rating is likely, but App Store Connect determines the result.
 
-Do not select **Made for Kids** merely because children can use family profiles. That choice is a long-term App Store category commitment with additional requirements. Make it only after a deliberate legal and product review.
+Do not select **Made for Kids** merely because children can use family profiles. That choice is a long-term App Store category commitment with additional requirements. Current child screens expose external privacy/support links without a parental gate, so the inspected app does not establish Kids Category compliance. Choose the category and positioning deliberately after reviewing [Apple's Kids Category requirements](https://developer.apple.com/app-store/review/guidelines/#kids-category) and applicable children's privacy obligations. A low age rating alone does not establish that compliance.
 
 ## Review notes draft
 
@@ -61,7 +61,9 @@ To review the core experience:
 
 Creating an invitation enables the owner's private CloudKit zone and requires an available iCloud account. Parent and child invitations are bound to a role and profile. Camera access is optional and is used only to scan an Earned It invitation QR code. Reviewers can enter the code or link instead.
 
-No demo account is required because the app does not operate its own account service. If App Review needs a two-account invitation test, provide a current one-time invitation through the private Review Notes or attachment channel at submission time. Do not place a live invitation in this repository or permanent metadata.
+The app has no developer login credentials to supply. App Review must still receive access and resources to assess the sharing features. Confirm a workable reviewer procedure and any required private invitation/device resources before submission, accounting for the invitation's 24-hour expiration and one-time exact-profile claim. Do not place a live invitation in this repository or permanent public metadata.
+
+This draft describes the audited `main` features. Punt, activity, and notification behavior must be added only after the corresponding code is integrated and verified. If alerts are created when synchronized facts arrive, describe that timing honestly; do not call it guaranteed instant or background push delivery. Review Notes must explain the final new behavior and its limits.
 
 ## Copyright and content rights
 

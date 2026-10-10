@@ -15,11 +15,10 @@ Common interface phrases such as “Way to go!” and the product statement “F
 - The public README contains no testimonial or third-party quotation.
 - The App Store metadata draft contains no testimonial or attributed third-party text.
 - Technical documentation links to Apple documentation and describes observed behavior. It does not reproduce substantial Apple text.
-- The stale `assets/earned-it-preview.png` contains historical promotional copy with no recorded source or rights file. Do not use it in public marketing or App Store submission without confirming the artwork and copy provenance.
-- The current app icon has no provenance or commercial-use license recorded in the repository. Confirm ownership before submission.
+- Asset provenance, the obsolete promotional preview, and icon approval requirements are maintained in [the visual asset specification](visual-assets.md#existing-assets).
 
 ## System artwork and names
 
-The app uses SF Symbols and Unicode emoji rendered by iOS. Do not export those glyphs as standalone brand assets or imply Apple sponsorship. Confirm the final screenshots and use of system-rendered emoji against the current App Review Guidelines and Apple trademark/copyright guidance. If the rights holder cannot establish an acceptable basis, replace avatar artwork in a separately approved product change rather than during this documentation audit.
+The app uses SF Symbols and Unicode emoji rendered by iOS. [App Review rule 4.5.6](https://developer.apple.com/app-store/review/guidelines/#apple-sites-and-services), checked October 10, 2026, permits Unicode rendered as emoji in apps and metadata. The current source avatars therefore do not require a blanket replacement or approval solely for being emoji. Do not embed/export those glyphs as standalone custom or brand artwork or imply Apple sponsorship. Confirm the rights and presentation of the final icon, screenshots, and any promotional assets separately.
 
 Product and platform names such as Apple, App Store, iPhone, iOS, iCloud, CloudKit, SwiftUI, SwiftData, TestFlight, Xcode, and GitHub are used only to identify compatibility, services, tools, or URLs. Final marketing material should follow the applicable trademark guidelines and must not imply endorsement.
