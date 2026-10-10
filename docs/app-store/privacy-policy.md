@@ -1,6 +1,6 @@
 # Earned It Privacy Policy
 
-Effective date: September 24, 2026
+Effective date: October 10, 2026
 
 Earned It is a shared chore app for families. It is free and contains no ads, behavioral analytics, or cross-app tracking.
 
@@ -49,7 +49,7 @@ Devices with authenticated proof that the family was deleted or their exact memb
 
 Removing the app from a device removes its local app data according to iOS behavior but does not delete the family's CloudKit data or retained lifecycle and security metadata.
 
-Earned It does not provide a developer-operated account or server-side deletion portal. Each person initiates deletion for the currently authenticated iCloud account in the app. Apple also provides controls for iCloud data through the person's Apple account and services.
+Earned It does not provide a developer-operated account or server-side deletion portal. The in-app deletion and recovery flows validate the current iCloud account before changing its records. Family-wide deletion is available to the family creator, while a deleted or revoked participant can clear obsolete local data through the recovery flow described above. Apple also provides controls for iCloud data through the person's Apple account and services.
 
 ## Children's privacy
 

@@ -86,13 +86,13 @@ That trace is evidence that the running Production schema did not permit creatio
 
 The available `cktool` installation was used only for a read-only authentication check. `xcrun cktool get-teams` reported that no management token was available. No authenticated CloudKit Console session or management token was available in this worktree, so the Production schema was not directly inspected. No schema or Production data mutation was attempted.
 
-### Current Production verification
+### Human-reported Production inspection
 
-On October 10, 2026, the captain manually verified in CloudKit Console that the Production public database for `iCloud.com.jlm429.EarnedIt` contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String. This closes the missing-record-type concern from the earlier trace. The observed security roles are World Read, iCloud Create, and Creator Write. World Read conflicts with the required policy that public unauthenticated access remain disabled, so security-role compliance remains open for an authorized human to correct and verify before release. The focused interrupted-deletion recovery fix requires no record-type or field deployment.
+See [the authority contract's schema and security section](family-lifecycle-authority.md#cloudkit-schema-and-security) for the October 10 human-reported inspection and its proof limits. The earlier missing-record-type trace does not establish current Production configuration. The focused interrupted-deletion recovery fix requires no record-type or field deployment.
 
 ### Remaining captain action in CloudKit Console
 
-In Apple's CloudKit Console for the Production public database of `iCloud.com.jlm429.EarnedIt`, an authorized human must disable World Read while retaining authenticated iCloud read and create access plus creator write access. Keep deterministic record-name lookup available. The app does not query lifecycle records during account cleanup, so no app-field query index is required by current code. After the change, verify the security roles and then run the signed two-account procedure below. No record-type or field deployment is required for this focused recovery fix, and no one-off Production data record should be created.
+Follow [the authority contract's schema and security section](family-lifecycle-authority.md#cloudkit-schema-and-security), including signed former-participant Development proof before any authorized human Production role change. No record-type or field deployment is required for this focused recovery fix, and no one-off Production data record should be created.
 
 Apple documents schema inspection and editing at [Inspecting and editing an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/inspecting-and-editing-an-icloud-container-s-schema) and deployment at [Deploying an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/deploying-an-icloud-container-s-schema).
 
@@ -126,7 +126,7 @@ The focused recovery UI flows verify that transient access loss remains a reconn
 
 ## Real-device captain procedure
 
-The Production lifecycle type and fields are verified. Correct and verify the security roles as described above, then complete the signed two-account checks below before relying on the new reset behavior in Production.
+First satisfy [the authority contract's access-policy prerequisites](family-lifecycle-authority.md#cloudkit-schema-and-security). These historical retained-receipt checks do not cover receipt loss after uninstall; follow [the final release checklist](app-store/release-readiness.md#remaining-release-blockers) for integration and signed candidate requirements before relying on recovery in Production.
 
 1. On the creating parent's device, use Settings, `Delete All Data`, and wait for completion. Confirm Welcome appears and remains after relaunch.
 2. Bring an existing child device online. Confirm `Family No Longer Available`, choose `Reset App`, and confirm Welcome remains after relaunch.
