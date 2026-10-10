@@ -15,8 +15,7 @@ Common interface phrases such as “Way to go!” and the product statement “F
 - The public README contains no testimonial or third-party quotation.
 - The App Store metadata draft contains no testimonial or attributed third-party text.
 - Technical documentation links to Apple documentation and describes observed behavior. It does not reproduce substantial Apple text.
-- The stale `assets/earned-it-preview.png` contains historical promotional copy with no recorded source or rights file. Do not use it in public marketing or App Store submission without confirming the artwork and copy provenance.
-- The current app icon has no provenance or commercial-use license recorded in the repository. Confirm ownership before submission.
+- Asset provenance, the obsolete promotional preview, and icon approval requirements are maintained in [the visual asset specification](visual-assets.md#existing-assets).
 
 ## System artwork and names
 
