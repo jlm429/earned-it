@@ -20,6 +20,6 @@ Common interface phrases such as “Way to go!” and the product statement “F
 
 ## System artwork and names
 
-The app uses SF Symbols and Unicode emoji rendered by iOS. Do not export those glyphs as standalone brand assets or imply Apple sponsorship. Confirm the final screenshots and use of system-rendered emoji against the current App Review Guidelines and Apple trademark/copyright guidance. If the rights holder cannot establish an acceptable basis, replace avatar artwork in a separately approved product change rather than during this documentation audit.
+The app uses SF Symbols and Unicode emoji rendered by iOS. [App Review rule 4.5.6](https://developer.apple.com/app-store/review/guidelines/#apple-sites-and-services), checked October 10, 2026, permits Unicode rendered as emoji in apps and metadata. The current source avatars therefore do not require a blanket replacement or approval solely for being emoji. Do not embed/export those glyphs as standalone custom or brand artwork or imply Apple sponsorship. Confirm the rights and presentation of the final icon, screenshots, and any promotional assets separately.
 
 Product and platform names such as Apple, App Store, iPhone, iOS, iCloud, CloudKit, SwiftUI, SwiftData, TestFlight, Xcode, and GitHub are used only to identify compatibility, services, tools, or URLs. Final marketing material should follow the applicable trademark guidelines and must not imply endorsement.

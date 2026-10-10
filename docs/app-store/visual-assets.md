@@ -19,7 +19,7 @@ Do not silently replace the shipping icon. A designer should deliver an approved
 
 ### Repository banner
 
-`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG used at the top of the public README. It uses the approved shared-chore positioning, iOS 18 requirement, and iCloud privacy language without making an App Store availability claim. Confirm its provenance and commercial-use rights before distribution.
+`assets/earned-it-banner.png` is a 2172 by 724 pixel opaque PNG. Its shared-chore positioning, iOS 18 requirement, and iCloud privacy language fit the product, but its provenance and commercial-use rights are undocumented. The final README pass removes the banner and its unverified App Store availability link. Reintroduce artwork only after rights and final-screen accuracy are confirmed.
 
 ### Public preview
 
@@ -29,7 +29,13 @@ The file remains as historical artwork so this audit does not delete potentially
 
 ## Required App Store screenshots
 
-Capture screenshots from the signed release candidate with fictional family information. Provide an accurate set at App Store accepted iPhone and iPad sizes. Include portrait and landscape review of the important iPad flows even when the submitted screenshot set uses one orientation. Screenshots must not contain alpha.
+Capture screenshots that accurately represent the final release candidate with fictional family information. Include portrait and landscape review of the important iPad flows even when the submitted screenshot set uses one orientation. Simulator captures can illustrate the interface but do not prove signed CloudKit behavior.
+
+[Apple's current screenshot specification](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications), checked October 10, 2026, requires at least one screenshot for iPhone with Dynamic Island (medium display) and, because this app supports iPad, at least one for the iPad 13-inch display. Up to ten screenshots per device size are accepted as JPEG or PNG without alpha. Accepted portrait examples are 1179 by 2556 or 1206 by 2622 for that iPhone group, and 2064 by 2752 or 2048 by 2732 for iPad 13-inch. Confirm the final upload slots and Apple's scaling rules rather than assuming an older 6.5-inch-only set remains sufficient.
+
+Existing native weekly captures under `docs/weekly-allowance-evidence/` are engineering examples with fictional fixture data, not an approved final submission set. The UI polish lane owns updated screen evidence. Final public marketing and store images must use the integrated candidate and cleared assets; repository development previews must be labeled as such. Do not export Apple emoji or SF Symbols as standalone brand artwork. [Review rule 4.5.6](https://developer.apple.com/app-store/review/guidelines/#apple-sites-and-services) permits Unicode rendered as emoji in the app and metadata; it does not authorize embedding emoji bitmaps as custom artwork.
+
+The README also includes explicitly labeled UI-candidate previews under [`assets/screenshots/`](../../assets/screenshots/README.md), supplied through the supervisor's October 10 handoff. They show the running native interface with fictional fixtures, without banner/icon marketing artwork or live invitations. Their capture/source details distinguish pending UI work from tested `main`; they must be rechecked after integration and are not final listing assets.
 
 Recommended set:
 

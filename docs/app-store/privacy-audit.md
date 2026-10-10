@@ -1,6 +1,6 @@
 # Privacy Implementation Audit
 
-Audit date: September 24, 2026.
+Audit date: October 10, 2026, against `origin/main` at `d88d9749ddbf087e75346e6fffd0e64f11d7af03` (1.0.4). This describes the audited source; reassess permissions, retained data, and disclosures when the separate notification/activity work is integrated. See [the final release audit](../final-release-readiness.md).
 
 ## Implementation findings
 
@@ -59,7 +59,7 @@ Relevant Apple references:
 
 The claim is accurate for the inspected app code and dependencies:
 
-- no purchase or subscription implementation exists;
+- no purchase or subscription implementation exists; this does not independently prove the live App Store price;
 - no advertising code or SDK exists;
 - no behavioral analytics or third-party telemetry exists;
 - no ATT or IDFA access exists;
