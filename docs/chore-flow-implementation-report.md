@@ -40,7 +40,7 @@ The final UI checks use selected full Xcode and iOS 26.5, unsigned: iPhone 17e, 
 
 ## Accessibility findings and bounded exception
 
-The light-mode audit exposed real insufficient contrast in the existing dashboard subtitle. It and daily supporting text now use the semantic primary color at 70% opacity; Done symbols use primary foreground against their green background.
+The light-mode audit exposed real insufficient contrast in the existing dashboard subtitle. For the current supporting-text and status palette, see [release UI polish](release-ui-polish.md).
 
 Two subsequent findings concern the decorative star avatar, not meaningful text: clipping and contrast of its shading. Both exported element screenshots show the complete star inside its circular background. `AvatarView` already hides this decoration from VoiceOver; the separate member name and status carry meaning. Firstmate authorized a precise, documented exception in `004.msg`, releasing the earlier hold. The test accepts only clipping/contrast on a star labelled `⭐️`, measuring 52 by 52 points, contained within `parent-child-alek`. Description and hit audits, all other elements, and all meaningful chore names/states remain enabled. No avatar, name, or product interaction was removed or recolored to accommodate the audit.
 

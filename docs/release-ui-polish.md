@@ -4,13 +4,13 @@
 
 Earned It uses a warm cream canvas, terracotta navigation accents, and restrained teal, amber, blue, and plum accents. Rounded layered cards use a subtle gradient and outline instead of a flat white field. The palette adapts to dark mode with charcoal surfaces and pale accents. Native navigation, forms, menus, sheets, progress indicators, SF Symbols, and emoji avatars remain the visual foundation.
 
-Parent and child profile headers share a warm introductory card. The child's weekly summary uses a teal surface, finished earned weeks use a success tint, and unfinished weeks use amber. Chore titles occupy their own full-width row above the member controls. Completed and Not Needed chores have distinct tinted surfaces while their text, symbols, and permitted actions retain the existing meanings. Quiet empty days use a leaf symbol with the existing explanatory copy. Pending synchronization has a tinted explanatory panel. Welcome and recovery screens use a consistent accent symbol and native controls.
+Parent and child profile headers share a warm introductory card. The child's current weekly summary uses a teal surface; the previous finished week uses a success tint when earned and amber when not earned. Weekly progress bars use the success tint when earned and the navigation accent otherwise, with a separate status badge retaining the week's status. Chore titles occupy their own full-width row above the member controls. Completed and Not Needed chores have distinct tinted surfaces while their text, symbols, and permitted actions retain the existing meanings. Quiet empty days use a leaf symbol with the existing explanatory copy. Pending synchronization has a tinted explanatory panel. Welcome and recovery screens use a consistent accent symbol and native controls.
 
 ## Shared presentation API
 
 `EarnedIt/Views/Shared/AppTheme.swift` defines `canvas`, `surface`, `inset`, `border`, `secondaryText`, `accent`, `success`, `warning`, `info`, `danger`, and `personal`. These colors are presentation tokens only. `ThemedSurface(tint:cornerRadius:)` supplies a reusable layered surface. `SectionCard(tint:)` wraps content with the shared padding and surface; existing `SectionCard { ... }` calls remain supported. `SectionHeading(title:systemImage:)` pairs a decorative symbol with an accessible heading. `themedListBackground()` retains native list rows on the warm canvas.
 
-The punt/notification lane can use these tokens and surfaces for its new views. Cosmetic changes in `ResponsibilityRow.swift` separate the title from member controls; behavior insertions after the notes should remain intact when the branches are combined. Root styling is a tint modifier and recovery-view presentation. No store, transport, domain, configuration, or release settings are changed in this UI lane.
+Root styling is a tint modifier and recovery-view presentation. This change leaves store, transport, domain, configuration, and release settings unchanged.
 
 ## Accessibility and layout
 
@@ -43,4 +43,4 @@ Task evidence lives under `/Users/jlm429/Documents/gitstuff/firstmate/data/earne
 - Test evidence: `baseline-ui.xcresult` (one baseline flow passed), `unit.xcresult` (383 tests passed), `polish-ui.xcresult` (setup/reset passed and the date-clipping issue reproduced), and `final-ui.xcresult` (both affected flows passed after correction). The setup/reset flow was not repeated because its behavior was unchanged by the subsequent date/glyph refinements.
 - Review artifact: `visual-review.html` and the self-contained `visual-review-portable.html`, exported locally through Lavish. The comparison uses the app palette and was checked in Chrome at desktop and 390-point width with loaded images and no horizontal overflow.
 
-These are engineering review captures, not approved App Store marketing screenshots. The release-readiness lane owns README, metadata, and App Store documentation.
+These are engineering review captures, not approved App Store marketing screenshots. See [release readiness](app-store/release-readiness.md) for the remaining submission checks and [visual assets](app-store/visual-assets.md) for screenshot requirements.
