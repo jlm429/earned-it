@@ -45,6 +45,25 @@ final class SchedulingImprovementsTests: XCTestCase {
         XCTAssertEqual(reopened.allowanceWeek(for: family.hanna.id).accountedCount, 1)
     }
 
+    func testAsNeededActivationDoesNotUseScheduledWeekdayValidation() async throws {
+        let family = try TestFamily()
+        let scheduled = try family.store.saveChore(
+            weekday: .friday, title: "Scheduled Friday", mode: .particular,
+            memberIDs: [family.hanna.id]
+        )
+        let asNeeded = try family.store.saveChore(
+            weekday: .friday, title: "Available Any Day", mode: .particular,
+            memberIDs: [family.hanna.id], schedulingMode: .asNeeded
+        )
+
+        XCTAssertFalse(family.store.dailyList().contains { $0.id == scheduled })
+        try await family.store.makeAsNeededChoreAvailable(choreID: asNeeded)
+
+        let occurrence = try XCTUnwrap(family.store.dailyList().first { $0.id == asNeeded })
+        XCTAssertTrue(occurrence.isAsNeededOccurrence)
+        XCTAssertEqual(occurrence.day, family.store.day)
+    }
+
     func testOccurrenceNotNeededIsNeutralAndFutureRecurrenceRemains() throws {
         let family = try TestFamily()
         let completed = try family.store.saveChore(weekday: .monday, title: "Completed",

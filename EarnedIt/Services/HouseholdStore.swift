@@ -735,6 +735,11 @@ final class HouseholdStore {
         )))
     }
 
+    func makeAsNeededChoreAvailable(choreID: UUID) async throws {
+        try await refreshSharedHistoryBeforeAsNeededMutation()
+        try activateAsNeededChore(choreID: choreID)
+    }
+
     func skipNextAlternatingChild(choreID: UUID) throws {
         try requireParent()
         guard let revision = snapshot.configuration(choreID: choreID, on: day),
@@ -748,6 +753,31 @@ final class HouseholdStore {
             choreID: choreID, revisionID: revision.id, expectedMemberID: owner.id,
             day: day, recordedByMemberID: parent.id
         )))
+    }
+
+    func skipNextAlternatingChildAfterRefreshing(choreID: UUID) async throws {
+        try await refreshSharedHistoryBeforeAsNeededMutation()
+        try skipNextAlternatingChild(choreID: choreID)
+    }
+
+    private func refreshSharedHistoryBeforeAsNeededMutation() async throws {
+        try requireParent()
+        guard session.location != nil else { return }
+        do {
+            try await synchronize()
+        } catch let error as CKError where Self.canContinueAsNeededMutationOffline(after: error) {
+            // The fact journal remains the source of truth while temporarily offline.
+        }
+        try requireParent()
+    }
+
+    private static func canContinueAsNeededMutationOffline(after error: CKError) -> Bool {
+        switch error.code {
+        case .networkFailure, .networkUnavailable, .requestRateLimited, .serviceUnavailable, .zoneBusy:
+            return true
+        default:
+            return false
+        }
     }
 
     func markOccurrenceNotNeeded(choreID: UUID, date: Date,

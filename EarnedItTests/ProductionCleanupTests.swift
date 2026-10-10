@@ -1063,6 +1063,115 @@ final class ProductionCleanupTests: XCTestCase {
         XCTAssertEqual(fixture.guest.dailyList().first { $0.id == chore }?.turnOwnerID, next.id)
     }
 
+    func testStaleParentRefreshesChildCompletionBeforeMakingAlternatingChoreAvailable() async throws {
+        let fixture = try await connectedParentInstallation()
+        let nora = try fixture.family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [fixture.family.hanna.id, fixture.family.alek.id, nora.id],
+            schedulingMode: .asNeeded, firstAlternatingMemberID: fixture.family.hanna.id
+        )
+        let order = try XCTUnwrap(fixture.family.store.snapshot.configuration(
+            choreID: chore, on: fixture.family.store.day
+        )).memberIDs
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        try fixture.family.store.activateAsNeededChore(choreID: chore)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        try fixture.guest.selectProfile(fixture.family.hanna.id)
+        try fixture.guest.setCompletion(
+            choreID: chore, memberID: fixture.family.hanna.id,
+            date: fixture.family.clock.now, state: .done
+        )
+        try await fixture.guest.synchronize()
+
+        fixture.family.move(to: "2026-09-08T16:00:00Z")
+        XCTAssertEqual(fixture.family.store.nextAlternatingOwner(choreID: chore)?.id,
+                       order[0])
+
+        try await fixture.family.store.makeAsNeededChoreAvailable(choreID: chore)
+        XCTAssertEqual(fixture.family.store.nextAlternatingOwner(choreID: chore)?.id,
+                       order[1])
+    }
+
+    func testSkipRefreshesChildCompletionAndSynchronizesAcrossThreeChildInstallations() async throws {
+        let fixture = try await connectedParentInstallation()
+        let nora = try fixture.family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [fixture.family.hanna.id, fixture.family.alek.id, nora.id],
+            schedulingMode: .asNeeded, firstAlternatingMemberID: fixture.family.hanna.id
+        )
+        let order = try XCTUnwrap(fixture.family.store.snapshot.configuration(
+            choreID: chore, on: fixture.family.store.day
+        )).memberIDs
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        try fixture.family.store.activateAsNeededChore(choreID: chore)
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        try fixture.guest.selectProfile(order[0])
+        try fixture.guest.setCompletion(
+            choreID: chore, memberID: order[0], date: fixture.family.clock.now, state: .done
+        )
+        try await fixture.guest.synchronize()
+
+        fixture.family.move(to: "2026-09-08T16:00:00Z")
+        XCTAssertEqual(fixture.family.store.nextAlternatingOwner(choreID: chore)?.id, order[0])
+        try await fixture.family.store.skipNextAlternatingChildAfterRefreshing(choreID: chore)
+        XCTAssertEqual(fixture.family.store.nextAlternatingOwner(choreID: chore)?.id, order[2])
+
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+        XCTAssertEqual(fixture.guest.nextAlternatingOwner(choreID: chore)?.id, order[2])
+        XCTAssertEqual(fixture.family.store.snapshot.alternatingTurnAdvances.filter {
+            $0.choreID == chore
+        }.count, 1)
+    }
+
+    func testOfflineSkipAndMakeAvailableRecoverAfterRelaunchWithoutDuplicateAdvance() async throws {
+        let fixture = try await connectedParentInstallation()
+        let nora = try fixture.family.store.saveMember(name: "Nora", role: .child, avatar: .star)
+        let chore = try fixture.family.store.saveChore(
+            weekday: .monday, title: "Empty Dishwasher", mode: .alternating,
+            memberIDs: [fixture.family.hanna.id, fixture.family.alek.id, nora.id],
+            schedulingMode: .asNeeded, firstAlternatingMemberID: fixture.family.hanna.id
+        )
+        let order = try XCTUnwrap(fixture.family.store.snapshot.configuration(
+            choreID: chore, on: fixture.family.store.day
+        )).memberIDs
+        try await fixture.family.store.synchronize()
+        try await fixture.guest.synchronize()
+
+        fixture.guestTransport.fetchError = CKError(.networkFailure)
+        try await fixture.guest.skipNextAlternatingChildAfterRefreshing(choreID: chore)
+        try await fixture.guest.makeAsNeededChoreAvailable(choreID: chore)
+        XCTAssertEqual(fixture.guest.pendingCount, 2)
+        XCTAssertEqual(fixture.guest.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+
+        let reopened = try HouseholdStore(
+            repository: fixture.guestRepository, transport: fixture.guestTransport,
+            clock: { fixture.family.clock.now }, automaticSync: false
+        )
+        XCTAssertEqual(reopened.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+
+        fixture.guestTransport.fetchError = nil
+        try await reopened.synchronize()
+        try await fixture.family.store.synchronize()
+
+        XCTAssertEqual(reopened.pendingCount, 0)
+        XCTAssertEqual(fixture.family.store.dailyList().first { $0.id == chore }?.turnOwnerID, order[1])
+        XCTAssertEqual(fixture.family.store.snapshot.alternatingTurnAdvances.filter {
+            $0.choreID == chore
+        }.count, 1)
+        XCTAssertEqual(fixture.family.store.snapshot.occurrenceDispositions.filter {
+            $0.choreID == chore && $0.state == .available
+        }.count, 1)
+    }
+
     func testSchedulingModeEditsPreserveAlternatingTurnsAcrossInstallations() async throws {
         let fixture = try await connectedParentInstallation()
         let nora = try fixture.family.store.saveMember(name: "Nora", role: .child, avatar: .star)

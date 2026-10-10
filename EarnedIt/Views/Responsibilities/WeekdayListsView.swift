@@ -33,6 +33,7 @@ private struct AsNeededConfigurationView: View {
     @State private var addingChore = false
     @State private var editing: ChoreRevision?
     @State private var deleting: ChoreRevision?
+    @State private var updatingChoreID: UUID?
 
     private var chores: [ChoreRevision] {
         Set(store.snapshot.revisions.map(\.choreID)).compactMap {
@@ -76,17 +77,34 @@ private struct AsNeededConfigurationView: View {
                                     .accessibilityIdentifier("next-turn-\(chore.title.accessibilitySlug)")
                             }
                             Button("Make Available", systemImage: "plus.circle") {
-                                store.perform { try store.activateAsNeededChore(choreID: chore.choreID) }
+                                guard updatingChoreID == nil else { return }
+                                updatingChoreID = chore.choreID
+                                Task {
+                                    defer { updatingChoreID = nil }
+                                    do { try await store.makeAsNeededChoreAvailable(choreID: chore.choreID) }
+                                    catch { store.errorMessage = error.localizedDescription }
+                                }
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(chore.effectiveDay > store.day || !hasEligibleChildrenToday(chore))
+                            .disabled(updatingChoreID != nil || chore.effectiveDay > store.day
+                                      || !hasEligibleChildrenToday(chore))
                             .accessibilityIdentifier("make-available-\(chore.title.accessibilitySlug)")
                             if chore.mode == .alternating,
                                let next = store.nextAlternatingOwner(choreID: chore.choreID) {
                                 Button("Skip \(next.displayName)", systemImage: "arrow.right.circle") {
-                                    store.perform { try store.skipNextAlternatingChild(choreID: chore.choreID) }
+                                    guard updatingChoreID == nil else { return }
+                                    updatingChoreID = chore.choreID
+                                    Task {
+                                        defer { updatingChoreID = nil }
+                                        do {
+                                            try await store.skipNextAlternatingChildAfterRefreshing(
+                                                choreID: chore.choreID
+                                            )
+                                        } catch { store.errorMessage = error.localizedDescription }
+                                    }
                                 }
                                 .buttonStyle(.bordered)
+                                .disabled(updatingChoreID != nil)
                                 .accessibilityIdentifier("skip-next-\(chore.title.accessibilitySlug)")
                             }
                         }
