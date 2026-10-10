@@ -13,16 +13,20 @@ struct ChildHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                ProfileHeader(
-                    user: child,
-                    title: "Hi, \(child.displayName)!",
-                    subtitle: "A little effort, every day.",
-                    accessibilityIdentifier: "child-profile-header"
-                )
-                SectionCard {
+                SectionCard(tint: AppTheme.accent) {
+                    ProfileHeader(
+                        user: child,
+                        title: "Hi, \(child.displayName)!",
+                        subtitle: "A little effort, every day.",
+                        accessibilityIdentifier: "child-profile-header"
+                    )
+                }
+                SectionCard(tint: AppTheme.success) {
                     VStack(alignment: .leading, spacing: 14) {
                         AllowanceWeekCard(week: current)
-                        Label("\(streak) day streak", systemImage: "flame.fill").font(.subheadline.weight(.semibold))
+                        Label { Text("\(streak) day streak") } icon: {
+                            Image(systemName: "flame.fill").foregroundStyle(AppTheme.accent)
+                        }.font(.subheadline.weight(.semibold))
                         WeekStrip(days: store.weekFacts(for: child.id), today: today, compact: true)
                         NavigationLink { WeeklySummaryView(child: child) } label: {
                             Label("This week & history", systemImage: "calendar").frame(minHeight: 44)
@@ -31,12 +35,12 @@ struct ChildHomeView: View {
                     }
                 }
                 if let previous, !previous.items.isEmpty {
-                    SectionCard {
+                    SectionCard(tint: previous.earned ? AppTheme.success : AppTheme.warning) {
                         VStack(alignment: .leading, spacing: 12) {
                             WeekHeading(week: previous)
                             if previous.earned {
                                 Label { Text("Earned It").foregroundStyle(.primary) } icon: {
-                                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                                    Image(systemName: "checkmark.seal.fill").foregroundStyle(AppTheme.success)
                                 }
                                     .font(.title2.bold())
                                     .accessibilityElement(children: .ignore)
@@ -61,7 +65,7 @@ struct ChildHomeView: View {
                 }
                 if store.snapshot.excuses.contains(where: { $0.memberID == child.id && $0.day == store.day && $0.isExcused }) {
                     Label("Today is excused. It won’t affect your week or streak.", systemImage: "heart.fill")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(AppTheme.info)
                 }
                 SharedDailyList(actor: child, date: today)
                 NavigationLink {
@@ -69,8 +73,8 @@ struct ChildHomeView: View {
                 } label: { Label("Finish yesterday’s items", systemImage: "calendar.badge.clock").frame(minHeight: 44) }
                     .accessibilityIdentifier("yesterday-items")
                 Text("You have the scheduled day and the next calendar day to mark an item. After that, ask your parent for a correction. Dates use your family timezone.")
-                    .font(.footnote).foregroundStyle(.primary.opacity(0.7))
-                SectionCard {
+                    .font(.footnote).foregroundStyle(AppTheme.secondaryText)
+                SectionCard(tint: AppTheme.warning) {
                     let quote = QuoteService.quote(for: today, calendar: store.calendar)
                     VStack(alignment: .leading, spacing: 8) {
                         Label("A thought for today", systemImage: "quote.opening").font(.headline)
@@ -82,7 +86,7 @@ struct ChildHomeView: View {
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(AppTheme.canvas)
         .navigationTitle("Today")
         .refreshable { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }
         .task(id: "\(previous?.id ?? "")/\(previous?.earned ?? false)") {

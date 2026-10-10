@@ -11,7 +11,7 @@ struct WeekStrip: View {
 
     @ViewBuilder
     var body: some View {
-        if dynamicTypeSize.isAccessibilitySize && !compact {
+        if dynamicTypeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(days.enumerated()), id: \.offset) { _, facts in
                     accessibleDay(facts)
@@ -30,7 +30,7 @@ struct WeekStrip: View {
         let status = WeeklyScoringService.dayStatus(facts, today: today, calendar: calendar)
         return HStack(spacing: 12) {
             Image(systemName: status.symbolName)
-                .font(.caption.bold())
+                .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(status.tint)
                 .frame(width: 30, height: 30)
                 .background(status.tint.opacity(0.13), in: Circle())
@@ -39,7 +39,7 @@ struct WeekStrip: View {
                     .font(.caption.weight(.semibold))
                 Text(status.shortLabel)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.secondaryText)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -52,16 +52,16 @@ struct WeekStrip: View {
         return VStack(spacing: 6) {
             Text(facts.date, format: .dateTime.weekday(.narrow))
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.secondaryText)
             Image(systemName: status.symbolName)
-                .font(.caption.bold())
+                .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(status.tint)
                 .frame(width: 30, height: 30)
                 .background(status.tint.opacity(0.13), in: Circle())
             if !compact {
                 Text(status.shortLabel)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.secondaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                     .multilineTextAlignment(.center)

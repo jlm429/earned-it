@@ -191,6 +191,7 @@ struct SectionHeading: View {
             Text(title).foregroundStyle(.primary)
         }
         .font(.title2.bold())
+        .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
 }

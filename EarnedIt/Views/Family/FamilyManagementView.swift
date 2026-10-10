@@ -129,6 +129,7 @@ struct FamilyManagementView: View {
             Section { NavigationLink("Settings") { HouseholdSettingsView() }.accessibilityIdentifier("household-settings") }
         }
         .refreshable { await refreshFamily() }
+        .themedListBackground()
         .navigationTitle("Manage Family")
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
