@@ -217,6 +217,7 @@ struct AlternatingTurnAdvance: Codable, Equatable {
 /// occurrence-aware actions into their legacy chore/day projection.
 struct JournalCapability: Codable, Equatable {
     static let occurrenceAwareChores = 2
+    static let puntApprovals = 3
 
     let minimumVersion: Int
     let recordedByMemberID: UUID
@@ -398,6 +399,8 @@ struct InvitationRevocation: Codable, Equatable {
 }
 
 enum HouseholdFactBody: Codable, Equatable {
+    case puntRequest(PuntRequest)
+    case puntDecision(PuntDecision)
     case household(Household)
     case member(FamilyMember)
     case chore(ChoreRevision)
@@ -458,8 +461,11 @@ struct HouseholdSnapshot: Equatable {
 
     var requiredJournalCapability: Int {
         orderedFacts.compactMap { fact in
-            guard case .journalCapability(let capability) = fact.body else { return nil }
-            return capability.minimumVersion
+            switch fact.body {
+            case .journalCapability(let capability): return capability.minimumVersion
+            case .puntRequest, .puntDecision: return JournalCapability.puntApprovals
+            default: return nil
+            }
         }.max() ?? 1
     }
 
@@ -478,6 +484,7 @@ struct HouseholdSnapshot: Equatable {
         orderedFacts = facts.sorted(by: HouseholdFact.precedes)
         for fact in orderedFacts {
             switch fact.body {
+            case .puntRequest, .puntDecision: break
             case .household(let value):
                 household = value
                 if creatorMemberID == nil { creatorMemberID = fact.authorMemberID }

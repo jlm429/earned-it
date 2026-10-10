@@ -10,6 +10,24 @@ final class ShareAcceptance {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        if BackgroundActivityDelivery.isEnabled { application.registerForRemoteNotifications() }
+        return true
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        let completion = BackgroundActivityCompletion(completionHandler)
+        let operation = Task { @MainActor in
+            completion.finish(await BackgroundActivityDelivery.shared.receive(userInfo))
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(25))
+            operation.cancel()
+            completion.finish(.failed)
+        }
+    }
+
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         if let metadata = options.cloudKitShareMetadata { ShareAcceptance.shared.pending = metadata }

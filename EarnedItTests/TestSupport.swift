@@ -111,6 +111,10 @@ final class TestCloudServer {
 
 @MainActor
 final class TestTransport: HouseholdTransport {
+    private(set) var activitySubscriptions: [CloudLocation] = []
+    func prepareActivitySubscription(in location: CloudLocation) async throws {
+        activitySubscriptions.append(location)
+    }
     let server: TestCloudServer
     let familyTransitionDiagnostics: FamilyTransitionDiagnostics
     var account: String {

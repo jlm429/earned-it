@@ -707,6 +707,21 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         return facts.values.sorted(by: HouseholdFact.precedes)
     }
 
+    func prepareActivitySubscription(in location: CloudLocation) async throws {
+        _ = try await database(for: location).save(Self.activitySubscription())
+    }
+
+    static func activitySubscription() -> CKDatabaseSubscription {
+        let subscription = CKDatabaseSubscription(subscriptionID: "earned-it-household-activity-v1")
+        subscription.recordType = "HouseholdFact"
+        let info = CKSubscription.NotificationInfo()
+        info.shouldSendContentAvailable = true
+        subscription.notificationInfo = info
+        // The same stable ID is saved in each account database. Saving again repairs
+        // removed subscriptions and requires no cache that could outlive account access.
+        return subscription
+    }
+
     func upload(_ facts: [HouseholdFact], to location: CloudLocation) async throws {
         let stage: FamilyTransitionDiagnosticStage = facts.contains { fact in
             if case .invitation = fact.body { return true }
@@ -1391,8 +1406,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
               let payload = record["payload"] as? Data else {
             throw HouseholdError.malformedData
         }
-        guard formatVersion <= 2 else { throw HouseholdError.updateRequired }
-        guard formatVersion == 1 || formatVersion == 2 else { throw HouseholdError.malformedData }
+        guard formatVersion <= 3 else { throw HouseholdError.updateRequired }
+        guard (1...3).contains(formatVersion) else { throw HouseholdError.malformedData }
         let fact = try JSONDecoder().decode(HouseholdFact.self, from: payload)
         guard record.recordID.recordName == fact.id.uuidString else { throw HouseholdError.malformedData }
         return fact
@@ -1411,6 +1426,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private static func journalFormatVersion(for body: HouseholdFactBody) -> Int {
         switch body {
+        case .puntRequest, .puntDecision: return 3
         case .journalCapability, .asNeededOccurrence, .asNeededOccurrenceCompletion,
                 .asNeededOccurrenceResolution, .asNeededTurnAdvance,
                 .scheduledOccurrenceRestoration, .occurrenceAwareChoreDeletion:

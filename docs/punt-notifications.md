@@ -1,0 +1,49 @@
+# Punt approvals and family activity
+
+## User-visible behavior
+
+The child whose turn it is can request a punt from today's alternating chore row. They choose another active child in that chore's saved rotation. They remain responsible while approval is pending. The recipient opens Activity and accepts or declines. The requester can cancel a pending request. Pending requests appear first in Activity and survive relaunch and offline use. Mark Read changes only this installation's unread indicator; it never dismisses a pending request or makes a decision.
+
+An approved punt changes only that occurrence's required child and allowance/streak credit. It leaves chore identity, recurrence, participant order, and the original rotation slot intact. Scheduled future dates follow the original rotation. An As Needed completion consumes the original child's slot, even when the recipient completes it; withdrawal consumes no slot. Each same-day activation has its own identity and approval boundary. One approved punt is allowed per occurrence. Declined or cancelled requests can be retried while that occurrence remains unresolved. This does not permit arbitrary transfers or changes to future turns.
+
+Only today's unresolved scheduled or activated As Needed alternating occurrence is eligible. Requests expire at the next household civil midnight. Completion, Not Needed, withdrawal, deletion, or a displaced revision prevents later approval. Ineligible children cannot receive a punt. The requester cannot accept their own request and parents cannot approve it for a child. Accepted ownership remains in that date's history after midnight; configuration edits cannot rewrite it.
+
+Once an occurrence has been accounted for or disposed, reversing its completion or restoring its requirement does not reopen the punt boundary. The original approval facts stay auditable and any existing approved owner stays attached to that occurrence. A new As Needed activation gets a fresh boundary.
+
+## Facts, permissions, and conflicts
+
+`PuntRequest` references chore, exact revision, household civil day, optional stable As Needed occurrence ID, requester, and recipient. `PuntDecision` references the exact request fact and scope, deciding child, civil day, and accepted/declined/cancelled action. Immutable facts use the existing SwiftData journal and household private/shared CloudKit zone. No backend, database, record type, or record field is introduced.
+
+`HouseholdStore` and `PermissionService` check selected invited profile, write access, current responsibility, eligibility, and pending state. Projection replays Lamport sequence and UUID order. Duplicate decisions cannot change decided requests. A stale request cannot acquire another occurrence. A completion preceding a delayed decision closes the approval boundary. Concurrent offline decisions resolve deterministically; an offline result can change after reconciliation. A former-owner completion arriving after an accepted transfer remains audit-only and provides no active credit. Source history is never deleted to resolve conflicts.
+
+Punt facts use `HouseholdFact` format version 3 and require journal capability 3. Older clients fail safely rather than changing newer ownership. Versions 1 and 2 remain readable. A punt fact establishes the newer-fact boundary for legacy As Needed occurrences while preserving their original activation and rotation interpretation. All household devices should update before using punts.
+
+These are app-level permission checks. CloudKit read/write participants retain broader transport access; role restrictions are not server-enforced. Existing exact invitation claims, account membership, participant management, and account-generation validation remain unchanged.
+
+## Communication coverage and privacy
+
+Durable activity derives from source facts. Children receive parent chore assignments/edits and available/restored occurrences, including every eligible alternating participant when a parent makes a chore available. An inactive As Needed definition does not request work. Activity also covers Not Needed, withdrawal, As Needed turn skips, chore removal/archive, parent completion corrections, excuses, allowance changes, and existing profile access requests/approvals/removals. Child completion updates appear for parents. Punt recipients receive requests/cancellations; requesters receive accept/decline decisions. Native invitation sharing still delivers invitations because an unjoined recipient has no authorized journal yet.
+
+The bell opens Activity with an unread count. Every pending punt plus the latest 50 other entries is visible. All source facts remain in the journal. Read and alert receipts are local and keyed by household, member, and fact identity. No analytics, contacts access, messages service, or third-party SDK is added.
+
+Alerts are opt-in from Activity. Denial leaves the feed and decisions usable. Denied or not-yet-authorized arrivals do not replay when permission is enabled later. One generic summary alert covers a batch of incoming activity, including corrections to earlier dates. Lock-screen content contains no family or child names, chore titles, allowance amounts, or approval details. A tap opens Activity after normal profile routing. Profile changes and blocked/unavailable family access clear system alerts. Scheduling checks current authorization, following [Apple's permission guidance](https://developer.apple.com/documentation/usernotifications/asking-permission-to-use-notifications).
+
+## Background delivery prerequisites
+
+Gated code prepares APNs registration, an idempotent `CKDatabaseSubscription` for existing `HouseholdFact` records in the owner's private or invitee's shared database, silent change hints, a validated household fetch, then permission-controlled local alerts. Database subscriptions support shared databases and may coalesce changes. Record-zone subscriptions cannot be saved in a shared database. See [Apple's database subscription documentation](https://developer.apple.com/documentation/cloudkit/ckdatabasesubscription).
+
+The gate checks the built app's `UIBackgroundModes` for `remote-notification`. That mode is **not enabled in this change**. No signing identity, entitlement, provisioning profile, container, or production schema is changed, and agent tests create no production subscriptions. Until the release owner approves prerequisites, cross-device alerts appear after launch/foreground/manual sync. This does not satisfy a background-delivery release claim.
+
+The concrete proposal adds `UIBackgroundModes = [remote-notification]` to Configuration/Info.plist and requires confirmation of the signed release's correct `aps-environment` entitlement and APNs-capable provisioning. Existing iCloud configuration alone does not prove the final signature. No new record fields/types are needed. Verify subscription configuration in development; any necessary production promotion remains human-approved.
+
+A 25-second watchdog bounds background completion. Apple may delay, throttle, coalesce, or drop pushes. Force quit and disabled Background App Refresh can prevent wake. Durable Activity still syncs on launch, foreground, or refresh. Approval never depends on push delivery. See [Apple's background update documentation](https://developer.apple.com/documentation/usernotifications/pushing-background-updates-to-your-app).
+
+## Verification and remaining evidence
+
+Domain/transport tests cover today-only ownership and credit, original-slot As Needed rotation, distinct occurrence IDs, pending relaunch and expiry, decline/cancel/retry, completion before stale approval, duplicate decisions, deletion/withdrawal/Not Needed, exact invited profiles, offline requests followed by multi-account sync, denied alerts, relaunch deduplication, profile switching during alert delivery, all-eligible availability targeting, Codable round trips, and native subscription/notification object configuration. The full unit suite passed 398 tests, including 15 focused punt/notification tests.
+
+Three focused UI flows passed: request/relaunch/approval/recipient completion; decline and denied-alert usefulness at largest text; and the existing confirmed dedicated-test-store reset flow. The UI-test store uses a disabled alert double; it verifies useful denial behavior without proving the native iOS permission prompt. No reset utility is added. Existing fixtures and reset controls remain DEBUG-only and limited to the dedicated UI-test store.
+
+Verification uses an isolated iPhone 17 simulator with iOS 26.5 and task-specific derived data. The Release simulator build passes with code signing disabled. This build verifies compilation, not release signing or APNs eligibility.
+
+Simulator and transport doubles cannot prove APNs registration or signed two-account CloudKit delivery. Test an approved signed build with an owner and independently invited child accounts: background wake and visible alert, exact recipient, requester decision alert, denied permission, offline/reconnect convergence, account switch/revoked access, relaunch, Background App Refresh off, and force quit. Check lock-screen privacy. Preserve evidence limits in `docs/production-invitation-crash/`, `docs/production-invitation-package/`, and `docs/production-membership-recovery/`. Agent tests must never create live invitations or mutate production data.

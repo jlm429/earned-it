@@ -631,6 +631,81 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot("as-needed-completed-after-relaunch")
     }
 
+    func testPuntApprovalRelaunchAndRecipientCompletion() {
+        preparePuntChore()
+        tap("switch-user")
+        tap("user-card-hanna")
+        sendUIPuntRequest()
+        XCTAssertTrue(app.buttons["cancel-punt-punt-dishwasher"].waitForExistence(timeout: 5))
+        relaunch()
+        XCTAssertTrue(app.buttons["cancel-punt-punt-dishwasher"].waitForExistence(timeout: 5))
+        tap("switch-user")
+        tap("user-card-alek")
+        XCTAssertFalse(asNeededStateButtons("state-punt-dishwasher-alek").firstMatch.exists)
+        tap("family-activity-button")
+        XCTAssertTrue(screen("family-activity").waitForExistence(timeout: 5))
+        tap("accept-punt")
+        XCTAssertFalse(app.buttons["accept-punt"].exists)
+        keepScreenshot("punt-accepted-activity")
+        tap("Done")
+        let state = asNeededStateButton("state-punt-dishwasher-alek", state: "Unmarked")
+        reveal(state)
+        state.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-punt-dishwasher"], containing: "Complete"))
+        relaunch()
+        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-punt-dishwasher"], containing: "Complete"))
+        keepScreenshot("punt-recipient-done-after-relaunch")
+    }
+
+    func testPuntDeclineAndDeniedAlertsRemainUsefulAtLargeType() throws {
+        preparePuntChore()
+        tap("switch-user")
+        tap("user-card-hanna")
+        sendUIPuntRequest()
+        tap("switch-user")
+        tap("user-card-alek")
+        relaunch(largeType: true)
+        tap("family-activity-button")
+        XCTAssertTrue(app.staticTexts["activity-alerts-denied"].waitForExistence(timeout: 5))
+        tap("decline-punt")
+        keepScreenshot("punt-declined-denied-alerts-largest-text")
+        tap("Done")
+        tap("switch-user")
+        tap("user-card-hanna")
+        XCTAssertTrue(asNeededStateButton("state-punt-dishwasher-hanna", state: "Unmarked").waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["cancel-punt-punt-dishwasher"].exists)
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
+    private func preparePuntChore() {
+        createFamily()
+        addChild("Hanna")
+        addChild("Alek")
+        tap("finish-setup")
+        tap("weekday-lists-link")
+        tap("as-needed-chores")
+        tap("add-as-needed-chore")
+        fill("responsibility-title", with: "Punt dishwasher")
+        tap("chore-requirement")
+        tap("Alternate / take turns")
+        reveal(app.switches["eligible-hanna"])
+        app.switches["eligible-hanna"].switches.firstMatch.tap()
+        reveal(app.switches["eligible-alek"])
+        app.switches["eligible-alek"].switches.firstMatch.tap()
+        tap("alternating-first-child")
+        tap("Hanna")
+        tap("save-responsibility")
+        tap("make-available-punt-dishwasher")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+    }
+
+    private func sendUIPuntRequest() {
+        tap("request-punt-punt-dishwasher")
+        tap("Ask Alek")
+        tap("Send Punt Request")
+    }
+
     func testConvertingChoreToAlternatingRequiresFirstChild() {
         createFamily()
         addChild("Hanna")

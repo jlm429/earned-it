@@ -1,6 +1,7 @@
 import Foundation
 
 enum HouseholdError: LocalizedError, Equatable {
+    case puntUnavailable
     case invalidAllowance, completionLocked
     case permission, invalidName, duplicateName, missingChildren, invalidAssignment, unavailableDay
     case noHousehold, alreadyHasHousehold, cloudUnavailable, wrongAccount, invitation, readOnly
@@ -10,6 +11,7 @@ enum HouseholdError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .puntUnavailable: "That punt is no longer available. Refresh Activity to check today's responsibility."
         case .invalidAllowance: "Enter an amount from 0 to 999,999 using the currency’s decimal places, or leave it blank. Do not use grouping separators."
         case .completionLocked: "You can mark an item on its scheduled day and the following day in your family timezone. After that, check in with your parent for a correction."
         case .permission: "This profile does not have permission for that change."
@@ -43,6 +45,16 @@ enum HouseholdError: LocalizedError, Equatable {
 }
 
 enum PermissionService {
+    static func canRequestPunt(actor: FamilyMember, chore: DailyChore, today: CivilDay) -> Bool {
+        actor.role == .child && actor.id == chore.turnOwnerID && chore.day == today
+            && chore.configuration.mode == .alternating && chore.isActiveOccurrence
+            && chore.isActionableOccurrence && !chore.isDeleted && !chore.isNotNeeded
+            && chore.contributions.allSatisfy { !$0.state.isAccountedFor }
+    }
+
+    static func canDecidePunt(actor: FamilyMember, request: PuntRequest, kind: PuntDecisionKind) -> Bool {
+        actor.role == .child && actor.id == (kind == .cancelled ? request.requesterID : request.recipientID)
+    }
     static func availableProfiles(snapshot: HouseholdSnapshot, session: DeviceSession, day: CivilDay) -> [FamilyMember] {
         guard let household = snapshot.household else { return [] }
         let hasCreatorAccess = household.creatorDeviceID == session.deviceID

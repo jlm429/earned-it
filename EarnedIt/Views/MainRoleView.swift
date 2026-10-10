@@ -4,6 +4,7 @@ struct MainRoleView: View {
     @Environment(HouseholdStore.self) private var store
     let user: FamilyMember
     let today: Date
+    @State private var activityNavigation = ActivityNavigation.shared
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,13 @@ struct MainRoleView: View {
                     .accessibilityIdentifier("switch-user")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { activityNavigation.isPresented = true } label: {
+                        Label("Activity, \(store.unreadActivityCount) unread", systemImage: "bell.badge")
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityIdentifier("family-activity-button")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         NavigationLink {
                             HouseholdSettingsView()
@@ -39,6 +47,7 @@ struct MainRoleView: View {
                     .accessibilityIdentifier("about-menu")
                 }
             }
+            .sheet(isPresented: $activityNavigation.isPresented) { FamilyActivityView() }
         }
     }
 }
