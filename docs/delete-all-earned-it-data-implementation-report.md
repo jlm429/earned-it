@@ -88,7 +88,7 @@ The available `cktool` installation was used only for a read-only authentication
 
 ### Current Production verification
 
-On October 10, 2026, the captain manually verified in CloudKit Console that the Production public database for `iCloud.com.jlm429.EarnedIt` contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String. The verified security roles are World Read, iCloud Create, and Creator Write. This closes the missing-record-type and creator-write-rule concern from the earlier trace. The focused interrupted-deletion recovery fix requires no schema change or deployment.
+On October 10, 2026, the captain manually verified in CloudKit Console that the Production public database for `iCloud.com.jlm429.EarnedIt` contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String. This closes the missing-record-type concern from the earlier trace. The observed security roles are World Read, iCloud Create, and Creator Write. World Read conflicts with the required policy that public unauthenticated access remain disabled, so security-role compliance remains open for an authorized human to correct and verify before release. The focused interrupted-deletion recovery fix requires no record-type or field deployment.
 
 ### Captain action in CloudKit Console
 
@@ -132,7 +132,7 @@ The focused recovery UI flows verify that transient access loss remains a reconn
 
 ## Real-device captain procedure
 
-The Production lifecycle type, fields, and security roles are verified. Complete the signed two-account checks below before relying on the new reset behavior in Production.
+The Production lifecycle type and fields are verified. Correct and verify the security roles as described above, then complete the signed two-account checks below before relying on the new reset behavior in Production.
 
 1. On the creating parent's device, use Settings, `Delete All Data`, and wait for completion. Confirm Welcome appears and remains after relaunch.
 2. Bring an existing child device online. Confirm `Family No Longer Available`, choose `Reset App`, and confirm Welcome remains after relaunch.
