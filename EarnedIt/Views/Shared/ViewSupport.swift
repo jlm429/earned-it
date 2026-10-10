@@ -107,16 +107,26 @@ struct ProfileHeader: View {
     let title: String
     let subtitle: String
     var accessibilityIdentifier: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                AvatarView(user: user, size: 58)
-                titleStack
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                AvatarView(user: user, size: 58)
-                titleStack
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    AvatarView(user: user, size: 58)
+                    titleStack
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        AvatarView(user: user, size: 58)
+                        titleStack
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        AvatarView(user: user, size: 58)
+                        titleStack
+                    }
+                }
             }
         }
         .accessibilityElement(children: .combine)
