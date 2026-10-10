@@ -16,6 +16,8 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 - Provides parent and child roles with appropriate controls.
 - Supports recurring weekday chores and as-needed chores.
 - Assigns chores to every child, a particular child, or alternating children.
+- Lets children request an approved punt of today's alternating turn.
+- Keeps chore requests and family updates in Activity, with optional alerts.
 - Lets children mark their own work while parents manage the family.
 - Shows weekly progress and streaks.
 - Optionally tracks weekly allowance eligibility without moving money.
@@ -26,6 +28,8 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 A parent creates the family, adds children, and sets up chores. They can invite another parent or a child through iCloud, and each person sees the profile and controls intended for them.
 
 Children check their list and mark chores complete. Parents manage the family name and assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
+
+For a punt, choose **Request a Punt** on today's alternating chore and select a sibling. The sibling accepts or declines in **Activity**, opened from the bell. Alerts can be enabled from Activity. See the [punt and activity guide](docs/punt-notifications.md) for eligibility, responsibility, privacy, and delivery limits.
 
 ## Privacy
 
