@@ -4390,7 +4390,8 @@ final class MembershipRecoveryTests: XCTestCase {
 
             do {
                 try await replacement.reconcileAccountMembershipLock()
-                XCTFail("Only authenticated terminal deletion may complete cleanup")
+                XCTAssertEqual(condition, 1, "Only the authenticated deleting owner may offer finalization")
+                XCTAssertTrue(replacement.canFinishRecoveredFamilyDeletion)
             } catch {
                 if condition == 3 || condition == 4 || condition == 7 {
                     XCTAssertEqual(error as? HouseholdError, .accountMembershipConflict)
@@ -4399,7 +4400,7 @@ final class MembershipRecoveryTests: XCTestCase {
 
             XCTAssertEqual(server.accountMembershipLocks["owner"], lock)
             XCTAssertFalse(replacement.hasFamilyDeletionNotice)
-            XCTAssertEqual(replacement.canReleaseStaleOwnerMembership, [0, 1, 2, 5, 6].contains(condition))
+            XCTAssertEqual(replacement.canReleaseStaleOwnerMembership, [0, 2, 5, 6].contains(condition))
         }
     }
 

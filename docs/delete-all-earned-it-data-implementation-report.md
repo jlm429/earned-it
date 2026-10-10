@@ -92,7 +92,7 @@ On October 10, 2026, the captain manually verified in CloudKit Console that the 
 
 ### Remaining captain action in CloudKit Console
 
-In Apple's CloudKit Console for the Production public database of `iCloud.com.jlm429.EarnedIt`, an authorized human must disable World Read while retaining authenticated iCloud read and create access plus creator write access. Keep deterministic record-name lookup available. The app does not query lifecycle records during account cleanup, so no app-field query index is required by current code. After the change, verify the security roles and then run the signed two-account procedure below. No record-type or field deployment is required for this focused recovery fix, and no one-off Production data record should be created.
+First prove signed Development former-participant access to both family and claim-revocation authorities under explicit Authenticated Read/Create and Creator Write with no World permissions. Only after that proof may an authorized human change those roles in Apple's CloudKit Console for the Production public database of `iCloud.com.jlm429.EarnedIt`. Keep deterministic record-name lookup available. The app does not query lifecycle records during account cleanup, so no app-field query index is required by current code. After the human change, verify the roles and perform bounded signed Production checks. The previously reported roles have not been independently verified by this implementation. No record-type or field deployment is required for this focused recovery fix, and no one-off Production data record should be created.
 
 Apple documents schema inspection and editing at [Inspecting and editing an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/inspecting-and-editing-an-icloud-container-s-schema) and deployment at [Deploying an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/deploying-an-icloud-container-s-schema).
 
@@ -126,7 +126,7 @@ The focused recovery UI flows verify that transient access loss remains a reconn
 
 ## Real-device captain procedure
 
-The Production lifecycle type and fields are verified. Correct and verify the security roles as described above, then complete the signed two-account checks below before relying on the new reset behavior in Production.
+The Production lifecycle type and fields were human-reported, not independently verified by the agent. Complete the signed Development former-participant checks before a human Production role change, then bounded signed Production checks before relying on this behavior.
 
 1. On the creating parent's device, use Settings, `Delete All Data`, and wait for completion. Confirm Welcome appears and remains after relaunch.
 2. Bring an existing child device online. Confirm `Family No Longer Available`, choose `Reset App`, and confirm Welcome remains after relaunch.
@@ -143,3 +143,13 @@ Validation used an iPhone 17 Pro simulator and an iPad Pro 13-inch simulator:
 - Release iPad simulator build: succeeded. Its app metadata declares device families 1 and 2. Release device-family metadata, build-number semantics, and App Store profile entitlement semantics passed their repository validation scripts.
 
 No signed two-account Production deletion was run. The captain will perform the first real account cleanup only through the completed UI. The no-mistakes delivery report will be added when Firstmate requests the shipping gate.
+
+## Recovery after owner reinstall during deletion
+
+A local pending-deletion receipt cannot survive iOS Delete App. If deletion already removed the exact owner zone but left the authority `deleting`, the original account now recovers an empty `Finish Deleting Your Family` screen with `Finish Deleting Family` and reconnect actions. It requires the surviving exact owner private lock and creator-authenticated existing authority, checks stable account/generation and exact zone absence, publishes `deleted`, conditionally releases only that old lock, and clears local state. It refuses missing/foreign/active authority, changed membership generations, another account and present zones. A prior released owner lock with the same deleting generation can finalize without another release. Existing child terminal-proof requirements remain unchanged.
+
+Focused regression covers reinstall, offline child reset and fresh reinvite, interrupted finalization/release/local cleanup, account switches including switch-away-and-back, stale attempts and replacement families, non-owner binding, missing/foreign authority, present zones, idempotence, and prevention of the account-wide reset bypass. The existing pending-deletion native UI flow also exercises the recovered empty-owner screen at largest Dynamic Type, an enabled 44-point retry, and error retention using a DEBUG-only synthetic fixture. Simulator has no real CloudKit transport; these checks do not replace signed account testing.
+
+Signed acceptance must distinguish OS uninstall from household deletion: uninstall A alone leaves B's cloud family active; same-account A then B reinstall recovers their exact profiles. In-app deletion by A while B is offline must finish before B can receive authenticated deletion and confirm Reset App. Test retained-receipt interruption and separately approved Development uninstall/reinstall in the zone-absent/deleting window. Verify changed accounts/generations refuse cleanup, old links cannot restore the deleted family, completed-reset reinstall may ask for reset again without restoring facts, and a fresh family uses new identities. Do not perform a destructive Production test until the lifecycle fix is included in the tested release candidate and the required signed environment evidence is available.
+
+The implementation-pass focused verification on the dedicated synthetic iPhone 17 iOS 26.5 Simulator passed 217 lifecycle unit tests and the extended pending/recovered-owner UI flow (1 test), with zero failures. Signed CloudKit and Production roles remain unverified. Earlier diagnostic assertion failures and the provisional existing child text-clipping accessibility result are retained in the independent task report; neither is silently converted into signed-device evidence.

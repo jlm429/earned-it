@@ -356,7 +356,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertEqual(app.textFields["family-name"].value as? String, "Renamed Family")
     }
 
-    func testPendingFamilyDeletionOffersFinishActionAfterRelaunch() {
+    func testPendingFamilyDeletionOffersFinishActionAfterRelaunch() throws {
         app.terminate()
         app.launchArguments = [
             "--ui-test-store",
@@ -373,6 +373,26 @@ final class EarnedItUITests: XCTestCase {
         app.launch()
 
         assertFinishDeletingAction()
+
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-recovered-owner-deletion",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        let recovery = screen("owner-deletion-recovery-required")
+        XCTAssertTrue(recovery.waitForExistence(timeout: 5))
+        let finish = app.buttons["retry-delete-family"]
+        reveal(finish)
+        XCTAssertTrue(finish.isEnabled)
+        XCTAssertGreaterThanOrEqual(finish.frame.height, 44)
+        XCTAssertFalse(app.buttons["release-stale-owner-membership"].exists)
+        XCTAssertFalse(app.buttons["delete-all-earned-it-data"].exists)
+        finish.tap()
+        XCTAssertTrue(app.alerts["Unable to Update"].waitForExistence(timeout: 5))
+        app.alerts["Unable to Update"].buttons["OK"].tap()
+        XCTAssertTrue(recovery.exists)
+        XCTAssertTrue(finish.isEnabled)
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion])
+        keepScreenshot("reinstalled-owner-finish-deletion-largest-text")
     }
 
     func testPrivacyAndSupportLinksRemainAvailableFromFirstRunThroughParentUse() {
