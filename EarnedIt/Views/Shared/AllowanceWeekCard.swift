@@ -7,9 +7,10 @@ struct WeekHeading: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(week.isFinished ? "Finished week" : "Current week")
-                .font(.caption.weight(.semibold)).foregroundStyle(.primary.opacity(0.7))
+                .font(.caption.weight(.semibold)).foregroundStyle(AppTheme.secondaryText)
             Text(dateRange)
                 .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("Week of \(label(week.start)) through \(label(week.end))")
         }
     }
@@ -36,20 +37,19 @@ struct WeekHeading: View {
 }
 
 struct AllowanceWeekCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let week: AllowanceWeek
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WeekHeading(week: week)
-            Label(
-                week.amount.map { "\($0.formatted()) weekly allowance" } ?? "Allowance not set",
-                systemImage: "banknote"
-            )
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(week.amount == nil ? .secondary : .primary)
+            allowanceSummary
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(week.amount == nil ? AppTheme.secondaryText : Color.primary)
+            .fixedSize(horizontal: false, vertical: true)
             if week.earned {
                 Label { Text("Earned It").foregroundStyle(.primary) } icon: {
-                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(AppTheme.success)
                 }
                     .font(.title2.bold())
                     .accessibilityElement(children: .ignore)
@@ -63,7 +63,7 @@ struct AllowanceWeekCard: View {
                 if !week.missing.isEmpty {
                     Label("\(week.missing.count) missing \(week.missing.count == 1 ? "item" : "items")", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(AppTheme.warning)
                 }
             }
             if !week.items.isEmpty {
@@ -75,7 +75,7 @@ struct AllowanceWeekCard: View {
                     VStack(alignment: .leading, spacing: 8) { timingLabels }
                 }
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.secondaryText)
             }
             if !week.items.isEmpty {
                 DisclosureGroup {
@@ -83,13 +83,24 @@ struct AllowanceWeekCard: View {
                         .padding(.top, 4)
                 } label: {
                     Label("How weekly progress works", systemImage: "info.circle")
+                        .frame(minHeight: 44)
                 }
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.secondaryText)
                 .accessibilityIdentifier("weekly-progress-details")
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var allowanceSummary: some View {
+        let description = week.amount.map { "\($0.formatted()) weekly allowance" } ?? "Allowance not set"
+        if dynamicTypeSize.isAccessibilitySize {
+            Text(description)
+        } else {
+            Label(description, systemImage: "banknote")
+        }
     }
 
     @ViewBuilder
@@ -115,7 +126,7 @@ struct WeeklyProgressBar: View {
                 progressLabel
             }
             ProgressView(value: Double(week.accountedCount), total: Double(max(week.items.count, 1)))
-                .tint(week.earned ? .green : week.status.tint)
+                .tint(week.earned ? AppTheme.success : AppTheme.accent)
         }
         .font(.subheadline.weight(.medium))
         .accessibilityElement(children: .ignore)
@@ -129,7 +140,7 @@ struct WeeklyProgressBar: View {
 
     private var percentageLabel: some View {
         Text(progressPercentage, format: .percent.precision(.fractionLength(0)))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(AppTheme.secondaryText)
     }
 
     private var progressPercentage: Double {
@@ -150,7 +161,7 @@ struct WeeklyItemsView: View {
             itemGroup("Scheduled later", items: week.scheduled)
             if !week.missing.isEmpty {
                 Text("You can mark an item on its scheduled day and the following calendar day in the family timezone. After that, only a parent can correct it.")
-                    .font(.footnote).foregroundStyle(.primary.opacity(0.7))
+                    .font(.footnote).foregroundStyle(AppTheme.secondaryText)
             }
         }
     }
@@ -167,7 +178,7 @@ struct WeeklyItemsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title).foregroundStyle(.primary)
                             Text(item.day.date(in: store.calendar), format: .dateTime.weekday().month().day().year())
-                                .font(.caption).foregroundStyle(.primary.opacity(0.7))
+                                .font(.caption).foregroundStyle(AppTheme.secondaryText)
                         }
                         Spacer(minLength: 8)
                         Image(systemName: item.day > week.today ? "calendar" : "chevron.right").foregroundStyle(Color.accentColor)
@@ -198,12 +209,14 @@ struct DatedChoresView: View {
                         .font(.subheadline).accessibilityIdentifier("completion-cutoff")
                 } else {
                     Text("Corrections update this child’s weekly result, including finished weeks.")
-                        .font(.subheadline).foregroundStyle(.primary.opacity(0.7))
+                        .font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }
                 SharedDailyList(actor: actor, date: day.date(in: store.calendar))
             }.padding()
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(AppTheme.canvas)
         .navigationTitle("Day’s Items")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -235,14 +248,15 @@ struct AllowanceEditorView: View {
                     TextField("Amount (optional)", text: $text)
                         .keyboardType(.decimalPad).accessibilityIdentifier("allowance-amount")
                     Text("Leave blank for not set. Use up to \(AllowanceAmount.fractionDigits(for: currencyCode)) decimal places, without grouping separators.")
-                        .font(.footnote).foregroundStyle(.primary.opacity(0.7))
+                        .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                 }
                 Section {
                     Text("Changes apply to the current week and future weeks. Finished weeks keep their previous amount.")
                     Text("Earned It tracks allowance eligibility. It does not record payments or transfer money.")
-                        .foregroundStyle(.primary.opacity(0.7))
+                        .foregroundStyle(AppTheme.secondaryText)
                 }
             }
+            .themedListBackground()
             .navigationTitle("Weekly Allowance")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

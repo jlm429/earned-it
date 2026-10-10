@@ -601,6 +601,28 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         }
     }
 
+    func finalizeRecoveredFamilyDeletion(expectedLock: AccountMembershipLock,
+                                         expectedParticipantID: String,
+                                         expectedAccountGeneration: UInt64) async throws {
+        _ = try await updateFamilyLifecycleAuthority(
+            householdID: expectedLock.householdID,
+            expectedParticipantID: expectedParticipantID,
+            stage: .lifecycleDeletionPublish,
+            validateRecovery: {
+                try await self.requireRecoveredOwnerDeletion(
+                    expectedLock: expectedLock,
+                    expectedParticipantID: expectedParticipantID,
+                    expectedAccountGeneration: expectedAccountGeneration
+                )
+            }
+        ) { existing in
+            switch existing {
+            case .deleting, .deleted: return .deleted
+            case .active, nil: throw HouseholdError.accountMembershipConflict
+            }
+        }
+    }
+
     func familyLifecycleState(householdID: UUID, ownerAuthorityBinding: String,
                               expectedParticipantID: String) async throws -> FamilyLifecycleState? {
         let expectedGeneration = accountGeneration
@@ -1457,6 +1479,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         recordID requestedRecordID: CKRecord.ID? = nil,
         expectedParticipantID: String,
         stage: FamilyTransitionDiagnosticStage,
+        validateRecovery: (() async throws -> Void)? = nil,
         transition: (FamilyLifecycleState?) throws -> FamilyLifecycleState
     ) async throws -> FamilyLifecycleState {
         let expectedGeneration = accountGeneration
@@ -1467,6 +1490,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
         do {
             for attempt in 1...4 {
                 try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                try await validateRecovery?()
                 let existingRecord: CKRecord?
                 let existingState: FamilyLifecycleState?
                 do {
@@ -1493,6 +1517,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                     existingRecord = nil
                     existingState = nil
                 }
+                try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                try await validateRecovery?()
                 let next = try transition(existingState)
                 if next == existingState {
                     try await requireAccount(expectedParticipantID, generation: expectedGeneration)
@@ -1505,6 +1531,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                 record["formatVersion"] = 1 as CKRecordValue
                 record["state"] = next.rawValue as CKRecordValue
                 do {
+                    try await validateRecovery?()
                     try await requireAccount(expectedParticipantID, generation: expectedGeneration)
                     let results = try await database.modifyRecords(
                         saving: [record],
@@ -1513,6 +1540,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
                         atomically: true
                     )
                     try await requireAccount(expectedParticipantID, generation: expectedGeneration)
+                    try await validateRecovery?()
                     let comparison = try Self.familyLifecycleAuthoritySaveComparison(
                         recordID: recordID,
                         saveResults: results.saveResults,

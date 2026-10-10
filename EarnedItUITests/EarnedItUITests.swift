@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class EarnedItUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -229,7 +230,29 @@ final class EarnedItUITests: XCTestCase {
         alert.buttons["Cancel"].tap()
         XCTAssertTrue(screen("family-no-longer-available").exists)
         keepScreenshot("family-no-longer-available-largest-text")
-        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion])
+        let title = app.staticTexts["Family No Longer Available"]
+        reveal(title)
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        let font = UIFont.preferredFont(forTextStyle: .title1, compatibleWith: traits)
+        let boldDescriptor = try XCTUnwrap(font.fontDescriptor.withSymbolicTraits(.traitBold))
+        let boldFont = UIFont(descriptor: boldDescriptor, size: font.pointSize)
+        let requiredBounds = (title.label as NSString).boundingRect(
+            with: CGSize(width: title.frame.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: boldFont], context: nil
+        )
+        XCTAssertGreaterThanOrEqual(title.frame.height, requiredBounds.height)
+        XCTAssertTrue(app.frame.contains(title.frame))
+        keepScreenshot("deleted-family-title-unclipped-largest-text")
+        // iOS 26.5 flags this fully rendered multiline bold title. Independently
+        // check its text bounds above; retain clipping audits for every other element.
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion]) { issue in
+            issue.auditType == .textClipped
+                && issue.element?.elementType == .staticText
+                && issue.element?.label == title.label
+                && issue.element?.frame == title.frame
+        }
+        reveal(reset)
         reset.tap()
         app.alerts["Reset App?"].buttons["Reset App"].tap()
         if app.frame.width > app.frame.height {
@@ -356,7 +379,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertEqual(app.textFields["family-name"].value as? String, "Renamed Family")
     }
 
-    func testPendingFamilyDeletionOffersFinishActionAfterRelaunch() {
+    func testPendingFamilyDeletionOffersFinishActionAfterRelaunch() throws {
         app.terminate()
         app.launchArguments = [
             "--ui-test-store",
@@ -373,6 +396,26 @@ final class EarnedItUITests: XCTestCase {
         app.launch()
 
         assertFinishDeletingAction()
+
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-recovered-owner-deletion",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        let recovery = screen("owner-deletion-recovery-required")
+        XCTAssertTrue(recovery.waitForExistence(timeout: 5))
+        let finish = app.buttons["retry-delete-family"]
+        reveal(finish)
+        XCTAssertTrue(finish.isEnabled)
+        XCTAssertGreaterThanOrEqual(finish.frame.height, 44)
+        XCTAssertFalse(app.buttons["release-stale-owner-membership"].exists)
+        XCTAssertFalse(app.buttons["delete-all-earned-it-data"].exists)
+        finish.tap()
+        XCTAssertTrue(app.alerts["Unable to Update"].waitForExistence(timeout: 5))
+        app.alerts["Unable to Update"].buttons["OK"].tap()
+        XCTAssertTrue(recovery.exists)
+        XCTAssertTrue(finish.isEnabled)
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion])
+        keepScreenshot("reinstalled-owner-finish-deletion-largest-text")
     }
 
     func testPrivacyAndSupportLinksRemainAvailableFromFirstRunThroughParentUse() {
@@ -962,6 +1005,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(parentHeader.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(parentHeader.frame.minX, app.frame.minX)
         XCTAssertLessThanOrEqual(parentHeader.frame.maxX, app.frame.maxX)
+        keepScreenshot("ui-polish-parent-largest-text")
 
         let category = screen("category-water-plants")
         reveal(category)
@@ -971,6 +1015,7 @@ final class EarnedItUITests: XCTestCase {
         reveal(stateMenu)
         XCTAssertGreaterThanOrEqual(stateMenu.frame.width, 44 - 0.01)
         XCTAssertGreaterThanOrEqual(stateMenu.frame.height, 44 - 0.01)
+        keepScreenshot("ui-polish-chore-controls-largest-text")
         stateMenu.tap()
         XCTAssertTrue(app.buttons["Missed"].waitForExistence(timeout: 5))
         app.buttons["Missed"].tap()
@@ -996,10 +1041,11 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(childHeader.frame.minX, app.frame.minX)
         XCTAssertLessThanOrEqual(childHeader.frame.maxX, app.frame.maxX)
         keepScreenshot("ui-polish-parent-child-largest-text")
-        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
     }
 
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
+        keepScreenshot("ui-polish-parent-today")
         tap("parent-child-hanna")
         tap("edit-allowance")
         fill("allowance-amount", with: "12.345")

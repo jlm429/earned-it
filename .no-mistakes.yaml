@@ -1,0 +1,4 @@
+test:
+  evidence:
+    attach_media: false
+    store_in_repo: false

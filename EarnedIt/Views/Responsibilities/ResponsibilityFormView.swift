@@ -137,6 +137,7 @@ struct ResponsibilityFormView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .themedListBackground()
             .navigationTitle(existing == nil ? "New Chore" : "Edit Chore")
             .navigationBarTitleDisplayMode(.inline)
             .onChange(of: selectedMode) { _, mode in

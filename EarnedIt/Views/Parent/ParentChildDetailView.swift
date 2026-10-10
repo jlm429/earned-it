@@ -21,7 +21,7 @@ struct ParentChildDetailView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                SectionCard {
+                SectionCard(tint: AppTheme.accent) {
                     HStack(spacing: 12) {
                         AvatarView(user: child)
                         VStack(alignment: .leading, spacing: 8) {
@@ -30,7 +30,7 @@ struct ParentChildDetailView: View {
                         }
                     }
                 }
-                SectionCard {
+                SectionCard(tint: AppTheme.success) {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             Button("Previous Week", systemImage: "chevron.left") { weekOffset -= 1 }
@@ -44,9 +44,10 @@ struct ParentChildDetailView: View {
                         WeekStrip(days: days, today: today, compact: false)
                         WeeklyItemsView(week: week, actor: parent)
                         NavigationLink("View all retained weeks") { WeeklySummaryView(child: child) }
+                            .frame(minHeight: 44)
                             .accessibilityIdentifier("retained-weeks")
                         Text("Current week plus up to 12 finished weeks. Done and Not Needed count; excused days are excluded. Optional contributions do not replace required items.")
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                     }
                 }
                 if store.snapshot.isActive(child, on: store.day) {
@@ -58,7 +59,7 @@ struct ParentChildDetailView: View {
                                 .buttonStyle(.bordered).controlSize(.large)
                                 .accessibilityIdentifier("edit-allowance")
                             Text("Tracks eligibility, not payments. Changes apply to the current week onward.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                         }
                     }
                 }
@@ -74,13 +75,15 @@ struct ParentChildDetailView: View {
                                 store.perform { try store.setExcused(memberID: child.id, date: date, excused: value) }
                             }))
                             .accessibilityIdentifier("excuse-day")
-                            Text("An excused day neither extends nor breaks a streak.").font(.footnote).foregroundStyle(.secondary)
+                            Text("An excused day neither extends nor breaks a streak.").font(.footnote).foregroundStyle(AppTheme.secondaryText)
                         }
                     }
                 }
             }.padding()
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(AppTheme.canvas)
         .navigationTitle(child.displayName)
         .sheet(isPresented: $editingAllowance) {
             AllowanceEditorView(child: child, amount: store.allowanceWeek(for: child.id).amount)

@@ -18,10 +18,12 @@ struct WeeklySummaryView: View {
                     }
                 }
                 Text("Current week and up to 12 finished weeks. Done and Not Needed count; excused days are excluded. Optional chores cannot replace required items.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(AppTheme.secondaryText)
             }.padding()
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(AppTheme.canvas)
         .navigationTitle("Weekly History")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("weekly-summary")

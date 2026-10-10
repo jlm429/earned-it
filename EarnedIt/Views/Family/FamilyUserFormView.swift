@@ -37,6 +37,7 @@ struct FamilyUserFormView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+            .themedListBackground()
             .navigationTitle(existing == nil ? "Add \(role.title)" : "Edit Member")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -428,6 +428,8 @@ final class AccountDataResetTests: XCTestCase {
 
         let recovery = Task { try await store.reconcileAccountMembershipLockAutomatically() }
         while !gate.isWaiting { await Task.yield() }
+        // Suspend only the automatic recovery being cancelled, not the reset preflight.
+        transport.afterAccountMembershipLockRead = nil
 
         try await store.deleteAllEarnedItData()
         _ = try? await recovery.value

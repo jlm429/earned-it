@@ -59,7 +59,7 @@ Relevant Apple references:
 
 The claim is accurate for the inspected app code and dependencies:
 
-- no purchase or subscription implementation exists;
+- no purchase or subscription implementation exists; this does not independently prove the live App Store price;
 - no advertising code or SDK exists;
 - no behavioral analytics or third-party telemetry exists;
 - no ATT or IDFA access exists;

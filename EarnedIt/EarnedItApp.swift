@@ -109,6 +109,9 @@ struct EarnedItApp: App {
                 && arguments.contains("--ui-test-pending-family-deletion") {
                 try initialStore.preparePendingFamilyDeletionUITest()
             }
+            if !readOnlyPreflight && isUITest && arguments.contains("--ui-test-recovered-owner-deletion") {
+                initialStore.prepareRecoveredOwnerDeletionUITest()
+            }
             if !readOnlyPreflight && isUITest
                 && arguments.contains("--ui-test-family-access-lost") {
                 if initialStore.household == nil {

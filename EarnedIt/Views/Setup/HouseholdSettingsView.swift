@@ -58,6 +58,7 @@ struct HouseholdSettingsView: View {
             if let name { familyName = name }
         }
         .refreshable { await refreshFamily() }
+        .themedListBackground()
         .navigationTitle("Settings")
         .alert(store.session.pendingFamilyDeletion == true ? "Finish Deleting?" : "Delete All Data?",
                isPresented: $confirmingDeletion) {

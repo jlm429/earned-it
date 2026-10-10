@@ -135,6 +135,8 @@ final class TestTransport: HouseholdTransport {
     var uploadedIDs: [UUID] = []
     var leaveFailures = 0
     var deleteFamilyFailures = 0
+    var accountLockReleasePostCommitFailures = 0
+    var accountMembershipLockReadFailures = 0
     var accountLockReleaseFailures = 0
     var accountLockActivationFailures = 0
     var accountLockReplacementFailures = 0
@@ -142,6 +144,7 @@ final class TestTransport: HouseholdTransport {
     var lifecycleEnsureFailures = 0
     var lifecycleBeginFailures = 0
     var lifecycleFinalizeFailures = 0
+    var recoveredFinalizePostCommitFailures = 0
     var lifecycleStateError: Error?
     var membershipRevocationPublishError: Error?
     var membershipRevocationStateError: Error?
@@ -186,6 +189,7 @@ final class TestTransport: HouseholdTransport {
     var beforeLeaveSubmission: (() async -> Void)?
     var beforeAccountLockRelease: (() async -> Void)?
     var beforeAccountLockReleaseSubmission: (() async -> Void)?
+    var afterAccountLockReleaseSubmission: (() async -> Void)?
     var afterAccountMembershipLockRead: (() async -> Void)?
     var beforeAccountLockAcquireSubmission: (() async -> Void)?
     var afterAccountLockAcquireSubmission: (() async -> Void)?
@@ -316,6 +320,10 @@ final class TestTransport: HouseholdTransport {
     }
 
     func accountMembershipLock() async throws -> AccountMembershipLock? {
+        if accountMembershipLockReadFailures > 0 {
+            accountMembershipLockReadFailures -= 1
+            throw CKError(.networkFailure)
+        }
         let lock = server.accountMembershipLocks[account]
         await afterAccountMembershipLockRead?()
         return lock
@@ -577,6 +585,13 @@ final class TestTransport: HouseholdTransport {
         existing.state = .released
         existing.expiresAt = releaseTime
         server.accountMembershipLocks[account] = existing
+        await afterAccountLockReleaseSubmission?()
+        if accountLockReleasePostCommitFailures > 0 {
+            accountLockReleasePostCommitFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        guard account == expectedParticipantID,
+              accountGeneration == expectedGeneration else { throw HouseholdError.wrongAccount }
         return true
     }
     func membershipLocation(householdID: UUID) async throws -> CloudLocation? {
@@ -803,6 +818,39 @@ final class TestTransport: HouseholdTransport {
         familyTransitionDiagnostics.record(stage: .lifecycleDeletionPublish, outcome: .succeeded,
                                             householdID: householdID)
     }
+    func finalizeRecoveredFamilyDeletion(expectedLock: AccountMembershipLock,
+                                         expectedParticipantID: String,
+                                         expectedAccountGeneration: UInt64) async throws {
+        try await requireRecoveredOwnerDeletion(
+            expectedLock: expectedLock,
+            expectedParticipantID: expectedParticipantID,
+            expectedAccountGeneration: expectedAccountGeneration
+        )
+        await beforeLifecycleFinalize?()
+        try await requireRecoveredOwnerDeletion(
+            expectedLock: expectedLock,
+            expectedParticipantID: expectedParticipantID,
+            expectedAccountGeneration: expectedAccountGeneration
+        )
+        if lifecycleFinalizeFailures > 0 {
+            lifecycleFinalizeFailures -= 1
+            throw CKError(.networkFailure)
+        }
+        guard var authority = server.lifecycleAuthorities[expectedLock.householdID],
+              authority.creator == expectedParticipantID,
+              authority.lastModifier == expectedParticipantID,
+              authority.state != .active else { throw HouseholdError.accountMembershipConflict }
+        if authority.state != .deleted {
+            lifecycleMutationEnqueues += 1
+            authority.state = .deleted
+            server.lifecycleAuthorities[expectedLock.householdID] = authority
+        }
+        if recoveredFinalizePostCommitFailures > 0 {
+            recoveredFinalizePostCommitFailures -= 1
+            throw CKError(.networkFailure)
+        }
+    }
+
     func familyLifecycleState(householdID: UUID, ownerAuthorityBinding: String,
                               expectedParticipantID: String) async throws -> FamilyLifecycleState? {
         familyTransitionDiagnostics.record(stage: .lifecycleDeletionCheck, outcome: .started,

@@ -123,6 +123,29 @@ struct RootView: View {
                 }
                 .accessibilityIdentifier("membership-recovery-progress")
                 .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
+            } else if store.canFinishRecoveredFamilyDeletion {
+                ScrollableUnavailableView(
+                    title: "Finish Deleting Your Family",
+                    systemImage: "person.3.fill",
+                    description: "Your family deletion is unfinished. Finish it so everyone can reset Earned It."
+                ) {
+                    Button("Finish Deleting Family", role: .destructive) {
+                        Task {
+                            do { try await store.finishRecoveredFamilyDeletion() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .accessibilityIdentifier("retry-delete-family")
+                    Button("Try Reconnecting") {
+                        Task {
+                            do { try await store.retryAccountMembershipRecovery() }
+                            catch { store.errorMessage = error.localizedDescription }
+                        }
+                    }
+                    .accessibilityIdentifier("retry-owner-membership-recovery")
+                }
+                .accessibilityIdentifier("owner-deletion-recovery-required")
+                .onAppear { store.recordJoinRootRoute(.membershipRecovery) }
             } else if store.requiresMembershipRecovery && store.canReleaseStaleOwnerMembership
                 && store.household == nil {
                 ScrollableUnavailableView(
@@ -223,6 +246,7 @@ struct RootView: View {
                 return
             }
             if store.session.pendingFamilyDeletion == true { return }
+            if store.canFinishRecoveredFamilyDeletion { return }
             if store.hasUnavailableFamilyRecovery { return }
             store.refreshDate()
             if store.hasPendingInvitationPackage {
@@ -415,12 +439,14 @@ private struct ScrollableUnavailableView<Actions: View>: View {
                     VStack(spacing: 12) {
                         Image(systemName: systemImage)
                             .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 80, height: 80)
+                            .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
                             .accessibilityHidden(true)
                         Text(title)
                             .font(.title.bold())
                         Text(description)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.secondaryText)
                     }
                     actions
                 }
@@ -430,6 +456,9 @@ private struct ScrollableUnavailableView<Actions: View>: View {
                 .frame(maxWidth: .infinity, minHeight: geometry.size.height)
             }
             .scrollBounceBehavior(.basedOnSize)
+            .background(AppTheme.canvas)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
         }
     }
 }

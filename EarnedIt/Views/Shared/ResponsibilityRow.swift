@@ -8,17 +8,17 @@ struct ResponsibilityRow: View {
     @State private var confirmingNotNeeded = false
 
     var body: some View {
-        SectionCard {
-            VStack(alignment: .leading, spacing: 8) {
+        SectionCard(tint: chore.isNotNeeded ? AppTheme.info : chore.isFullyComplete ? AppTheme.success : nil) {
+            VStack(alignment: .leading, spacing: 12) {
                 CategoryBadge(category: chore.configuration.category)
                     .accessibilityIdentifier("category-\(chore.configuration.title.accessibilitySlug)")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(chore.configuration.title).font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(statusLabel).font(.subheadline).foregroundStyle(AppTheme.secondaryText)
+                        .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
+                }
                 ChoreFlowLayout {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(chore.configuration.title).font(.headline)
-                        Text(statusLabel).font(.caption).foregroundStyle(.primary.opacity(0.7))
-                            .accessibilityIdentifier("full-status-\(chore.configuration.title.accessibilitySlug)")
-                    }
-                    .frame(minHeight: 44, alignment: .leading)
                     if !chore.isNotNeeded {
                         ForEach(chore.eligibleMembers) { member in
                             memberControl(member)
@@ -26,16 +26,16 @@ struct ResponsibilityRow: View {
                     }
                 }
                 if !chore.configuration.notes.isEmpty {
-                    Text(chore.configuration.notes).font(.subheadline).foregroundStyle(.primary.opacity(0.7))
+                    Text(chore.configuration.notes).font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }
                 PuntControls(chore: chore, actor: actor)
                 if chore.eligibleMembers.isEmpty {
-                    Text("No eligible children for this date.").font(.subheadline).foregroundStyle(.primary.opacity(0.7))
+                    Text("No eligible children for this date.").font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }
                 if actor.role == .parent && !chore.historicalContributions.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Earlier assignment history").font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary.opacity(0.7))
+                            .foregroundStyle(AppTheme.secondaryText)
                         ForEach(chore.historicalContributions) { contribution in
                             historicalContributionLabel(contribution)
                         }
@@ -50,6 +50,7 @@ struct ResponsibilityRow: View {
                         }
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.large)
                     .accessibilityIdentifier("not-needed-\(chore.configuration.title.accessibilitySlug)")
                 }
                 if canRestoreRequirement {
@@ -62,6 +63,7 @@ struct ResponsibilityRow: View {
                         }
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.large)
                     .accessibilityIdentifier("restore-requirement-\(chore.configuration.title.accessibilitySlug)")
                 }
             }
@@ -125,8 +127,9 @@ struct ResponsibilityRow: View {
                     stateActions(for: member, excluding: state)
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 20, weight: .medium))
                         .frame(width: 44, height: 44)
-                        .background(Color(uiColor: .tertiarySystemFill), in: Circle())
+                        .background(AppTheme.inset, in: Circle())
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -159,7 +162,7 @@ struct ResponsibilityRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(minWidth: 44, minHeight: 44)
-        .background(state.isAccountedFor ? state.tint.opacity(0.12) : Color(uiColor: .tertiarySystemFill),
+        .background(state.isAccountedFor ? state.tint.opacity(0.14) : AppTheme.inset,
                     in: RoundedRectangle(cornerRadius: 12))
         .contentShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -171,7 +174,7 @@ struct ResponsibilityRow: View {
                 .accessibilityHidden(true)
             Text("\(contribution.member.displayName): \(contribution.state.rawValue)").font(.caption)
         }
-        .foregroundStyle(.primary.opacity(0.7))
+        .foregroundStyle(AppTheme.secondaryText)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(contribution.member.displayName), earlier assignment, \(contribution.state.rawValue)")
         .accessibilityValue("View only")
@@ -284,13 +287,16 @@ struct SharedDailyList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(store.calendar.isDate(date, inSameDayAs: store.today) ? "Today’s Chores" : "Chores for This Day").font(.title2.bold())
+            SectionHeading(
+                title: store.calendar.isDate(date, inSameDayAs: store.today) ? "Today’s Chores" : "Chores for This Day",
+                systemImage: "checklist"
+            )
             if chores.isEmpty {
-                SectionCard {
+                SectionCard(tint: AppTheme.success) {
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "checkmark.circle")
+                        Image(systemName: "leaf.circle.fill")
                             .font(.title2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.success)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Nothing expected").font(.headline)
@@ -298,7 +304,7 @@ struct SharedDailyList: View {
                                  ? "Configure a shared weekday list to get started."
                                  : "Enjoy your day. Your family’s list has nothing for you here.")
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(AppTheme.secondaryText)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
