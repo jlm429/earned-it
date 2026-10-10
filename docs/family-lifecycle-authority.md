@@ -51,12 +51,12 @@ If terminal deletion cannot be authenticated, a positively classified owner may 
 
 ## CloudKit schema and security
 
-This change requires a human-reviewed Development schema update and later human promotion to Production. Agent work must not deploy it or modify Production data.
+The Production public database already contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String, as manually verified in CloudKit Console on October 10, 2026. The same inspection found World Read enabled. That conflicts with the required policy below and remains a release blocker until an authorized human corrects and verifies the security roles. Agent work must not change or deploy the schema or modify Production data.
 
 Configure `FamilyLifecycleAuthority` in the public database with only the two application fields above. Permit authenticated users to read and create. Permit updates only by the record creator. Do not enable public unauthenticated access. Lifecycle validation fetches the deterministic record ID directly. No application-field query index is required by the app.
 
 The durable Production dependency is therefore the public `FamilyLifecycleAuthority` type, with `formatVersion` as Int64 and `state` as String. This repository documents and validates the contract but never deploys the schema.
 
-Before a signed build is distributed, verify in CloudKit Console that the record type, field types, database scope, and creator-only write rules match this document. Promote through the existing authorized release process only after Development two-account deletion, revocation, reinstall, and account-switch checks pass. The observed Production deployment finding and captain procedure are in `docs/delete-all-earned-it-data-implementation-report.md`.
+Before a signed build is distributed, verify in CloudKit Console that World Read is disabled and that the database scope and authenticated create and creator-only write rules match this document. Complete the Development two-account deletion, revocation, reinstall, and account-switch checks through the existing authorized release process. The observed Production finding and captain procedure are in `docs/delete-all-earned-it-data-implementation-report.md`.
 
 Relevant Apple contracts are [CKRecord creator metadata](https://developer.apple.com/documentation/cloudkit/ckrecord/creatoruserrecordid), [CKRecord last-modifier metadata](https://developer.apple.com/documentation/cloudkit/ckrecord/lastmodifieduserrecordid), and [record-zone deletion change reporting](https://developer.apple.com/documentation/cloudkit/ckfetchdatabasechangesoperation/recordzonewithidwasdeletedblock).

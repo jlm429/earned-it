@@ -90,23 +90,15 @@ The available `cktool` installation was used only for a read-only authentication
 
 On October 10, 2026, the captain manually verified in CloudKit Console that the Production public database for `iCloud.com.jlm429.EarnedIt` contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String. This closes the missing-record-type concern from the earlier trace. The observed security roles are World Read, iCloud Create, and Creator Write. World Read conflicts with the required policy that public unauthenticated access remain disabled, so security-role compliance remains open for an authorized human to correct and verify before release. The focused interrupted-deletion recovery fix requires no record-type or field deployment.
 
-### Captain action in CloudKit Console
+### Remaining captain action in CloudKit Console
 
-In Apple's CloudKit Console for `iCloud.com.jlm429.EarnedIt`:
-
-1. Select the Development environment and open Schema, Record Types.
-2. Verify `FamilyLifecycleAuthority` exists with `formatVersion` of type Int64 and `state` of type String.
-3. Configure public-database security so authenticated iCloud users can read and create, the record creator can read and write, and world access is disabled. This lets invited participants validate lifecycle state while only the creator can change or delete it.
-4. Keep deterministic record-name lookup available. The app does not query lifecycle records during account cleanup, so no app-field query index is required by current code.
-5. Review all pending Development schema changes. Use the CloudKit Console deployment workflow to deploy the approved schema changes to Production. Do not create a one-off Production data record as a substitute for schema deployment.
-6. Switch the console to Production and confirm `FamilyLifecycleAuthority`, both fields, and the security roles are present.
-7. Retry invitation creation on a clean signed owner device and confirm the trace advances past lifecycle authority preparation to share and participant creation.
+In Apple's CloudKit Console for the Production public database of `iCloud.com.jlm429.EarnedIt`, an authorized human must disable World Read while retaining authenticated iCloud read and create access plus creator write access. Keep deterministic record-name lookup available. The app does not query lifecycle records during account cleanup, so no app-field query index is required by current code. After the change, verify the security roles and then run the signed two-account procedure below. No record-type or field deployment is required for this focused recovery fix, and no one-off Production data record should be created.
 
 Apple documents schema inspection and editing at [Inspecting and editing an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/inspecting-and-editing-an-icloud-container-s-schema) and deployment at [Deploying an iCloud container's schema](https://developer.apple.com/documentation/cloudkit/deploying-an-icloud-container-s-schema).
 
 ## Focused executable coverage
 
-`EarnedItTests/AccountDataResetTests.swift` uses the injected `HouseholdTransport` and `AccountLocalDataResetting` boundaries to exercise behavior rather than scan source text.
+`EarnedItTests/AccountDataResetTests.swift` uses the injected `HouseholdTransport` and `AccountLocalDataResetting` boundaries to exercise the account-wide recovery behavior rather than scan source text. `EarnedItTests/FocusedFamilyDeletionRecoveryTests.swift` exercises the normal Settings deletion path across every lifecycle phase, a relaunched store, an account switch, queued automatic synchronization, and an isolated fresh household generation.
 
 | Requirement | Executable coverage |
 | --- | --- |
@@ -115,7 +107,9 @@ Apple documents schema inspection and editing at [Inspecting and editing an iClo
 | Participant or child reset | Private lock and shared participation are removed without deleting the owner zone, owner lock, or lifecycle record. |
 | Lock forms | Provisional, active, and released `current-membership` records are each deleted. |
 | Missing targets | A repeated reset and missing record or zone conditions are idempotent. |
-| Interruption and resume | A deletion failure retains progress and local data; a relaunched store resumes and completes. |
+| Account-wide interruption and resume | A deletion failure retains progress and local data; a relaunched store resumes and completes. |
+| Focused family interruption and resume | Failures at lifecycle creation, the `deleting` transition, zone deletion, the `deleted` transition, lock release, and local cleanup retain the exact pending generation; a relaunched store finishes it. |
+| Focused family generation safety | Another Apple account cannot continue pending deletion, and an old pending generation cannot delete a fresh same-parent, same-children household in an isolated store. |
 | Offline then online | Discovery fails offline, retains progress, and succeeds after retry. |
 | Stale local data | Cloud cleanup is verified before current journal and session data are atomically cleared. |
 | Active store interruption | Auxiliary-cleanup failure leaves the receipt-bearing main store readable, while successful teardown removes the main store last. |
@@ -128,7 +122,7 @@ Apple documents schema inspection and editing at [Inspecting and editing an iClo
 | Unreadable startup store | A file-backed receipt survives failed SwiftData startup, retains cloud progress after an offline failure, resumes through the same coordinator, and is removed only after store cleanup. |
 | Historical local artifacts | Known historical and active store files, sidecars, support directories, cache contents, and the bundle preference domain are removed through the managed store lifecycle. |
 
-The focused recovery UI flows verify that transient access loss remains a reconnect-only state, authoritative deleted-family recovery exposes a confirmed Reset App action at large Dynamic Type, and unreadable-store startup retains its emergency recovery path. Real signed two-account CloudKit behavior still requires the device procedure below.
+The focused recovery UI flows verify that transient access loss remains a reconnect-only state, authoritative deleted-family recovery exposes a confirmed Reset App action at large Dynamic Type, interrupted owner deletion exposes `Finish Deleting` after relaunch, and unreadable-store startup retains its emergency recovery path. Real signed two-account CloudKit behavior still requires the device procedure below.
 
 ## Real-device captain procedure
 
