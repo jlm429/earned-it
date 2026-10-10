@@ -86,6 +86,10 @@ That trace is evidence that the running Production schema did not permit creatio
 
 The available `cktool` installation was used only for a read-only authentication check. `xcrun cktool get-teams` reported that no management token was available. No authenticated CloudKit Console session or management token was available in this worktree, so the Production schema was not directly inspected. No schema or Production data mutation was attempted.
 
+### Current Production verification
+
+On October 10, 2026, the captain manually verified in CloudKit Console that the Production public database for `iCloud.com.jlm429.EarnedIt` contains `FamilyLifecycleAuthority` with `formatVersion` as Int64 and `state` as String. The verified security roles are World Read, iCloud Create, and Creator Write. This closes the missing-record-type and creator-write-rule concern from the earlier trace. The focused interrupted-deletion recovery fix requires no schema change or deployment.
+
 ### Captain action in CloudKit Console
 
 In Apple's CloudKit Console for `iCloud.com.jlm429.EarnedIt`:
@@ -128,7 +132,7 @@ The focused recovery UI flows verify that transient access loss remains a reconn
 
 ## Real-device captain procedure
 
-Complete the Production schema check and deployment above before using the new reset in Production.
+The Production lifecycle type, fields, and security roles are verified. Complete the signed two-account checks below before relying on the new reset behavior in Production.
 
 1. On the creating parent's device, use Settings, `Delete All Data`, and wait for completion. Confirm Welcome appears and remains after relaunch.
 2. Bring an existing child device online. Confirm `Family No Longer Available`, choose `Reset App`, and confirm Welcome remains after relaunch.
