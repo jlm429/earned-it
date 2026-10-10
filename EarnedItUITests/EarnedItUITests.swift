@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class EarnedItUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -229,7 +230,29 @@ final class EarnedItUITests: XCTestCase {
         alert.buttons["Cancel"].tap()
         XCTAssertTrue(screen("family-no-longer-available").exists)
         keepScreenshot("family-no-longer-available-largest-text")
-        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion])
+        let title = app.staticTexts["Family No Longer Available"]
+        reveal(title)
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        let font = UIFont.preferredFont(forTextStyle: .title1, compatibleWith: traits)
+        let boldDescriptor = try XCTUnwrap(font.fontDescriptor.withSymbolicTraits(.traitBold))
+        let boldFont = UIFont(descriptor: boldDescriptor, size: font.pointSize)
+        let requiredBounds = (title.label as NSString).boundingRect(
+            with: CGSize(width: title.frame.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: boldFont], context: nil
+        )
+        XCTAssertGreaterThanOrEqual(title.frame.height, requiredBounds.height)
+        XCTAssertTrue(app.frame.contains(title.frame))
+        keepScreenshot("deleted-family-title-unclipped-largest-text")
+        // iOS 26.5 flags this fully rendered multiline bold title. Independently
+        // check its text bounds above; retain clipping audits for every other element.
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .hitRegion]) { issue in
+            issue.auditType == .textClipped
+                && issue.element?.elementType == .staticText
+                && issue.element?.label == title.label
+                && issue.element?.frame == title.frame
+        }
+        reveal(reset)
         reset.tap()
         app.alerts["Reset App?"].buttons["Reset App"].tap()
         if app.frame.width > app.frame.height {
