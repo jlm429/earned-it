@@ -91,7 +91,7 @@ enum FamilyActivityRules {
                 detail = "Your parent removed \(revision.title). Recorded history is kept."
                 day = deletion.day
             case .puntRequest(let request):
-                guard let ownerID = originalOwner(scope: request.scope, snapshot: snapshot) else { return nil }
+                guard let ownerID = PuntRules.originalOwner(scope: request.scope, snapshot: snapshot) else { return nil }
                 let projection = PuntRules.project(scope: request.scope, originalOwnerID: ownerID,
                                                    snapshot: snapshot, today: today)
                 guard let projected = projection.requests.first(where: { $0.id == fact.id }) else { return nil }
@@ -104,7 +104,7 @@ enum FamilyActivityRules {
             case .puntDecision(let decision):
                 guard let source = snapshot.orderedFacts.first(where: { $0.id == decision.requestFactID }),
                       case .puntRequest(let request) = source.body,
-                      let ownerID = originalOwner(scope: request.scope, snapshot: snapshot),
+                      let ownerID = PuntRules.originalOwner(scope: request.scope, snapshot: snapshot),
                       let projected = PuntRules.project(scope: request.scope, originalOwnerID: ownerID,
                                                         snapshot: snapshot).requests.first(where: {
                           $0.id == source.id && $0.decisionFactID == fact.id
@@ -154,13 +154,5 @@ enum FamilyActivityRules {
             guard !targets.isEmpty else { return nil }
             return FamilyActivity(id: fact.id, recipientIDs: targets, title: title, detail: detail, day: day, punt: punt)
         }
-    }
-
-    private static func originalOwner(scope: PuntScope, snapshot: HouseholdSnapshot) -> UUID? {
-        if let occurrenceID = scope.occurrenceID {
-            return snapshot.asNeededProjection(choreID: scope.choreID, through: scope.day)
-                .occurrences.first { $0.id == occurrenceID }?.assignedMemberID
-        }
-        return ChoreRules.rotationOwner(choreID: scope.choreID, on: scope.day, snapshot: snapshot)?.id
     }
 }

@@ -331,7 +331,8 @@ final class PuntNotificationTests: XCTestCase {
         let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
         let hannaInvite = try await family.store.createChildInvitation(memberID: family.hanna.id)
         let hannaTransport = TestTransport(server: server, account: "hanna-account")
-        let hanna = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: hannaTransport,
+        let hannaRepository = try HouseholdRepository(inMemory: true)
+        let hanna = try HouseholdStore(repository: hannaRepository, transport: hannaTransport,
             clock: { family.clock.now }, automaticSync: false)
         try await hanna.redeemInvitation(hannaInvite.qrPayload)
         let alekInvite = try await family.store.createChildInvitation(memberID: family.alek.id)
@@ -349,6 +350,10 @@ final class PuntNotificationTests: XCTestCase {
         try await alek.synchronize()
         XCTAssertEqual(alek.activity.first { $0.id == requestID }?.punt?.status, .pending)
         try alek.decidePunt(requestFactID: requestID, kind: .accepted)
+        XCTAssertEqual(PuntStatsRules.summary(memberID: family.alek.id, week: .thisWeek,
+            today: alek.day, snapshot: alek.snapshot).covered, 1)
+        XCTAssertTrue(PuntStatsRules.summary(memberID: family.alek.id, week: .thisWeek,
+            today: hanna.day, snapshot: hanna.snapshot).isEmpty)
         try alek.setCompletion(choreID: chore, memberID: family.alek.id, date: family.clock.now, state: .done)
         try await alek.synchronize()
         try await hanna.synchronize()
@@ -360,6 +365,15 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(hanna.snapshot, alek.snapshot)
         XCTAssertEqual(family.store.snapshot, alek.snapshot)
         XCTAssertEqual(alek.pendingCount, 0)
+        let expected = PuntStatsRules.summary(memberID: family.hanna.id, week: .thisWeek,
+            today: hanna.day, snapshot: hanna.snapshot)
+        XCTAssertEqual(expected.punted, 1)
+        XCTAssertEqual(PuntStatsRules.summary(memberID: family.hanna.id, week: .thisWeek,
+            today: alek.day, snapshot: alek.snapshot), expected)
+        let reopened = try HouseholdStore(repository: hannaRepository, transport: hannaTransport,
+            clock: { family.clock.now }, automaticSync: false)
+        XCTAssertEqual(PuntStatsRules.summary(memberID: family.hanna.id, week: .thisWeek,
+            today: reopened.day, snapshot: reopened.snapshot), expected)
     }
 
     func testEveryActivityUpdateBeyondFiftyCanBeDisplayedAndMarkedRead() throws {

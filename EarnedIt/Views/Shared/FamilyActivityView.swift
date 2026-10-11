@@ -48,35 +48,12 @@ struct FamilyActivityView: View {
                         ContentUnavailableView("You're all caught up", systemImage: "bubble.left.and.bubble.right",
                                                description: Text("New chore requests and family updates will appear here."))
                     }
-                    ForEach(items) { item in
-                        SectionCard(tint: item.punt?.status == .pending ? AppTheme.info : nil) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ViewThatFits(in: .horizontal) {
-                                    HStack(alignment: .firstTextBaseline) {
-                                        Text(item.title).font(.headline).fixedSize()
-                                        unreadLabel(item).fixedSize()
-                                    }
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text(item.title).font(.headline)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                        unreadLabel(item)
-                                    }
-                                }
-                                Text(item.detail).font(.subheadline)
-                                if let punt = item.punt {
-                                    Label(statusText(punt), systemImage: punt.status == .pending ? "clock" : "person.2")
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(punt.status == .accepted ? AppTheme.success : AppTheme.info)
-                                    puntActions(punt)
-                                }
-                                if !store.isActivityRead(item) {
-                                    Button("Mark Read") { store.perform { try store.markActivityRead(item) } }
-                                        .frame(minHeight: 44)
-                                        .accessibilityIdentifier("read-activity-\(item.id)")
-                                }
-                            }
-                        }
+                    ForEach(items.filter { $0.punt?.status == .pending }) { activityCard($0) }
+                    if let member = store.selectedMember, member.role == .child {
+                        PuntStatsCard(memberID: member.id)
+                            .id(member.id)
                     }
+                    ForEach(items.filter { $0.punt?.status != .pending }) { activityCard($0) }
                 }
                 .padding()
                 .frame(maxWidth: 760)
@@ -92,6 +69,36 @@ struct FamilyActivityView: View {
             .accessibilityIdentifier("family-activity")
         }
         .tint(AppTheme.accent)
+    }
+
+    private func activityCard(_ item: FamilyActivity) -> some View {
+        SectionCard(tint: item.punt?.status == .pending ? AppTheme.info : nil) {
+            VStack(alignment: .leading, spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(item.title).font(.headline).fixedSize()
+                        unreadLabel(item).fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(item.title).font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        unreadLabel(item)
+                    }
+                }
+                Text(item.detail).font(.subheadline)
+                if let punt = item.punt {
+                    Label(statusText(punt), systemImage: punt.status == .pending ? "clock" : "person.2")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(punt.status == .accepted ? AppTheme.success : AppTheme.info)
+                    puntActions(punt)
+                }
+                if !store.isActivityRead(item) {
+                    Button("Mark Read") { store.perform { try store.markActivityRead(item) } }
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("read-activity-\(item.id)")
+                }
+            }
+        }
     }
 
     @ViewBuilder

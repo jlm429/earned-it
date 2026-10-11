@@ -221,6 +221,7 @@ struct RootView: View {
                     .onAppear { store.recordJoinRootRoute(.profileSelection) }
             }
         }
+        .tint(AppTheme.accent)
         .task(id: "\(store.activityRevision)/\(scenePhase)") {
             if !readOnlyPreflightMode && scenePhase == .active { await store.processActivityAlerts() }
         }

@@ -15,17 +15,18 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 - Supports recurring weekday chores and as-needed chores.
 - Assigns chores to every child, a particular child, or alternating children.
 - Lets children request an approved punt of today's alternating turn.
+- Shows children accepted punts sent and covered this week or last week in Activity.
 - Keeps chore requests and family updates in Activity, with optional alerts.
 - Lets children mark their own work while parents manage the family.
 - Shows weekly progress and streaks.
 - Optionally tracks weekly allowance eligibility without moving money.
 - Shares through iCloud, synchronizes automatically, and works offline.
 
-Coming in the next release:
+The source for the next App Store release, 1.0.5, includes approved punts, Activity with optional alerts, and weekly Punt Stats. Store availability remains pending release.
 
-- Optional notifications when a chore becomes available or a turn-change request needs attention.
+Still planned:
+
 - As-needed chore history that shows who did a chore last.
-- Punt an alternating turn to another child, with that child's approval before responsibility changes.
 
 ## How families use it
 

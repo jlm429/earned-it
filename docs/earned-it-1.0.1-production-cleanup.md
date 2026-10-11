@@ -30,9 +30,7 @@ The existing iOS App Store Connect record remains unchanged. A human should cont
 
 ## Version and build numbers
 
-The project marketing version is `1.0.1` and its local fallback build is `15`, the first integer newer than released build `14.1`. Archive and Upload computes `14 + GITHUB_RUN_NUMBER`. Workflow run numbers increase across future invocations, so uploaded builds remain simple monotonically increasing integers across marketing versions.
-
-`GITHUB_RUN_ATTEMPT` must equal `1`. A GitHub rerun therefore stops before archive instead of reusing the prior build number. A retry uses a new workflow dispatch and receives a new run number. Concurrency serialization prevents overlapping Archive and Upload jobs. The semantic script verifies digit-only Apple-valid values, `15 > 14.1`, later monotonic values, rerun refusal, and the four-digit upper bound. No build is uploaded by this change.
+Historical 1.0.1 metadata used marketing version `1.0.1` and local fallback build `15`, newer than released build `14.1`. Its upload lane generated build numbers from workflow runs; that policy has been superseded. Current version metadata and upload-number requirements are maintained in the [release checklist](app-store/release-readiness.md#final-device-and-accessibility-pass). No build was uploaded by this historical change.
 
 Apple associates a build with its bundle ID and version and uses the build string as its unique identifier. See [Apple build upload guidance](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds) and [CFBundleVersion](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleversion).
 

@@ -88,7 +88,10 @@ struct EarnedItApp: App {
             }
             #endif
             #if DEBUG
-            if !readOnlyPreflight { try PuntUITestFixture.prepare(repository: repository) }
+            if !readOnlyPreflight {
+                try PuntUITestFixture.prepare(repository: repository)
+                try PuntStatsUITestFixture.prepare(repository: repository)
+            }
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
                 clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
                 automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight,
