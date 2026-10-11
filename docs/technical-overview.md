@@ -6,9 +6,31 @@ This document keeps implementation context out of the public README. The authori
 
 Earned It persists immutable typed facts in a local SwiftData journal. The local store is `shared-household-v1.store`. SwiftData CloudKit mirroring is disabled. `CloudKitHouseholdTransport` explicitly exchanges the same facts through one custom zone in the owner's private database and invited participants' shared database.
 
-Synchronization is eventual. Foreground activity, local changes, and pull to refresh initiate synchronization. Offline facts remain pending for retry. The [punt and activity guide](punt-notifications.md) owns background synchronization, alert delivery, and their release prerequisites. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
+Synchronization is eventual; offline facts remain pending for retry. This section owns synchronization triggers, work ownership, and recovery. The [punt and activity guide](punt-notifications.md) owns background delivery configuration, alert behavior, and their release prerequisites. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
 
 The CloudKit schema used by the current transport includes the fact journal envelope and private account-membership records. The exact implementation is in `CloudKitHouseholdTransport.swift`. Production schema changes are manual release operations.
+
+### Work ownership and recovery
+
+The store registers accepted synchronization before waiting for the exclusive cloud mutation boundary. Cancelling a caller releases only that caller's continuation, promptly and exactly once. The accepted job remains owned by the store; lifecycle mutations retain their existing exclusive boundary and reentrant task-local token. Calls waiting for the same job coalesce. A request received during a fetch reserves one trailing pass, so remote edits arriving after that fetch's snapshot or newly queued local facts are not silently omitted. Automatic scheduling shares this same job and still defers behind independent lifecycle work.
+
+All live callers await completion of the required passes. A failed pass can recover through an already queued pass; without queued work, its actual error returns. This adds no polling loop or unsolicited retry. View and debounce callers whose tasks were cancelled do not present stale errors. A `CancellationError` from incomplete transport work on a live caller displays an interrupted-update retry message. Other errors retain their existing descriptions, access classification and journal retention. A successful later retry is never evidence that an earlier interrupted pass finished.
+
+### Automatic synchronization triggers
+
+| Trigger | Current behavior |
+| --- | --- |
+| Launch / installation session task | Refreshes the civil date and schedules a debounced sync for an attached household, alongside guarded membership reconciliation and invitation recovery. |
+| Scene becomes active | Refreshes the date and schedules sync; rechecks alert authorization. Returning from iOS Settings follows this path. |
+| Local source-fact mutation | The existing commit boundary schedules sync. Multiple arrivals use the 350 ms debounce, or reserve a trailing pass during active work. |
+| iCloud account change | Invalidates account generation/recovery candidates, refreshes date and schedules guarded sync. |
+| Calendar day / significant time change | Refreshes the household date and schedules sync. Significant-time changes also reset the midnight timer. |
+| Foreground household midnight | One calendar-aware sleep refreshes the date and schedules sync; scene inactivity cancels the timer. |
+| Connect, join, invitation and lifecycle operations | Existing explicit synchronization remains within the corresponding identity and lifecycle checks. |
+| CloudKit database silent change hint | The enabled app delegate invokes validated synchronization and Activity processing, in foreground or background, with a 25-second callback watchdog. |
+| Manual action | Parent home, child home, Activity pull-to-refresh and root retry controls use the same synchronization boundary. |
+
+Opening Activity processes the current local feed and authorization; it does not itself fetch remote facts. Foreground devices can receive updates without manual refresh when a CloudKit database hint is delivered, or when another listed trigger runs. There is no continuous foreground listener or periodic polling. APNs hints are best effort and may be coalesced, delayed, throttled or dropped. A device remaining foreground with no delivered hint or local trigger can remain stale until a refresh or foreground transition. Notifications being off or denied does not disable sync, Activity or punt decisions. Background delivery also depends on system scheduling, Background App Refresh and process availability. Force quit can prevent wake.
 
 ## Identity and invitations
 

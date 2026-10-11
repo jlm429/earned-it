@@ -25,33 +25,17 @@ An independent controlled regression reproduces the same generic error by cancel
 
 ## Ownership and recovery fix
 
-The store registers accepted synchronization before waiting for the exclusive cloud mutation boundary. Cancelling a caller releases only that caller's continuation, promptly and exactly once. The accepted job remains owned by the store; lifecycle mutations retain their existing exclusive boundary and reentrant task-local token. Calls waiting for the same job coalesce. A request received during a fetch reserves one trailing pass, so remote edits arriving after that fetch's snapshot or newly queued local facts are not silently omitted. Automatic scheduling shares this same job and still defers behind independent lifecycle work.
-
-All live callers await completion of the required passes. A failed pass can recover through an already queued pass; without queued work, its actual error returns. This adds no polling loop or unsolicited retry. View and debounce callers whose tasks were cancelled do not present stale errors. A `CancellationError` from incomplete transport work on a live caller displays an interrupted-update retry message. Other errors retain their existing descriptions, access classification and journal retention. A successful later retry is never evidence that an earlier interrupted pass finished.
+The [technical overview](technical-overview.md#work-ownership-and-recovery) owns the synchronization contract implemented by this fix.
 
 Regression coverage includes lock waiting; initiating and overlapping caller cancellation; manual/automatic overlap after a stale fetch snapshot; exactly one trailing fetch; real fetch cancellation; a cancelled partial upload with pending facts retained; retry after reopening the journal; idempotent saves; distinct deletion/replacement identities and equal parent/child projections after reconciliation and relaunch. Facts, historical outcomes, invitation claims, membership bindings and occurrence-aware handling are unchanged.
 
 ## Current automatic synchronization triggers
 
-| Trigger | Current behavior |
-| --- | --- |
-| Launch / installation session task | Refreshes the civil date and schedules a debounced sync for an attached household, alongside guarded membership reconciliation and invitation recovery. |
-| Scene becomes active | Refreshes the date and schedules sync; rechecks alert authorization. Returning from iOS Settings follows this path. |
-| Local source-fact mutation | The existing commit boundary schedules sync. Multiple arrivals use the 350 ms debounce, or reserve a trailing pass during active work. |
-| iCloud account change | Invalidates account generation/recovery candidates, refreshes date and schedules guarded sync. |
-| Calendar day / significant time change | Refreshes the household date and schedules sync. Significant-time changes also reset the midnight timer. |
-| Foreground household midnight | One calendar-aware sleep refreshes the date and schedules sync; scene inactivity cancels the timer. |
-| Connect, join, invitation and lifecycle operations | Existing explicit synchronization remains within the corresponding identity and lifecycle checks. |
-| CloudKit database silent change hint | The enabled app delegate invokes validated synchronization and Activity processing, in foreground or background, with a 25-second callback watchdog. |
-| Manual action | Parent home, child home, Activity pull-to-refresh and root retry controls use the same synchronization boundary. |
-
-Opening Activity processes the current local feed and authorization; it does not itself fetch remote facts. Foreground devices can receive updates without manual refresh when a CloudKit database hint is delivered, or when another listed trigger runs. There is no continuous foreground listener or periodic polling. APNs hints are best effort and may be coalesced, delayed, throttled or dropped. A device remaining foreground with no delivered hint or local trigger can remain stale until a refresh or foreground transition. Notifications being off or denied does not disable sync, Activity or punt decisions. Background delivery also depends on system scheduling, Background App Refresh and process availability. Force quit can prevent wake.
+See the [authoritative trigger inventory and foreground update limits](technical-overview.md#automatic-synchronization-triggers).
 
 ## Notification preference fix
 
-Activity now shows a native accessible switch within a labeled Notifications card, a saved On/Off preference, a separate iOS permission label, and a prominent Open iOS Settings action after denial. The local optional session field preserves previous authorized behavior without changing fact encoding or the SwiftData schema. Explicit choices persist across relaunch and ordinary account changes. Permission is requested only by explicit enabling while undetermined; repeated allowed or denied actions do not prompt.
-
-Turning off immediately disables delivery and foreground presentation, then clears queued/delivered system alerts. A delivery completing after the change is cleared again. Profile switches and inaccessible/reset households keep the existing alert-clear safeguards. Receipts remain household/member/fact scoped; unread Activity and pending punts are independent. Off/denied arrivals and the selected profile's backlog at enable time are consumed as alert receipts, preventing replay. Current authorization is checked on foreground return and before native scheduling. No alert content gains private family details.
+The [punt and activity guide](punt-notifications.md#communication-coverage-and-privacy) owns the Notifications card, installation-local preference, authorization safeguards, and alert receipt behavior. This fix implements that contract without changing shared fact encoding or the SwiftData schema.
 
 ## Local evidence and remaining physical checks
 
