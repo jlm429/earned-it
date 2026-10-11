@@ -47,8 +47,8 @@ These are engineering review captures, not approved App Store marketing screensh
 
 ## Profile selection follow-up
 
-The 1.0.6 toolbar removes Switch Profile from parent and child homes. Invitation
-claiming and account recovery retain their existing profile selection code. Review
+See the [product introduction](../README.md#what-it-does) for current home navigation.
+Invitation claiming and account recovery retain their existing profile selection code. Review
 whether creator-device and legacy shared-device switching permissions and the
 underlying picker remain necessary after iCloud person binding. They are retained
-for now; this release changes navigation only.
+for now; the profile selection change affects the home toolbar only.

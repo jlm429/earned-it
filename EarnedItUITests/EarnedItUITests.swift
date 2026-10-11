@@ -1132,6 +1132,25 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
         launchBoundMember("test-parent")
         XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+
+        relaunchWeekly(date: "2026-09-14T16:00:00Z", largeType: true)
+        advanceWeeklyClock(to: "Next Tuesday", date: "2026-09-15T16:00:00Z")
+        launchBoundMember("hanna")
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
+        launchBoundMember("alek")
+        tap("view-weekly-summary")
+        tap("weekly-item-2026-09-13-pack-school-bag")
+        XCTAssertTrue(app.navigationBars["Day’s Items"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["state-pack-school-bag-alek"].exists)
+        XCTAssertTrue(screen("completion-cutoff").exists)
+        keepScreenshot("weekly-bound-child-keeps-advanced-date")
+        launchBoundMember("test-parent")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
+        tap("parent-child-alek")
+        tap("previous-week")
+        tap("weekly-item-2026-09-13-pack-school-bag")
+        XCTAssertTrue(app.buttons["state-pack-school-bag-alek"].waitForExistence(timeout: 5))
+        keepScreenshot("weekly-returning-parent-keeps-history-permissions")
     }
 
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
