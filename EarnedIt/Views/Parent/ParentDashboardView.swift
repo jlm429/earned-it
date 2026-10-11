@@ -85,7 +85,7 @@ struct ParentDashboardView: View {
                     .accessibilityIdentifier("family-management")
             }
         }
-        .refreshable { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }
+        .refreshable { await store.refresh() }
         .accessibilityIdentifier("parent-dashboard")
     }
 

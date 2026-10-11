@@ -30,6 +30,7 @@ final class HouseholdStore {
     private let automaticSync: Bool
     private let activityAlerts: any ActivityAlerting
     private var processingActivityAlerts = false
+    private var requestingActivityAlertPermission = false
     private(set) var activityAlertPermission: ActivityAlertPermission = .notDetermined
     private(set) var snapshot = HouseholdSnapshot()
     private(set) var session: DeviceSession
@@ -50,6 +51,7 @@ final class HouseholdStore {
     var errorMessage: String?
     private var syncTask: Task<Void, Never>?
     private var activeSync: Task<Void, Error>?
+    private var syncWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var invitationCleanupTail: Task<Void, Never>?
     private var syncAgain = false
     private var deferredAutomaticSync = false
@@ -563,6 +565,7 @@ final class HouseholdStore {
         updated.selectedMemberID = id
         try repository.commit(facts: [], session: updated)
         session = updated
+        activityAlerts.setEnabled(false)
         Task { await activityAlerts.clear() }
     }
 
@@ -575,7 +578,7 @@ final class HouseholdStore {
 
     var unreadActivityCount: Int { activity.filter { !isActivityRead($0) }.count }
     var activityRevision: String {
-        "\(session.householdID?.uuidString ?? "")/\(selectedMember?.id.uuidString ?? "")/\(snapshot.orderedFacts.count)/\(day)/\(cloudAccessBlocked)/\(familyAccessLost)"
+        "\(session.householdID?.uuidString ?? "")/\(selectedMember?.id.uuidString ?? "")/\(snapshot.orderedFacts.count)/\(day)/\(cloudAccessBlocked)/\(familyAccessLost)/\(activityAlertsEnabled)"
     }
 
     private func activityKey(_ item: FamilyActivity, memberID: UUID) -> String {
@@ -595,9 +598,39 @@ final class HouseholdStore {
         session = updated
     }
 
+    var activityAlertsEnabled: Bool {
+        session.activityAlertsEnabled ?? (activityAlertPermission == .allowed)
+    }
+
+    func setActivityAlertsEnabled(_ enabled: Bool) async {
+        do {
+            var updated = session
+            updated.activityAlertsEnabled = enabled
+            // Enabling never replays this profile's existing Activity backlog.
+            if enabled, let member = selectedMember {
+                updated.processedActivityAlertKeys = Array(Set((updated.processedActivityAlertKeys ?? [])
+                    + activity.map { activityKey($0, memberID: member.id) }))
+            }
+            try repository.commit(facts: [], session: updated)
+            session = updated
+            activityAlerts.setEnabled(false)
+            if !enabled {
+                await activityAlerts.clear()
+            } else {
+                activityAlertPermission = await activityAlerts.permission()
+                if activityAlertsEnabled, activityAlertPermission == .notDetermined,
+                   !requestingActivityAlertPermission {
+                    requestingActivityAlertPermission = true
+                    defer { requestingActivityAlertPermission = false }
+                    activityAlertPermission = try await activityAlerts.requestPermission()
+                }
+            }
+            await processActivityAlerts()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
     func requestActivityAlertPermission() async {
-        do { activityAlertPermission = try await activityAlerts.requestPermission() }
-        catch { errorMessage = error.localizedDescription }
+        await setActivityAlertsEnabled(true)
     }
 
     /// Alert receipts are local, profile-scoped, and independent of unread activity.
@@ -615,8 +648,13 @@ final class HouseholdStore {
         activityAlertPermission = await activityAlerts.permission()
         guard let member = selectedMember, !cloudAccessBlocked, !familyAccessLost,
               !hasPendingAccountDataReset, !requiresAppUpdate else {
+            activityAlerts.setEnabled(false)
             await activityAlerts.clear()
             return
+        }
+        activityAlerts.setEnabled(activityAlertsEnabled && activityAlertPermission == .allowed)
+        if !activityAlertsEnabled || activityAlertPermission != .allowed {
+            await activityAlerts.clear()
         }
         let expectedHouseholdID = session.householdID
         let unprocessed = activity.filter {
@@ -628,7 +666,7 @@ final class HouseholdStore {
                 && (item.punt == nil || item.punt?.status == .pending)
         }
         do {
-            if activityAlertPermission == .allowed, let latest = incoming.first {
+            if activityAlertsEnabled, activityAlertPermission == .allowed, let latest = incoming.first {
                 try await activityAlerts.deliver(identifier: activityKey(latest, memberID: member.id))
             }
             guard selectedMember?.id == member.id, session.householdID == expectedHouseholdID,
@@ -636,12 +674,15 @@ final class HouseholdStore {
                 await activityAlerts.clear()
                 return
             }
+            if !activityAlertsEnabled { await activityAlerts.clear() }
             var updated = session
             updated.processedActivityAlertKeys = Array(Set((updated.processedActivityAlertKeys ?? [])
                 + unprocessed.map { activityKey($0, memberID: member.id) }))
             try repository.commit(facts: [], session: updated)
             session = updated
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            if !Task.isCancelled { errorMessage = error.localizedDescription }
+        }
     }
 
     func createFamily(name: String, parentName: String, timeZone: TimeZone = .current) throws {
@@ -4607,34 +4648,89 @@ final class HouseholdStore {
 
     func synchronize() async throws {
         if let token = Self.cloudMutationToken, token == activeCloudMutationToken {
-            try await synchronize(deferWhenCloudMutationActive: false)
+            try await synchronizeExclusively()
             return
         }
         try await Self.$cloudMutationToken.withValue(nil) {
-            while activeCloudMutationToken != nil {
-                try await waitForActiveCloudMutation()
-            }
             try Task.checkCancellation()
-            try await synchronize(deferWhenCloudMutationActive: false)
+            if activeSync != nil {
+                // A request arriving during a fetch needs one subsequent pass.
+                if isSyncing { syncAgain = true }
+            } else {
+                // The store owns accepted work, including the wait for a lifecycle
+                // mutation. A disappearing refreshable view owns only its caller.
+                let task = Task {
+                    do {
+                        repeat {
+                            syncAgain = false
+                            do {
+                                while activeCloudMutationToken != nil {
+                                    try await waitForActiveCloudMutation()
+                                }
+                                try await synchronizeExclusively()
+                            } catch {
+                                // An already queued request can recover an interrupted pass.
+                                // Otherwise return the real failure with the journal intact.
+                                if !syncAgain { throw error }
+                            }
+                        } while syncAgain
+                        finishSynchronization(.success(()))
+                    } catch {
+                        finishSynchronization(.failure(error))
+                        throw error
+                    }
+                }
+                activeSync = task
+            }
+            try await waitForSynchronization()
+            try Task.checkCancellation()
         }
     }
 
-    private func synchronize(deferWhenCloudMutationActive: Bool) async throws {
-        let whenCloudMutationActive: (() -> Void)?
-        if deferWhenCloudMutationActive {
-            whenCloudMutationActive = { self.deferredAutomaticSync = true }
+    private func waitForSynchronization() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    syncWaiters[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.syncWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func finishSynchronization(_ result: Result<Void, Error>) {
+        activeSync = nil
+        let waiters = Array(syncWaiters.values)
+        syncWaiters.removeAll()
+        for waiter in waiters { waiter.resume(with: result) }
+    }
+
+    func refresh() async {
+        do { try await synchronize() }
+        catch { presentSynchronizationError(error) }
+    }
+
+    private func presentSynchronizationError(_ error: Error) {
+        guard !Task.isCancelled else { return }
+        if error is CancellationError {
+            errorMessage = "Update interrupted. Your changes are kept. Pull to refresh to try again."
         } else {
-            whenCloudMutationActive = nil
+            errorMessage = error.localizedDescription
         }
-        try await withExclusiveCloudMutation(whenCloudMutationActive: whenCloudMutationActive) {
-        guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
-            throw HouseholdError.pendingChanges
-        }
-        if let activeSync { return try await activeSync.value }
-        let task = Task { try await performSynchronization() }
-        activeSync = task
-        defer { activeSync = nil }
-        try await task.value
+    }
+
+    private func synchronizeExclusively() async throws {
+        try await withExclusiveCloudMutation {
+            guard !isDeletingAllEarnedItData, !hasPendingAccountDataReset else {
+                throw HouseholdError.pendingChanges
+            }
+            try await performSynchronization()
         }
     }
 
@@ -4647,7 +4743,7 @@ final class HouseholdStore {
         syncMessage = "Syncing…"
         defer {
             isSyncing = false
-            if syncAgain { syncAgain = false; scheduleSync() }
+            if activeSync == nil, syncAgain { syncAgain = false; scheduleSync() }
         }
         do {
             guard session.pendingFamilyDeletion != true else { throw HouseholdError.permission }
@@ -4736,7 +4832,9 @@ final class HouseholdStore {
                 session = updated
                 cloudIsReadOnly = true
             }
-            syncMessage = "Sync needs attention. Changes are kept."
+            syncMessage = error is CancellationError
+                ? "Update interrupted. Changes are kept."
+                : "Sync needs attention. Changes are kept."
             throw error
         }
     }
@@ -4745,15 +4843,18 @@ final class HouseholdStore {
         guard automaticSync, session.location != nil,
               !isDeletingAllEarnedItData, !hasPendingAccountDataReset,
               session.pendingFamilyDeletion != true else { return }
-        if isSyncing { syncAgain = true; return }
+        if isSyncing || activeSync != nil { syncAgain = true; return }
         syncTask?.cancel()
         syncTask = Task { [weak self] in
             await Self.$cloudMutationToken.withValue(nil) {
                 do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
                 guard let self else { return }
-                do { try await self.synchronize(deferWhenCloudMutationActive: true) } catch {
-                    guard !Task.isCancelled else { return }
-                    self.errorMessage = error.localizedDescription
+                if self.activeCloudMutationToken != nil, self.activeSync == nil {
+                    self.deferredAutomaticSync = true
+                    return
+                }
+                do { try await self.synchronize() } catch {
+                    self.presentSynchronizationError(error)
                 }
             }
         }

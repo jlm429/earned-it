@@ -24,6 +24,39 @@ final class EarnedItUITests: XCTestCase {
         }
     }
 
+    func testNotificationPreferenceOnOffRelaunchAndRefresh() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-profile-binding=parent",
+                               "--ui-test-alerts-undetermined"]
+        app.launch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("family-activity-button")
+        XCTAssertTrue(app.staticTexts["activity-alerts-undetermined"].waitForExistence(timeout: 5))
+        let toggle = app.switches["activity-alerts-toggle"]
+        XCTAssertEqual(toggle.value as? String, "0")
+        toggle.tap()
+        XCTAssertTrue(app.staticTexts["activity-alerts-allowed"].waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "1")
+        toggle.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["activity-alerts-preference"], containing: "Off"))
+        keepScreenshot("notifications-discoverable-preference-off-ios-allowed")
+        tap("Done")
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-profile-binding=parent", "--ui-test-alerts-allowed"]
+        app.launch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        screen("parent-dashboard").swipeDown()
+        XCTAssertFalse(app.alerts["Unable to Update"].exists)
+        tap("family-activity-button")
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertTrue(app.staticTexts["activity-alerts-allowed"].exists)
+        toggle.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["activity-alerts-preference"], containing: "On"))
+        screen("family-activity").swipeDown()
+        XCTAssertFalse(app.alerts["Unable to Update"].exists)
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+    }
+
     func testSingleProfileNavigationAndClaimSelectionAtLargeType() throws {
         for role in ["parent", "child"] {
             app.terminate()
@@ -754,10 +787,21 @@ final class EarnedItUITests: XCTestCase {
     }
 
     func testPuntDeclineAndDeniedAlertsRemainUsefulAtLargeType() throws {
-        launchPuntFixture("--ui-test-activity-overflow")
+        launchPuntFixture("--ui-test-activity-overflow", largeType: true, dark: true)
         XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 53 unread")
         tap("family-activity-button")
         XCTAssertTrue(app.staticTexts["activity-alerts-denied"].waitForExistence(timeout: 5))
+        let alertsToggle = app.switches["activity-alerts-toggle"]
+        alertsToggle.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["activity-alerts-preference"], containing: "On"))
+        XCTAssertTrue(app.staticTexts["activity-alerts-denied"].exists)
+        tap("activity-alerts-settings")
+        XCTAssertTrue(XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+            .wait(for: .runningForeground, timeout: 5))
+        app.activate()
+        XCTAssertTrue(app.staticTexts["activity-alerts-denied"].waitForExistence(timeout: 5))
+        alertsToggle.tap()
+        XCTAssertTrue(waitForLabel(app.staticTexts["activity-alerts-preference"], containing: "Off"))
         let unread = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'read-activity-'"))
         XCTAssertEqual(unread.count, 53)
         var readIDs = Set<String>()
@@ -836,11 +880,12 @@ final class EarnedItUITests: XCTestCase {
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
     }
 
-    private func launchPuntFixture(_ flag: String, largeType: Bool = false) {
+    private func launchPuntFixture(_ flag: String, largeType: Bool = false, dark: Bool = false) {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-weekly-fixture", "--ui-test-hide-clock", flag,
                                "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         if largeType { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        if dark { app.launchArguments += ["--ui-test-dark"] }
         app.launch()
         XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8) || screen("child-home").exists)
     }

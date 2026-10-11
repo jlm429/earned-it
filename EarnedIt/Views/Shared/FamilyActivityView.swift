@@ -4,6 +4,7 @@ import UIKit
 struct FamilyActivityView: View {
     @Environment(HouseholdStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     static func items(from activity: [FamilyActivity]) -> [FamilyActivity] {
         let pending = activity.filter { $0.punt?.status == .pending }
@@ -16,34 +17,7 @@ struct FamilyActivityView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    SectionCard(tint: AppTheme.info) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Label("Stay in the loop", systemImage: "bell")
-                                .font(.headline)
-                            Text("Chore requests and family updates stay here, even when alerts are off or you're offline.")
-                                .font(.subheadline)
-                            if !BackgroundActivityDelivery.isEnabled {
-                                Text("Open or refresh Earned It to receive family updates.")
-                                    .font(.footnote).foregroundStyle(AppTheme.secondaryText)
-                            }
-                            switch store.activityAlertPermission {
-                            case .notDetermined:
-                                Button("Enable Alerts") { Task { await store.requestActivityAlertPermission() } }
-                                    .frame(minHeight: 44).accessibilityIdentifier("enable-activity-alerts")
-                            case .denied:
-                                Text("Alerts are off. You can enable them in iOS Settings.")
-                                    .font(.footnote).accessibilityIdentifier("activity-alerts-denied")
-                                Button("Open iOS Settings") {
-                                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                                        UIApplication.shared.open(url)
-                                    }
-                                }.frame(minHeight: 44)
-                            case .allowed:
-                                Label("Alerts enabled", systemImage: "checkmark.circle")
-                                    .foregroundStyle(AppTheme.success)
-                            }
-                        }
-                    }
+                    ActivityAlertSettings()
                     if items.isEmpty {
                         ContentUnavailableView("You're all caught up", systemImage: "bubble.left.and.bubble.right",
                                                description: Text("New chore requests and family updates will appear here."))
@@ -64,8 +38,10 @@ struct FamilyActivityView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .refreshable { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }
-            .task { await store.processActivityAlerts() }
+            .refreshable { await store.refresh() }
+            .task(id: scenePhase) {
+                if scenePhase == .active { await store.processActivityAlerts() }
+            }
             .accessibilityIdentifier("family-activity")
         }
         .tint(AppTheme.accent)
@@ -142,5 +118,66 @@ struct FamilyActivityView: View {
 
     private func decide(_ punt: ProjectedPunt, kind: PuntDecisionKind) {
         store.perform { try store.decidePunt(requestFactID: punt.id, kind: kind) }
+    }
+}
+
+private struct ActivityAlertSettings: View {
+    @Environment(HouseholdStore.self) private var store
+    @State private var isUpdating = false
+
+    var body: some View {
+        SectionCard(tint: AppTheme.info) {
+            VStack(alignment: .leading, spacing: 12) {
+                ViewThatFits(in: .horizontal) {
+                    Label("Notifications", systemImage: "bell.badge").fixedSize()
+                    Text("Notifications").fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.headline).accessibilityAddTraits(.isHeader)
+                Toggle("Earned It alerts", isOn: Binding(
+                    get: { store.activityAlertsEnabled },
+                    set: { enabled in
+                        isUpdating = true
+                        Task {
+                            await store.setActivityAlertsEnabled(enabled)
+                            isUpdating = false
+                        }
+                    }
+                ))
+                .toggleStyle(.switch)
+                .frame(minHeight: 44)
+                .disabled(isUpdating)
+                .accessibilityHint("Controls system alerts on this device. Activity and punt requests stay available.")
+                .accessibilityIdentifier("activity-alerts-toggle")
+                Text(store.activityAlertsEnabled ? "Your preference: On" : "Your preference: Off")
+                    .font(.subheadline).accessibilityIdentifier("activity-alerts-preference")
+                switch store.activityAlertPermission {
+                case .notDetermined:
+                    Label("iOS permission: Not requested", systemImage: "questionmark.circle")
+                        .font(.subheadline).accessibilityIdentifier("activity-alerts-undetermined")
+                case .denied:
+                    Label("iOS permission: Not allowed", systemImage: "bell.slash")
+                        .font(.subheadline).accessibilityIdentifier("activity-alerts-denied")
+                    Text("Allow notifications in iOS Settings to receive alerts when your preference is on.")
+                        .font(.footnote).foregroundStyle(AppTheme.secondaryText)
+                    Button("Open iOS Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent).frame(minHeight: 44)
+                    .foregroundStyle(AppTheme.surface)
+                    .accessibilityIdentifier("activity-alerts-settings")
+                case .allowed:
+                    Label("iOS permission: Allowed", systemImage: "checkmark.circle")
+                        .font(.subheadline).accessibilityIdentifier("activity-alerts-allowed")
+                }
+                Text("Chore requests and family updates stay in Activity, even when alerts are off or you're offline.")
+                    .font(.footnote).foregroundStyle(AppTheme.secondaryText)
+                if !BackgroundActivityDelivery.isEnabled {
+                    Text("Open or refresh Earned It to receive family updates.")
+                        .font(.footnote).foregroundStyle(AppTheme.secondaryText)
+                }
+            }
+        }
     }
 }
