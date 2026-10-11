@@ -6,6 +6,7 @@ User-visible changes to Earned It.
 
 ### Changed
 
+- Activity now has a labeled notification switch, separate preference and iOS permission states, and an Open iOS Settings button when permission is denied. Turning alerts off clears system alerts while retaining Activity and punt requests.
 - Added child-approved punts and family Activity with optional alerts. See the [punt and activity guide](docs/punt-notifications.md) for usage and delivery limits.
 - Added compact child Punt Stats in Activity for this week and last week. See the [stats rules](docs/punt-notifications.md#child-punt-stats).
 - As Needed chores can be withdrawn without credit or turn advancement and made available repeatedly on the same day. Each occurrence keeps distinct history and allowance credit while streaks remain day-based.
@@ -19,6 +20,7 @@ User-visible changes to Earned It.
 
 ### Fixed
 
+- Cancelled refresh views no longer show a generic update error. Accepted synchronization continues independently, overlapping refreshes share a job with a coalesced follow-up fetch, and interrupted transport work remains retryable. See the [stabilization evidence](docs/prerelease-stabilization.md).
 - Making an As Needed chore available or skipping its next child now refreshes shared history first, preventing a stale parent device from assigning the wrong turn. Temporary connection failures continue to use the local journal and synchronize later.
 - Family deletion keeps its generation-scoped lifecycle tombstone so an offline child or stale invitation cannot restore the deleted family. After local reset, that child can create or join a new family without being trapped by the old generation.
 - Pull to refresh now waits for in-progress iCloud membership recovery instead of showing a pending-changes error. Automatic refreshes resume after recovery finishes.

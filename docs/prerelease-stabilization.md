@@ -1,0 +1,50 @@
+# Earned It 1.0.7 stabilization
+
+Base: remote main `4380ced`, version 1.0.6/build 52. This change selects the next patch, 1.0.7/build 53, in the existing shared version configuration. No signing, entitlement, container, schema, pricing or distribution configuration is changed. TestFlight upload and signed-device release evidence remain human release actions.
+
+## Refresh diagnosis
+
+The device report described a parent deleting the As Needed chore `test`, creating `test2` for the same child, then a child pull-to-refresh displaying `Unable to Update` with `Swift.CancellationError error 1`. A later observation said everything appeared to work. No device task trace was supplied, so the precise physical cancellation initiator remains unproven.
+
+The baseline regression executes that sequence through real store mutations, two synthetic account adapters, an exact child invitation, immutable journals and the production synchronization API. It suspends startup membership reconciliation at the transport fetch, starts the same handler used by SwiftUI refreshable, then cancels the waiting child caller. The baseline displays the exact reported error text. Subsequent sync yields equal parent/child snapshots and relaunch projections with the deleted chore no longer actionable and a distinct replacement chore and occurrence. The error does not require CloudKit failure, reused chore identity or broken deletion projection.
+
+| Evidence | Explanation |
+| --- | --- |
+| Initiating trigger in the controlled reproduction | Cancellation of the refresh caller while another cloud mutation owns the lock. |
+| Task path | `refreshable` -> `synchronize` -> `waitForActiveCloudMutation` -> cancellation handler resumes with `CancellationError` -> the old unconditional view catch sets `errorMessage`. |
+| Independent masking condition | Reconciliation or another synchronization can still import the replacement, so correct visible chores coexist with a misleading error. |
+| Visible symptom | RootView presents the cancellation's generic localized description as Unable to Update. |
+| Working counterfactual | Keep the waiting caller alive; the same delete/recreate facts converge without the error. |
+| Disconfirming evidence | Real transport interruption without caller cancellation leaves work incomplete and must remain visible. The regression verifies this separately. |
+
+SwiftUI executes the [refreshable asynchronous handler](https://developer.apple.com/documentation/swiftui/view/refreshable(action:)); view task lifetime must be treated separately from shared work. Its [view tasks can be cancelled after view removal](https://developer.apple.com/documentation/swiftui/view/task(name:priority:file:line:_:)). RootView's foreground tasks change with scene state and local Activity revisions, and its session task changes with device identity. Startup membership reconciliation shows a loading route only when there is no attached household, so this is not evidence that reconciliation removes an already attached child's home. No app call explicitly cancels the refreshable caller. View removal and SwiftUI refresh task cancellation remain possible initiators; this diagnosis does not claim which transition occurred on the physical device.
+
+The automatic 350 ms debounce cancels superseded scheduling callers. Its in-progress sync task was already unstructured, but public refreshes waited on the lifecycle lock before reaching that shared task. Swift's [unstructured tasks have an independent lifetime](https://docs.swift.org/latest/documentation/the-swift-programming-language/concurrency/); awaiting one does not give the caller ownership of its cancellation. The background watchdog separately cancels its receiving caller after 25 seconds. The CloudKit transport also explicitly checks cancellation around account-sensitive operations; a cancellation error alone is not proof of a CloudKit outage.
+
+An independent controlled regression reproduces the same generic error by cancelling the Activity view task during suspended alert delivery, without invoking synchronization at all (`ActivityCancellationBaseline.xcresult`, `activity-cancellation-baseline.log`). RootView's Activity task identity includes the fact revision, so an incoming sync can supersede that caller while the shared sync succeeds. The Activity catch now ignores errors only when its own task is cancelled, retaining unprocessed alert receipts for a later pass and preserving real provider errors on live callers. The regression verifies eventual delivery exactly once and retained unread Activity. This proves the handling path with a cancellation-aware alert double; it does not prove that the native UserNotifications bridge emitted the physical device's error.
+
+## Ownership and recovery fix
+
+The [technical overview](technical-overview.md#work-ownership-and-recovery) owns the synchronization contract implemented by this fix.
+
+Regression coverage includes lock waiting; initiating and overlapping caller cancellation; manual/automatic overlap after a stale fetch snapshot; exactly one trailing fetch; real fetch cancellation; a cancelled partial upload with pending facts retained; retry after reopening the journal; idempotent saves; distinct deletion/replacement identities and equal parent/child projections after reconciliation and relaunch. Facts, historical outcomes, invitation claims, membership bindings and occurrence-aware handling are unchanged.
+
+## Current automatic synchronization triggers
+
+See the [authoritative trigger inventory and foreground update limits](technical-overview.md#automatic-synchronization-triggers).
+
+## Notification preference fix
+
+The [punt and activity guide](punt-notifications.md#communication-coverage-and-privacy) owns the Notifications card, installation-local preference, authorization safeguards, and alert receipt behavior. This fix implements that contract without changing shared fact encoding or the SwiftData schema.
+
+## Local evidence and remaining physical checks
+
+Evidence is retained outside the repository under `/Users/jlm429/Documents/gitstuff/firstmate/data/earned-it-prerelease-stabilization/`. All accounts, invitations and journals used by tests are synthetic. The task owns simulator `AA45C75B-E06B-41C2-ACEC-22C2884B441D`, iPhone 17/iOS 26.5, with dedicated derived data. Baseline output contains the intended failure and completed projection checks; Xcode stalled afterward in test-session/log cleanup, so that Xcode process was terminated. The baseline log is evidence; its unfinished result bundle is not claimed as a completed run. Later runs disable verbose failure diagnostics.
+
+The final full local unit suite passed 440 tests after the Activity cancellation correction (`ValidatedUnitSuite.xcresult`, `validated-unit-suite.log`). Coverage includes five refresh and seven new notification regressions. The permission cases include concurrent explicit enables producing one request and an account switch retaining Off and suppressing the previous profile's alerts. Existing deliberate unreadable-store and transport failure fixtures passed; their diagnostic error output is not a failed test or evidence of a product launch error.
+
+Three focused native UI flows passed in `NativeUI.xcresult`: notification On/Off, undetermined-to-allowed simulation, relaunch persistence and parent/Activity refresh; punt approval/relaunch/recipient completion with legacy and stale-occurrence boundaries; and denied permission with an actual Open iOS Settings round trip, all 53 Activity entries marked read, zero unread retained after relaunch and a still-actionable pending punt declined at largest text. That denial flow also passed with dark mode and largest text active from the start after local screenshot inspection prompted an adaptive heading layout and button contrast correction (`FinalLargestUI.xcresult`, `final-largest-ui.log`). No fourth flow was added. Exported screenshots confirm the heading remains on one line at largest text and the switch and permission state wrap without clipping.
+
+Release simulator compilation and release metadata checks pass for 1.0.7/build 53, iPhone/iPad support and multitasking orientations. Build-number semantics and synthetic provisioning-profile entitlement semantics pass. Existing simulator app launches use no CloudKit transport, and UI authorization fixtures use a DEBUG-only alert double restricted to the dedicated UI-test store. They do not prove the native iOS permission prompt or signed APNs delivery. Screenshots are local evidence only and are not published.
+
+Before release, use approved signed parent and independently invited child devices to repeat deletion/recreation while foreground, during overlapping refresh/automatic hints, after interrupted connectivity and after relaunch. Confirm the final chores and histories agree, no expected cancellation alert appears, and a real failed update still offers useful retry. Test actual undetermined permission, grant and denial, Settings authorization changes and return, off/on/relaunch, off during incoming delivery, background/foreground hints, queued alerts, account switching/revoked access, lock-screen privacy, force quit and Background App Refresh off. Confirm the final APNs-capable signature and subscriptions through the existing release process. Local simulator/transport evidence does not replace those checks or the production invitation/membership procedures.

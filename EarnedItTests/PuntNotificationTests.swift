@@ -433,6 +433,185 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(again.activity.first { $0.id == requestID }?.punt?.status, .declined)
     }
 
+    func testAlertsPreferenceOffOnAndRelaunchPreserveActivityWithoutBacklogReplay() async throws {
+        let family = try TestFamily()
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .allowed
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        try store.selectProfile(family.hanna.id)
+        await store.processActivityAlerts()
+        XCTAssertTrue(store.activityAlertsEnabled, "Preserve previously authorized installation behavior")
+        await store.setActivityAlertsEnabled(false)
+        XCTAssertFalse(alerts.enabled)
+        XCTAssertGreaterThan(alerts.clearCount, 0)
+        try store.selectProfile(family.parent.id)
+        _ = try store.saveChore(weekday: .monday, title: "Off arrival", mode: .all, memberIDs: [])
+        try store.selectProfile(family.hanna.id)
+        await store.processActivityAlerts()
+        XCTAssertTrue(alerts.delivered.isEmpty)
+        XCTAssertGreaterThan(store.unreadActivityCount, 0)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        await reopened.processActivityAlerts()
+        XCTAssertFalse(reopened.activityAlertsEnabled)
+        await reopened.setActivityAlertsEnabled(true)
+        XCTAssertTrue(reopened.activityAlertsEnabled)
+        XCTAssertTrue(alerts.delivered.isEmpty)
+        XCTAssertEqual(alerts.requestCount, 0, "Allowed authorization does not request permission again")
+        try reopened.selectProfile(family.parent.id)
+        _ = try reopened.saveChore(weekday: .monday, title: "On arrival", mode: .all, memberIDs: [])
+        try reopened.selectProfile(family.hanna.id)
+        await reopened.processActivityAlerts()
+        XCTAssertEqual(alerts.delivered.count, 1)
+        let again = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        await again.processActivityAlerts()
+        XCTAssertTrue(again.activityAlertsEnabled)
+        XCTAssertEqual(alerts.delivered.count, 1)
+    }
+
+    func testDeniedPreferenceCanBeOnWithoutPromptAndSettingsReturnUsesCurrentAuthorization() async throws {
+        let family = try TestFamily()
+        let alerts = TestActivityAlerts()
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        try store.selectProfile(family.hanna.id)
+        await store.setActivityAlertsEnabled(true)
+        XCTAssertTrue(store.activityAlertsEnabled)
+        XCTAssertEqual(store.activityAlertPermission, .denied)
+        XCTAssertEqual(alerts.requestCount, 0)
+        try store.selectProfile(family.parent.id)
+        _ = try store.saveChore(weekday: .monday, title: "Denied arrival", mode: .all, memberIDs: [])
+        try store.selectProfile(family.hanna.id)
+        await store.processActivityAlerts()
+        alerts.currentPermission = .allowed
+        await store.processActivityAlerts() // Same foreground path used on return from Settings.
+        XCTAssertEqual(store.activityAlertPermission, .allowed)
+        XCTAssertTrue(alerts.enabled)
+        XCTAssertTrue(alerts.delivered.isEmpty)
+        alerts.currentPermission = .denied
+        await store.processActivityAlerts()
+        XCTAssertFalse(alerts.enabled)
+        XCTAssertEqual(alerts.requestCount, 0)
+        XCTAssertFalse(store.cloudAccessBlocked)
+    }
+
+    func testUndeterminedPermissionIsRequestedOnlyByExplicitEnable() async throws {
+        let family = try TestFamily()
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .notDetermined
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        await store.processActivityAlerts()
+        await store.setActivityAlertsEnabled(false)
+        XCTAssertEqual(alerts.requestCount, 0)
+        alerts.permissionAfterRequest = .allowed
+        await store.setActivityAlertsEnabled(true)
+        await store.setActivityAlertsEnabled(true)
+        XCTAssertEqual(alerts.requestCount, 1)
+        XCTAssertEqual(store.activityAlertPermission, .allowed)
+    }
+
+    func testTurningOffDuringDeliveryClearsLateAlertAndPreservesPendingPunt() async throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
+        let requestID = try request(family, chore: chore, recipient: family.alek)
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .allowed
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        try store.selectProfile(family.alek.id)
+        let gate = TestSuspensionGate()
+        alerts.beforeDelivery = { await gate.wait() }
+        let delivery = Task { await store.processActivityAlerts() }
+        while !gate.isWaiting { await Task.yield() }
+        await store.setActivityAlertsEnabled(false)
+        let cleared = alerts.clearCount
+        gate.resume()
+        await delivery.value
+        XCTAssertGreaterThan(alerts.clearCount, cleared)
+        XCTAssertFalse(alerts.enabled)
+        XCTAssertEqual(store.activity.first { $0.id == requestID }?.punt?.status, .pending)
+        try store.decidePunt(requestFactID: requestID, kind: .accepted)
+        XCTAssertEqual(store.activity.first { $0.id == requestID }?.punt?.status, .accepted)
+    }
+
+    func testOffPreferenceAndReceiptsSurviveAccountChangeWithoutDeliveringOldProfileAlerts() async throws {
+        let server = TestCloudServer()
+        let transport = TestTransport(server: server, account: "owner")
+        let family = try TestFamily(transport: transport)
+        _ = try family.chore(.all)
+        try await family.store.connect()
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .allowed
+        let store = try HouseholdStore(repository: family.repository, transport: transport,
+            clock: { family.clock.now }, automaticSync: false, activityAlerts: alerts)
+        try store.selectProfile(family.hanna.id)
+        await store.setActivityAlertsEnabled(false)
+        let receipts = store.session.processedActivityAlertKeys
+        transport.account = "other-account"
+        store.cloudAccountDidChange()
+        await store.refresh()
+        await store.processActivityAlerts()
+        XCTAssertFalse(store.activityAlertsEnabled)
+        XCTAssertFalse(alerts.enabled)
+        XCTAssertTrue(alerts.delivered.isEmpty)
+        XCTAssertTrue(store.cloudAccessBlocked)
+        XCTAssertEqual(store.session.processedActivityAlertKeys, receipts)
+        let reopened = try HouseholdStore(repository: family.repository, transport: transport,
+            clock: { family.clock.now }, automaticSync: false, activityAlerts: alerts)
+        await reopened.refresh()
+        await reopened.processActivityAlerts()
+        XCTAssertFalse(reopened.activityAlertsEnabled)
+        XCTAssertTrue(alerts.delivered.isEmpty)
+    }
+
+    func testConcurrentExplicitEnablesRequestUndeterminedPermissionOnce() async throws {
+        let family = try TestFamily()
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .notDetermined
+        alerts.permissionAfterRequest = .allowed
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        let gate = TestSuspensionGate()
+        alerts.beforePermissionRequest = { await gate.wait() }
+        let first = Task { await store.setActivityAlertsEnabled(true) }
+        while !gate.isWaiting { await Task.yield() }
+        await store.setActivityAlertsEnabled(true)
+        XCTAssertEqual(alerts.requestCount, 1)
+        gate.resume()
+        await first.value
+        XCTAssertEqual(alerts.requestCount, 1)
+        XCTAssertEqual(store.activityAlertPermission, .allowed)
+    }
+
+    func testCancelledActivityTaskDoesNotPresentUpdateErrorAndLaterProcessingRecovers() async throws {
+        let family = try TestFamily()
+        _ = try family.chore(.all)
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .allowed
+        alerts.checksCancellation = true
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        try store.selectProfile(family.hanna.id)
+        let gate = TestSuspensionGate()
+        alerts.beforeDelivery = { await gate.waitForCancellation() }
+        let delivered = expectation(description: "A later Activity task processes the retained alert")
+        alerts.didDeliver = { _ in delivered.fulfill() }
+        let processing = Task { await store.processActivityAlerts() }
+        while !gate.isWaiting { await Task.yield() }
+        processing.cancel()
+        await processing.value
+        XCTAssertNil(store.errorMessage, "Activity view task cancellation must not appear as a sync failure")
+        await store.processActivityAlerts()
+        await fulfillment(of: [delivered], timeout: 3)
+        XCTAssertEqual(alerts.delivered.count, 1)
+        XCTAssertGreaterThan(store.unreadActivityCount, 0)
+        await store.processActivityAlerts()
+        XCTAssertEqual(alerts.delivered.count, 1)
+    }
+
     func testAvailabilityAlertsIncludeEveryEligibleChildButNotInactiveDefinition() async throws {
         let family = try TestFamily()
         let chore = try family.store.saveChore(weekday: .monday, title: "Bins", mode: .alternating,
@@ -537,15 +716,27 @@ private final class TestActivityAlerts: ActivityAlerting {
     var currentPermission: ActivityAlertPermission = .denied
     var delivered: [String] = []
     var clearCount = 0
+    var requestCount = 0
+    var enabled = false
+    var permissionAfterRequest: ActivityAlertPermission?
+    var beforePermissionRequest: (() async -> Void)?
+    var checksCancellation = false
     var beforeDelivery: (() async -> Void)?
     var didDeliver: ((String) -> Void)?
     func permission() async -> ActivityAlertPermission { currentPermission }
-    func requestPermission() async throws -> ActivityAlertPermission { currentPermission }
+    func setEnabled(_ enabled: Bool) { self.enabled = enabled }
+    func requestPermission() async throws -> ActivityAlertPermission {
+        requestCount += 1
+        await beforePermissionRequest?()
+        if let permissionAfterRequest { currentPermission = permissionAfterRequest }
+        return currentPermission
+    }
     func deliver(identifier: String) async throws {
         if let beforeDelivery {
             self.beforeDelivery = nil
             await beforeDelivery()
         }
+        if checksCancellation { try Task.checkCancellation() }
         delivered.append(identifier)
         didDeliver?(identifier)
     }

@@ -34,7 +34,7 @@ A parent creates the family, adds children, and sets up chores. They can invite 
 
 Children check their list and mark chores complete. Parents manage the family name and assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
 
-For a punt, choose **Request a Punt** on today's alternating chore and select a sibling. The sibling accepts or declines in **Activity**, opened from the bell. Alerts can be enabled from Activity. See the [punt and activity guide](docs/punt-notifications.md) for eligibility, responsibility, privacy, and delivery limits.
+For a punt, choose **Request a Punt** on today's alternating chore and select a sibling. The sibling accepts or declines in **Activity**, opened from the bell. Use Activity's **Notifications** card to turn alerts on or off. See the [punt and activity guide](docs/punt-notifications.md) for eligibility, responsibility, privacy, and delivery limits.
 
 ## Privacy
 

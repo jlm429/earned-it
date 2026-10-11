@@ -36,8 +36,7 @@ struct RootView: View {
                 ) {
                     Button("Check Again") {
                         Task {
-                            do { try await store.synchronize() }
-                            catch { store.errorMessage = error.localizedDescription }
+                            await store.refresh()
                         }
                     }
                     .accessibilityIdentifier("retry-after-update-required")
@@ -202,8 +201,7 @@ struct RootView: View {
                     }
                     Button("Try Reconnecting") {
                         Task {
-                            do { try await store.synchronize() }
-                            catch { store.errorMessage = error.localizedDescription }
+                            await store.refresh()
                         }
                     }
                     .accessibilityIdentifier("retry-family-access")
@@ -259,7 +257,9 @@ struct RootView: View {
             do {
                 try await store.reconcileAccountMembershipLockAutomatically()
             }
-            catch { store.errorMessage = error.localizedDescription }
+            catch {
+                if !Task.isCancelled { store.errorMessage = error.localizedDescription }
+            }
             await acceptInvitation()
         }
         .task(id: "\(scenePhase)-\(store.pendingInvitationCleanupID ?? "none")-\(cloudAccountRevision)") {

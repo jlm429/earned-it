@@ -8,10 +8,15 @@ enum ActivityAlertPermission: Equatable {
 
 @MainActor
 protocol ActivityAlerting {
+    func setEnabled(_ enabled: Bool)
     func permission() async -> ActivityAlertPermission
     func requestPermission() async throws -> ActivityAlertPermission
     func deliver(identifier: String) async throws
     func clear() async
+}
+
+extension ActivityAlerting {
+    func setEnabled(_ enabled: Bool) {}
 }
 
 @MainActor
@@ -21,6 +26,23 @@ struct DisabledActivityAlerts: ActivityAlerting {
     func deliver(identifier: String) async throws {}
     func clear() async {}
 }
+
+#if DEBUG
+/// Authorization simulation is restricted to the disposable UI-test launch.
+@MainActor
+final class UITestActivityAlerts: ActivityAlerting {
+    private var current: ActivityAlertPermission
+
+    init(allowed: Bool) { current = allowed ? .allowed : .notDetermined }
+    func permission() async -> ActivityAlertPermission { current }
+    func requestPermission() async throws -> ActivityAlertPermission {
+        current = .allowed
+        return current
+    }
+    func deliver(identifier: String) async throws {}
+    func clear() async {}
+}
+#endif
 
 @MainActor
 @Observable
@@ -32,6 +54,10 @@ final class ActivityNavigation {
 final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationCenterDelegate {
     static let shared = AppleActivityAlerts()
     private let center = UNUserNotificationCenter.current()
+    @MainActor private var isEnabled = false
+
+    @MainActor
+    func setEnabled(_ enabled: Bool) { isEnabled = enabled }
 
     override init() {
         super.init()
@@ -55,7 +81,7 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
 
     @MainActor
     func deliver(identifier: String) async throws {
-        guard await permission() == .allowed else { return }
+        guard await permission() == .allowed, isEnabled else { return }
         try await center.add(Self.request(identifier: identifier))
     }
 
@@ -76,7 +102,9 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
+        Task { @MainActor in
+            completionHandler(isEnabled ? [.banner, .list, .sound] : [])
+        }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

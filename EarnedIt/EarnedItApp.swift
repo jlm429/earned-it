@@ -94,10 +94,20 @@ struct EarnedItApp: App {
                 try PuntStatsUITestFixture.prepare(repository: repository)
                 try ProfileUITestFixture.bindRequestedMember(repository: repository)
             }
+            let alerts: any ActivityAlerting
+            if !readOnlyPreflight, isUITest, arguments.contains("--ui-test-alerts-allowed") {
+                alerts = UITestActivityAlerts(allowed: true)
+            } else if !readOnlyPreflight, isUITest, arguments.contains("--ui-test-alerts-undetermined") {
+                alerts = UITestActivityAlerts(allowed: false)
+            } else if isUITest || readOnlyPreflight {
+                alerts = DisabledActivityAlerts()
+            } else {
+                alerts = AppleActivityAlerts.shared
+            }
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
                 clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
                 automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight,
-                activityAlerts: isUITest || readOnlyPreflight ? DisabledActivityAlerts() : AppleActivityAlerts.shared,
+                activityAlerts: alerts,
                 localDataResetter: localDataResetter,
                 accountDataResetCloudBoundary: resetBoundary,
                 accountDataResetJournal: journal)

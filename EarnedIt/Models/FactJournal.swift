@@ -170,6 +170,9 @@ struct OwnerConnectionBootstrap: Codable, Equatable {
 }
 
 struct DeviceSession: Codable, Equatable {
+    /// Local to this installation, like iOS notification authorization.
+    /// Nil preserves the behavior of previously authorized installations.
+    var activityAlertsEnabled: Bool?
     var readActivityKeys: [String]?
     var processedActivityAlertKeys: [String]?
     var deviceID = UUID()

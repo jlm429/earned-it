@@ -88,7 +88,7 @@ struct ChildHomeView: View {
         }
         .background(AppTheme.canvas)
         .navigationTitle("Today")
-        .refreshable { do { try await store.synchronize() } catch { store.errorMessage = error.localizedDescription } }
+        .refreshable { await store.refresh() }
         .task(id: "\(previous?.id ?? "")/\(previous?.earned ?? false)") {
             guard previous?.earned == true else { celebratingWeekID = nil; return }
             do {

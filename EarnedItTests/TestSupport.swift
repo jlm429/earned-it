@@ -106,6 +106,7 @@ final class TestCloudServer {
     var authoritativeTime: Date?
     var createCalls = 0
     var failUploadAfter: Int?
+    var uploadFailure: Error = CKError(.networkFailure)
     var writeAllowed = true
 }
 
@@ -205,6 +206,7 @@ final class TestTransport: HouseholdTransport {
     var beforeLifecycleFinalize: (() async -> Void)?
     var beforeCreateZone: (() async -> Void)?
     var beforeFetch: (() async -> Void)?
+    var afterFetch: (() async -> Void)?
     var beforeMembershipLocation: (() async -> Void)?
     var beforeAccountResetDeletion: (() async -> Void)?
     var afterAccountResetDeletion: (() async -> Void)?
@@ -940,6 +942,7 @@ final class TestTransport: HouseholdTransport {
             throw error
         }
         let facts = Array(zone.facts.values)
+        await afterFetch?()
         familyTransitionDiagnostics.record(stage: .journalFetch, outcome: .succeeded,
                                             householdID: location.householdID, factCount: facts.count)
         return facts
@@ -963,7 +966,7 @@ final class TestTransport: HouseholdTransport {
         }
         for (index, fact) in facts.enumerated() {
             if server.failUploadAfter == index {
-                let error = CKError(.networkFailure)
+                let error = server.uploadFailure
                 familyTransitionDiagnostics.record(stage: stage, outcome: .failed,
                                                     householdID: location.householdID,
                                                     factCount: facts.count, error: error)
