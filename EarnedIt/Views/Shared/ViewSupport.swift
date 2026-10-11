@@ -91,14 +91,33 @@ extension String {
 struct AvatarView: View {
     let user: FamilyMember
     var size: CGFloat = 52
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
-        Text(user.avatar.rawValue)
-            .font(.system(size: size * 0.58))
+        Group {
+            if let image = avatarImage {
+                Image(uiImage: image)
+            } else {
+                avatarGlyph
+            }
+        }
             .frame(width: size, height: size)
             .background(AppTheme.accent.opacity(0.12), in: Circle())
             .overlay(Circle().strokeBorder(AppTheme.accent.opacity(0.18), lineWidth: 1))
             .accessibilityHidden(true)
+    }
+
+    private var avatarGlyph: some View {
+        Text(user.avatar.rawValue)
+            .font(.system(size: size * 0.58))
+            .frame(width: size, height: size)
+    }
+
+    // Emoji are decorative artwork, not text whose shading conveys meaning.
+    private var avatarImage: UIImage? {
+        let renderer = ImageRenderer(content: avatarGlyph)
+        renderer.scale = displayScale
+        return renderer.uiImage
     }
 }
 

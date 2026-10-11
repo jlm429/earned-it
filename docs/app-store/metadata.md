@@ -67,7 +67,7 @@ To review punts and weekly Punt Stats, add a second fictional child, create an a
 
 The app has no developer login credentials to supply. App Review must still receive access and resources to assess the sharing features. Confirm a workable reviewer procedure and any required private invitation/device resources before submission, accounting for the invitation's 24-hour expiration and one-time exact-profile claim. Do not place a live invitation in this repository or permanent public metadata.
 
-This draft describes the integrated 1.0.5 candidate, not a live listing. Complete the [release checklist](release-readiness.md), including signed independent-account/device notification verification, before submission.
+This draft describes the integrated 1.0.6 candidate, not a live listing. Complete the [release checklist](release-readiness.md), including signed independent-account/device notification verification, before submission.
 
 ## Copyright and content rights
 

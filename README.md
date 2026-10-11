@@ -22,7 +22,7 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 - Optionally tracks weekly allowance eligibility without moving money.
 - Shares through iCloud, synchronizes automatically, and works offline.
 
-The source for the next App Store release, 1.0.5, includes approved punts, Activity with optional alerts, and weekly Punt Stats. Store availability remains pending release.
+The source for the next App Store release, 1.0.6, includes approved punts, Activity with optional alerts, and weekly Punt Stats. Parent and child homes stay on the bound person and no longer expose Switch Profile. Store availability remains pending release.
 
 Still planned:
 

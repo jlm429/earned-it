@@ -44,3 +44,11 @@ Task evidence lives under `/Users/jlm429/Documents/gitstuff/firstmate/data/earne
 - Review artifact: `visual-review.html` and the self-contained `visual-review-portable.html`, exported locally through Lavish. The comparison uses the app palette and was checked in Chrome at desktop and 390-point width with loaded images and no horizontal overflow.
 
 These are engineering review captures, not approved App Store marketing screenshots. See [release readiness](app-store/release-readiness.md) for the remaining submission checks and [visual assets](app-store/visual-assets.md) for screenshot requirements.
+
+## Profile selection follow-up
+
+The 1.0.6 toolbar removes Switch Profile from parent and child homes. Invitation
+claiming and account recovery retain their existing profile selection code. Review
+whether creator-device and legacy shared-device switching permissions and the
+underlying picker remain necessary after iCloud person binding. They are retained
+for now; this release changes navigation only.

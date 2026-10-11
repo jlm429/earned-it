@@ -24,6 +24,69 @@ final class EarnedItUITests: XCTestCase {
         }
     }
 
+    func testSingleProfileNavigationAndClaimSelectionAtLargeType() throws {
+        for role in ["parent", "child"] {
+            app.terminate()
+            app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-profile-binding=\(role)",
+                                   "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+            app.launch()
+            let home = role == "parent" ? "parent-dashboard" : "child-home"
+            XCTAssertTrue(screen(home).waitForExistence(timeout: 8))
+            XCTAssertFalse(app.buttons["switch-user"].exists)
+            XCTAssertFalse(screen("profile-selection").exists)
+            tap("family-activity-button")
+            XCTAssertTrue(screen("family-activity").waitForExistence(timeout: 5))
+            tap("Done")
+            tap("about-menu")
+            let settings = app.descendants(matching: .any).matching(identifier: "about-settings").firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.tap()
+            XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            if role == "parent" {
+                tap("family-management")
+                XCTAssertTrue(screen("family-management-screen").waitForExistence(timeout: 5))
+                app.navigationBars.buttons.element(boundBy: 0).tap()
+            } else {
+                XCTAssertFalse(app.buttons["family-management"].exists)
+                reveal(app.buttons["state-water-plants-hanna"])
+                tap("state-water-plants-hanna")
+                XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Done"))
+                XCTAssertFalse(app.buttons["state-water-plants-alek"].exists)
+            }
+            keepScreenshot("single-profile-\(role)-largest-text")
+            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+            relaunch(largeType: true)
+            XCTAssertTrue(screen(home).waitForExistence(timeout: 8))
+            XCTAssertFalse(app.buttons["switch-user"].exists)
+            if role == "child" {
+                reveal(app.buttons["state-water-plants-hanna"])
+                XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-hanna"], containing: "Done"))
+            }
+        }
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-profile-binding=child",
+                               "--ui-test-profile-unselected"]
+        app.launch()
+        XCTAssertTrue(screen("profile-selection").waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Who’s using Earned It?"].exists)
+        XCTAssertFalse(app.buttons["user-card-test-parent"].exists)
+        XCTAssertFalse(app.buttons["user-card-alek"].exists)
+        tap("user-card-hanna")
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["switch-user"].exists)
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-profile-binding=child",
+                               "--ui-test-profile-unclaimed"]
+        app.launch()
+        XCTAssertTrue(screen("profile-selection").waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["user-card-hanna"].exists)
+        XCTAssertTrue(app.textFields["connected-invitation-code"].exists)
+        XCTAssertTrue(app.buttons["profile-settings"].exists)
+        tap("profile-settings")
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    }
+
     func testPartialSetupDuplicatePreventionAndConfirmedResetAtLargeType() throws {
         reveal(app.buttons["join-family"])
         XCTAssertTrue(app.buttons["join-family"].exists)
@@ -518,19 +581,8 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.buttons["state-read-book-new-child"].exists)
         checkControls(["state-feed-dog-alek", "state-feed-dog-hanna", "state-feed-dog-new-child"])
         keepScreenshot("after-new-child-immediately-in-today")
-        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .contrast, .hitRegion]) { issue in
-            // Captured audit attachments show the full decorative star, not clipped text.
-            // Its shading is not a text contrast signal. AvatarView hides it from VoiceOver;
-            // the adjacent member name and status carry meaning and remain fully audited.
-            guard issue.auditType == .textClipped || issue.auditType == .contrast,
-                  let element = issue.element, element.label == "⭐️",
-                  abs(element.frame.width - 52) < 0.01,
-                  abs(element.frame.height - 52) < 0.01 else { return false }
-            let progress = self.app.buttons["parent-child-alek"]
-            return progress.exists && progress.frame.contains(element.frame)
-        }
-        tap("switch-user")
-        tap("user-card-new-child")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped, .contrast, .hitRegion])
+        launchBoundMember("new-child")
         reveal(app.buttons["state-feed-dog-new-child"])
         XCTAssertFalse(app.buttons["state-feed-dog-alek"].exists)
         XCTAssertFalse(app.staticTexts["Read book"].exists)
@@ -548,8 +600,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
         reveal(app.buttons["state-feed-dog-new-child"])
         XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-new-child"], containing: "Done"))
-        tap("switch-user")
-        tap("user-card-test-parent")
+        launchBoundMember("test-parent")
         reveal(app.buttons["state-feed-dog-new-child"])
         XCTAssertTrue(waitForLabel(app.buttons["state-feed-dog-alek"], containing: "Done"))
         keepScreenshot("after-parent-completions-persist")
@@ -611,15 +662,13 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(app.buttons["state-set-the-table-alek"].exists)
         keepScreenshot("alternating-parent-current-owner")
 
-        tap("switch-user")
-        tap("user-card-nora")
+        launchBoundMember("nora")
         XCTAssertTrue(app.staticTexts["full-status-set-the-table"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["full-status-set-the-table"].label.contains("Your turn"))
         XCTAssertTrue(app.buttons["state-set-the-table-nora"].exists)
         keepScreenshot("alternating-current-child-your-turn")
 
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         XCTAssertFalse(app.staticTexts["Set the table"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["state-set-the-table-nora"].exists)
         keepScreenshot("alternating-other-child-hidden")
@@ -682,14 +731,12 @@ final class EarnedItUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
         preparePuntChore()
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         sendUIPuntRequest()
         XCTAssertTrue(app.buttons["cancel-punt-punt-dishwasher"].waitForExistence(timeout: 5))
         relaunch()
         XCTAssertTrue(app.buttons["cancel-punt-punt-dishwasher"].waitForExistence(timeout: 5))
-        tap("switch-user")
-        tap("user-card-alek")
+        launchBoundMember("alek")
         XCTAssertFalse(asNeededStateButtons("state-punt-dishwasher-alek").firstMatch.exists)
         tap("family-activity-button")
         XCTAssertTrue(screen("family-activity").waitForExistence(timeout: 5))
@@ -735,8 +782,7 @@ final class EarnedItUITests: XCTestCase {
         tap("decline-punt")
         keepScreenshot("punt-declined-denied-alerts-largest-text")
         tap("Done")
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         XCTAssertTrue(app.buttons["state-punt-dishwasher-hanna"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["cancel-punt-punt-dishwasher"].exists)
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
@@ -765,8 +811,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["punt-stats-covered"].label, "You covered: 2")
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
         tap("Done")
-        tap("switch-user")
-        tap("user-card-test-parent")
+        launchBoundMember("test-parent")
         tap("family-activity-button")
         XCTAssertFalse(screen("punt-stats").exists)
     }
@@ -830,8 +875,7 @@ final class EarnedItUITests: XCTestCase {
         tap("make-available-legacy-task")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         let legacyID = asNeededStateElement("state-legacy-task-hanna", state: "Done").identifier
         tap("request-punt-legacy-task")
         tap("Ask Alek")
@@ -841,8 +885,7 @@ final class EarnedItUITests: XCTestCase {
         tap("request-punt-legacy-task")
         tap("Ask Alek")
         tap("Send Punt Request")
-        tap("switch-user")
-        tap("user-card-alek")
+        launchBoundMember("alek")
         XCTAssertFalse(app.staticTexts["full-status-stale-task"].exists)
         tap("family-activity-button")
         XCTAssertEqual(app.buttons.matching(identifier: "accept-punt").count, 1)
@@ -861,12 +904,10 @@ final class EarnedItUITests: XCTestCase {
         relaunchWeekly(date: "2026-09-07T16:00:00Z", hideClock: true)
         XCTAssertEqual(asNeededStateElement("state-legacy-task-alek", state: "Done").identifier, freshID)
         keepScreenshot("fresh-legacy-occurrence-recipient-credit-persists")
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         XCTAssertEqual(asNeededStateElement("state-legacy-task-hanna", state: "Done").identifier, legacyID)
         XCTAssertFalse(asNeededStateButtons("state-legacy-task-alek").firstMatch.exists)
-        tap("switch-user")
-        tap("user-card-test-parent")
+        launchBoundMember("test-parent")
         tap("weekday-lists-link")
         tap("as-needed-chores")
         XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Alek"))
@@ -962,15 +1003,13 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(asNeededStateButton("state-empty-dishwasher-alek", state: "Unmarked")
             .waitForExistence(timeout: 5))
         XCTAssertFalse(asNeededStateButtons("state-empty-dishwasher-hanna").firstMatch.exists)
-        tap("switch-user")
-        tap("user-card-alek")
+        launchBoundMember("alek")
         let alekOccurrence = asNeededStateButton("state-empty-dishwasher-alek", state: "Unmarked")
         XCTAssertTrue(alekOccurrence.waitForExistence(timeout: 5))
         XCTAssertFalse(asNeededStateButtons("state-empty-dishwasher-hanna").firstMatch.exists)
         alekOccurrence.tap()
         XCTAssertTrue(waitForLabel(app.staticTexts["full-status-empty-dishwasher"], containing: "Complete"))
-        tap("switch-user")
-        tap("user-card-test-parent")
+        launchBoundMember("test-parent")
 
         tap("weekday-lists-link")
         tap("as-needed-chores")
@@ -994,8 +1033,7 @@ final class EarnedItUITests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertFalse(app.staticTexts["Empty dishwasher"].exists)
-        tap("switch-user")
-        tap("user-card-alek")
+        launchBoundMember("alek")
         XCTAssertFalse(app.staticTexts["Empty dishwasher"].exists)
         keepScreenshot("deleted-chore-removed-for-child")
     }
@@ -1032,8 +1070,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.buttons["state-set-the-table-alek"].waitForExistence(timeout: 5))
         tap("state-set-the-table-alek")
         XCTAssertFalse(app.buttons["not-needed-set-the-table"].exists)
-        tap("switch-user")
-        tap("user-card-alek")
+        launchBoundMember("alek")
         XCTAssertTrue(app.staticTexts["Set the table"].waitForExistence(timeout: 5))
     }
 
@@ -1084,14 +1121,17 @@ final class EarnedItUITests: XCTestCase {
         ).firstMatch.waitForExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
 
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         let childHeader = screen("child-profile-header")
         XCTAssertTrue(childHeader.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(childHeader.frame.minX, app.frame.minX)
         XCTAssertLessThanOrEqual(childHeader.frame.maxX, app.frame.maxX)
         keepScreenshot("ui-polish-parent-child-largest-text")
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        relaunch(largeType: true)
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
+        launchBoundMember("test-parent")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 5))
     }
 
     func testWeeklyAllowanceHistoryGraceCelebrationAndRollover() throws {
@@ -1112,8 +1152,7 @@ final class EarnedItUITests: XCTestCase {
         fill("allowance-amount", with: "4.50")
         tap("save-allowance")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        tap("switch-user")
-        tap("user-card-hanna")
+        launchBoundMember("hanna")
         keepScreenshot("weekly-current-week-start")
         checkControls(["view-weekly-summary"])
         XCTAssertFalse(screen("week-celebration").exists)
@@ -1136,8 +1175,7 @@ final class EarnedItUITests: XCTestCase {
         reveal(screen("earned-it-badge"))
         keepScreenshot("weekly-badge-persists-without-replay")
         advanceWeeklyClock(to: "Next Tuesday")
-        tap("switch-user")
-        tap("user-card-alek")
+        launchBoundMember("alek")
         tap("view-weekly-summary")
         XCTAssertTrue(app.navigationBars["Weekly History"].waitForExistence(timeout: 5))
         tap("weekly-item-2026-09-13-pack-school-bag")
@@ -1148,8 +1186,7 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot("weekly-child-locked-after-grace")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        tap("switch-user")
-        tap("user-card-test-parent")
+        launchBoundMember("test-parent")
         tap("parent-child-alek")
         tap("previous-week")
         keepScreenshot("weekly-parent-missing-items-and-dates")
@@ -1268,6 +1305,15 @@ final class EarnedItUITests: XCTestCase {
             format: "label CONTAINS 'continues the deletion already started for this family'"
         )).firstMatch.exists)
         alert.buttons["Cancel"].tap()
+    }
+
+    private func launchBoundMember(_ slug: String) {
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "--ui-test-reset" || $0.hasPrefix("--ui-test-bound-member=") }
+        app.launchArguments.append("--ui-test-bound-member=\(slug)")
+        app.launch()
+        XCTAssertFalse(app.buttons["switch-user"].exists)
+        XCTAssertFalse(screen("profile-selection").exists)
     }
 
     private func relaunch(largeType: Bool = false) {
