@@ -149,7 +149,7 @@ Final UI run: **two passed, zero failed**, 406.375 seconds total. `testAlternati
 
 ## Release candidate and Production requirements
 
-The configured lane is `.github/workflows/testflight.yml`. Its build number is `${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}`. Read-only `gh-axi run list/view` confirmed the latest successful upload is workflow run number **5**, source `660332e`, run [34999689543](https://github.com/jlm429/earned-it/actions/runs/34999689543), consistent with the captain's **Build 5.1**. No workflow log, signing material, secret value, or App Store credential was read. A future distribution number is assigned by an authorized lane invocation, not invented by this worker.
+At this historical audit, `.github/workflows/testflight.yml` derived its build number from workflow run and attempt numbers. Read-only `gh-axi run list/view` confirmed the then-latest successful upload was workflow run number **5**, source `660332e`, run [34999689543](https://github.com/jlm429/earned-it/actions/runs/34999689543), consistent with the captain's **Build 5.1**. No workflow log, signing material, secret value, or App Store credential was read. That numbering policy has been superseded; see the [release checklist](../app-store/release-readiness.md#final-device-and-accessibility-pass) for current metadata and upload requirements.
 
 Preparation completed the lane's Release compilation/archive stage with signing disabled: generic iOS archive passed, Release Simulator build passed, and an independently created Release Simulator (`686435E5-84A0-471C-92C5-8F45A62F1C08`) launched and relaunched successfully to Welcome without a seeded family. Screenshots were inspected at `.artifacts/membership-release-simulator/first-run.png` and `relaunch.png`.
 

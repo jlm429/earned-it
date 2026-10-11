@@ -7,6 +7,7 @@ User-visible changes to Earned It.
 ### Changed
 
 - Added child-approved punts and family Activity with optional alerts. See the [punt and activity guide](docs/punt-notifications.md) for usage and delivery limits.
+- Added compact child Punt Stats in Activity for this week and last week. See the [stats rules](docs/punt-notifications.md#child-punt-stats).
 - As Needed chores can be withdrawn without credit or turn advancement and made available repeatedly on the same day. Each occurrence keeps distinct history and allowance credit while streaks remain day-based.
 - Alternating As Needed completion advances exactly once per occurrence, withdrawal keeps the turn, and Skip consumes one turn without creating credit. Concurrent and offline controls converge through occurrence IDs and expected control heads.
 - Incompatible app versions stop with an update-required state. See the [journal compatibility rules](docs/shared-household-architecture.md#identity-and-sharing).
