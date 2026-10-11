@@ -1157,9 +1157,9 @@ final class EarnedItUITests: XCTestCase {
         checkControls(["view-weekly-summary"])
         XCTAssertFalse(screen("week-celebration").exists)
         keepScreenshot("weekly-current-future-not-missed")
-        advanceWeeklyClock(to: "Sunday")
+        advanceWeeklyClock(to: "Sunday", date: "2026-09-13T16:00:00Z")
         XCTAssertFalse(screen("week-celebration").exists)
-        advanceWeeklyClock(to: "Next Monday")
+        advanceWeeklyClock(to: "Next Monday", date: "2026-09-14T16:00:00Z")
         reveal(screen("parent-check-in"))
         keepScreenshot("weekly-finished-gentle-parent-reminder")
         tap("yesterday-items")
@@ -1174,7 +1174,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertFalse(screen("week-celebration").exists)
         reveal(screen("earned-it-badge"))
         keepScreenshot("weekly-badge-persists-without-replay")
-        advanceWeeklyClock(to: "Next Tuesday")
+        advanceWeeklyClock(to: "Next Tuesday", date: "2026-09-15T16:00:00Z")
         launchBoundMember("alek")
         tap("view-weekly-summary")
         XCTAssertTrue(app.navigationBars["Weekly History"].waitForExistence(timeout: 5))
@@ -1215,13 +1215,15 @@ final class EarnedItUITests: XCTestCase {
         try app.performAccessibilityAudit(for: .sufficientElementDescription)
     }
 
-    private func advanceWeeklyClock(to title: String) {
+    private func advanceWeeklyClock(to title: String, date: String) {
         tap("test-clock")
         // A presented native menu is outside the scrolling content bounds.
         let option = app.buttons[title]
         XCTAssertTrue(option.waitForExistence(timeout: 5))
         XCTAssertTrue(option.isHittable)
         option.tap()
+        app.launchArguments.removeAll { $0.hasPrefix("--ui-test-date=") }
+        app.launchArguments.append("--ui-test-date=\(date)")
     }
 
     private func replaceAmount(_ text: String) {

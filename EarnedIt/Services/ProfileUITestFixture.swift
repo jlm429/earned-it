@@ -25,8 +25,8 @@ enum ProfileUITestFixture {
     }
 
     /// Simulates a different invited person's installation without a production switcher.
-    static func bindRequestedMember(repository: HouseholdRepository) throws {
-        let arguments = ProcessInfo.processInfo.arguments
+    static func bindRequestedMember(repository: HouseholdRepository,
+                                    arguments: [String] = ProcessInfo.processInfo.arguments) throws {
         guard arguments.contains("--ui-test-store"),
               let flag = arguments.first(where: { $0.hasPrefix("--ui-test-bound-member=") }) else { return }
         let slug = String(flag.dropFirst("--ui-test-bound-member=".count))
@@ -43,13 +43,18 @@ enum ProfileUITestFixture {
         let parent = store.snapshot.members.first { $0.role == .parent }!
         let householdID = store.household!.id
         let participant = "synthetic-profile-account-\(member.id)"
-        let invitationID = UUID()
-        let claimID = UUID()
-        let digest = InvitationCode.digest("2345-6789-AB")!
         var session = store.session
         session.deviceID = UUID()
         session.cloudParticipantID = participant
         session.selectedMemberID = unclaimed || unselected ? nil : member.id
+        if !unclaimed,
+           try store.snapshot.committedAccountMembership(participantID: participant) != nil {
+            try repository.commit(facts: [], session: session)
+            return
+        }
+        let invitationID = UUID()
+        let claimID = UUID()
+        let digest = InvitationCode.digest("2345-6789-AB")!
         let invitation = FamilyInvitation(
             id: invitationID, householdID: householdID, claimFactID: claimID,
             memberID: member.id, role: member.role, codeDigest: digest, createdAt: store.today,
