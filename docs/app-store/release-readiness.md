@@ -1,6 +1,6 @@
 # App Store release checklist
 
-Updated October 10, 2026 against merged `origin/main` at `6820fe9e6836df4c14aa0a1e2f44814cad18a098`, plus the consolidated 1.0.5 candidate. [Shared version metadata](../../Configuration/Version.xcconfig) specifies 1.0.5/build 51, following the human-confirmed uploaded 1.0.4/build 50. UI polish, receipt-lost owner deletion recovery, approved punts, Activity, optional alerts, and `remote-notification` background mode are integrated in source. Weekly Punt Stats are included in this candidate. This is a submission checklist, not a claim of Store availability or signed Production readiness. See [release evidence and limits](../final-release-readiness.md); signed two-account/device parent/child recovery and APNs checks remain open.
+Updated October 11, 2026 against merged `origin/main` at `5c88d45e42c671d22f745bbe78cc4f5beec88576`, plus the profile toolbar cleanup. [Shared version metadata](../../Configuration/Version.xcconfig) owns the candidate version and build, following the human-confirmed uploaded 1.0.5/build 51. See the [product introduction](../../README.md#what-it-does) for current home navigation and the [profile selection follow-up](../release-ui-polish.md#profile-selection-follow-up) for retained code awaiting review. UI polish, receipt-lost owner deletion recovery, approved punts, Activity, optional alerts, `remote-notification` background mode, and weekly Punt Stats remain integrated in source. This is a submission checklist, not a claim of Store availability or signed Production readiness. See [release evidence and limits](../final-release-readiness.md); signed two-account/device parent/child recovery and APNs checks remain open.
 
 ## Remaining release blockers
 
@@ -21,7 +21,7 @@ Updated October 10, 2026 against merged `origin/main` at `6820fe9e6836df4c14aa0a
 
 ## Verified repository evidence
 
-- [x] Combined 1.0.5 candidate local checks: 427 unit/domain tests and three focused native flows passed, with Debug/unsigned Release metadata 1.0.5/build 51 and release helper checks. [Exact evidence and limits](../final-release-readiness.md#combined-105-candidate-local-validation) distinguish the reproduced/fixed test-navigation failure from signed release readiness. No-mistakes and publication are deferred until morning.
+- [x] Prior candidate local checks are recorded in [exact evidence and limits](../final-release-readiness.md#combined-105-candidate-local-validation). That historical evidence does not validate the current candidate.
 - [x] Historical complete domain suite on `d88d9749`: 383 tests passed with zero failures on a task-only iPhone Simulator. Release generic-iOS build and static analysis passed unsigned. Synthetic build-number and entitlement tests passed.
 - [x] iOS 18 minimum deployment, iPhone and iPad device families, and all four required iPad orientations. Release device-family validation passed against the built application.
 - [x] Release configuration selects Production iCloud; Debug selects Development. Required sharing/custom invitation URL configuration is present. Signing configuration and capabilities were not changed by this audit.

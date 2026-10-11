@@ -92,6 +92,7 @@ struct ParentDashboardView: View {
     private var familyDayLabel: some View {
         Label("Family day", systemImage: "calendar")
             .font(.subheadline.weight(.medium))
+            .fixedSize(horizontal: true, vertical: true)
     }
 
     private var familyDayPicker: some View {

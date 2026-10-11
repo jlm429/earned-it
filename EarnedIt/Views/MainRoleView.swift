@@ -18,12 +18,6 @@ struct MainRoleView: View {
                 #if DEBUG
                 ToolbarItem(placement: .topBarTrailing) { WeeklyTestClockControl() }
                 #endif
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        store.perform { try store.selectProfile(nil) }
-                    } label: { Label("Switch Profile", systemImage: "person.2") }
-                    .accessibilityIdentifier("switch-user")
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { activityNavigation.isPresented = true } label: {
                         Label("Activity, \(store.unreadActivityCount) unread", systemImage: "bell.badge")
@@ -38,6 +32,7 @@ struct MainRoleView: View {
                         } label: {
                             Label("Settings", systemImage: "gearshape")
                         }
+                        .accessibilityIdentifier("about-settings")
                         Divider()
                         Link("Privacy Policy", destination: AppLinks.privacyPolicy)
                         Link("Support", destination: AppLinks.support)

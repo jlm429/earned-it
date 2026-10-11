@@ -89,8 +89,10 @@ struct EarnedItApp: App {
             #endif
             #if DEBUG
             if !readOnlyPreflight {
+                try ProfileUITestFixture.prepare(repository: repository)
                 try PuntUITestFixture.prepare(repository: repository)
                 try PuntStatsUITestFixture.prepare(repository: repository)
+                try ProfileUITestFixture.bindRequestedMember(repository: repository)
             }
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
                 clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
