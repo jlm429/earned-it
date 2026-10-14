@@ -143,7 +143,7 @@ struct ParentDashboardView: View {
     }
 }
 
-/// Counts only the existing daily projection, including its Not Needed exclusions.
+/// Summarizes the visible daily list without changing retained historical outcomes.
 struct DailyOverviewCard: View {
     let chores: [DailyChore]
     @Environment(\.dynamicTypeSize) private var typeSize

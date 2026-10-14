@@ -87,5 +87,5 @@ journal, transport, recurrence, allowance, and identity implementations were not
 changed by this follow-up.
 
 The bounded paths do not establish signed two-account CloudKit, APNs delivery, or
-physical haptics. The subsequent no-mistakes run validates the wider protected
-behavior through local tests and review. GitHub CI is explicitly excluded.
+physical haptics. See [the design and QA report](premium-redesign.md#pre-pipeline-local-validation)
+for evidence scope and current pipeline ownership.

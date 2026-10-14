@@ -12,6 +12,10 @@ SF Symbols, and the existing app's own data and actions.
 - Parent home separates identity, date selection, the daily picture, daily chores,
   and weekly progress. Progress cards combine each child's name, streak, required
   item counts, weekly state, and allowance eligibility.
+  The daily picture starts from the chore cards' visible list, then omits Not Needed
+  occurrences and chores without eligible children from its counts. It counts chore
+  outcomes rather than individual child contributions. Deleted chores do not
+  contribute to daily totals; their outcomes remain in weekly progress and history.
 - Child home gives allowance and weekly effort a prominent progress ring and a
   dated week strip, followed by actionable chores, last week's outcome, yesterday's
   items, and the existing daily thought. The amount is allowance eligibility, not
@@ -20,7 +24,8 @@ SF Symbols, and the existing app's own data and actions.
   and text. Completion controls respond to presses and replace state symbols.
   Success haptics occur only after a successful local store action. A remote
   refresh cannot replay completion haptics. Existing one-time weekly celebration
-  consumption still controls the accomplishment feedback.
+  consumption still controls the accomplishment feedback. Clearing an accomplishment
+  after a correction or rollover does not emit success feedback.
 - Family management introduces the household, keeps all existing management
   actions, and adds derived child progress and streaks to member rows. Setup,
   member forms, settings, weekday lists, and history share the same visual language.
@@ -30,8 +35,9 @@ SF Symbols, and the existing app's own data and actions.
   when unique in the family. Full names remain in accessible labels and identifiers.
 
 `AppTheme.swift` owns the presentation tokens, surfaces, rings, responsive columns,
-press style, semantic allowance fields, and motion preference. Business rules remain in their existing
-services. There are no model, journal, permission, transport, invitation lifecycle,
+press style, and motion preference. `ViewSupport.swift` owns the semantic allowance
+fields. Business rules remain in their existing services. There are no model,
+journal, permission, transport, invitation lifecycle,
 or allowance calculation changes. The only startup additions are DEBUG Simulator
 marketing data and DEBUG appearance QA hooks.
 
@@ -71,8 +77,8 @@ absence of invitations and claims. Release and physical-device builds omit the
 fixture. The PNG conversion script verifies native dimensions, upright orientation,
 and opaque input, then writes RGB without cropping or scaling.
 
-Version changes only on this branch: **1.0.7 (53) to 1.1.0 (54)**. The minor version
-reflects a substantial redesign. Signing, bundle identifiers, entitlements,
+The branch bumps the minor version and build for the redesign; [Version.xcconfig](../Configuration/Version.xcconfig)
+owns both values for every target and configuration. Signing, bundle identifiers, entitlements,
 CloudKit containers and schema, submitted release, app icon, pricing, and App Store
 metadata are untouched. No TestFlight upload, archive, release operation, or merge
 is part of this delivery.
@@ -93,9 +99,11 @@ amount's accessibility label and cleared its iPad screen, then identified the sa
 mismatch in Manage Family. The semantic field passed the full iPad flow without
 changing printed amounts, typography, or calculations.
 
-## Final local validation
+## Pre-pipeline local validation
 
-Final evidence is recorded after all QA fixes. Evidence bundles and full logs are
+The following evidence predates the no-mistakes review fixes and refreshed captures.
+It records the initial redesign QA, not validation of the current pipeline revision.
+Evidence bundles and full logs are
 under `/Users/jlm429/Documents/gitstuff/firstmate/data/earned-it-premium-redesign/`.
 The toolchain is Xcode 27.0 (27A266a), using iOS 26.5 Simulator.
 
@@ -116,13 +124,20 @@ checks landscape at the largest size. The premium flow checks ordinary light mod
 dark mode with largest Dynamic Type, and reduced motion on both devices.
 
 The 76 app/test/config source hashes in `final-source-sha256.json` remained unchanged
-through these final builds and tests. Unit coverage includes the protected transport,
+through those pre-pipeline builds and tests. That manifest bounds this evidence to
+those source bytes, not the later review fixes or UI-test edits. Unit coverage includes the protected transport,
 permissions, invitations, membership/deletion/recovery, recurrence, sibling states,
-scoring, streaks, and allowance rules. No encountered failure remains unresolved.
+scoring, streaks, and allowance rules. No failure remained in those completed runs.
 
-The two workflow files still have only `workflow_dispatch` triggers. Pushes and
-review creation cannot start them. No workflow, CI, no-mistakes pipeline, archive,
-TestFlight, or App Store operation ran.
+The active no-mistakes pipeline owns current review, testing, refreshed screenshot
+validation, publication, and the update of [existing PR 49](https://github.com/jlm429/earned-it/pull/49).
+Its Test phase owns the current revision and run linkage for passing evidence.
+The premium native flow includes a deleted-chore dashboard regression through real
+store actions, while the weekly flow checks correction, receipt consumption, and
+rollover. The role-equivalence flow remains separate evidence of sibling permissions.
+These flow descriptions do not claim a current passing result.
+GitHub CI is explicitly skipped for this run. Both workflow files remain manual-only;
+no merge, TestFlight upload, or App Store operation is authorized by this delivery.
 
 Simulator and transport-double tests do not prove signed two-account CloudKit
 behavior, APNs delivery, or physical-device haptics. Existing production invitation,

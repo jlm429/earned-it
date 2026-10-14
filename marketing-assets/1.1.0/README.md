@@ -15,8 +15,7 @@ Smith family: Alex Smith, Remy Smith, and Piper Smith.
 Every delivered image is an upright, opaque, 8-bit RGB PNG in sRGB. No image was
 stretched, cropped, or placed on another device's canvas.
 
-`earned-it-new-banner.png` is the supplied artwork used by the repository README.
-It is preserved unchanged and kept separate from the six native device captures.
+For the separate supplied README artwork, see the [repository banner specification](../../docs/app-store/visual-assets.md#repository-banner).
 
 ## Reproduce
 

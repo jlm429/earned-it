@@ -3,7 +3,8 @@
 Both sides show the same existing weekly UI-test fixture on iPhone 11 Pro Max:
 Test Family, September 7, 2026, with Hanna's Water plants completion recorded and
 Alek's still unmarked. The baseline is origin/main at `bba5d4e`; the after captures
-use the final redesigned 1.1.0 (54) app. These are actual native screenshots,
+use the initial redesigned 1.1.0 (54) app, before the pipeline review fixes.
+These are actual native screenshots,
 without mockups or overlays.
 
 | Parent before | Parent after |
