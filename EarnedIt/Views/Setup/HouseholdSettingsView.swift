@@ -8,6 +8,15 @@ struct HouseholdSettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Make yourself at home", systemImage: "house.fill")
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.accent)
+                    Text(store.household?.name ?? "Your family's space for everyday effort.")
+                        .font(.subheadline).foregroundStyle(AppTheme.secondaryText)
+                }.padding(.vertical, 8)
+            }
             if store.selectedMember?.role == .parent {
                 Section("Family") {
                     TextField("Family name", text: $familyName)
@@ -27,7 +36,7 @@ struct HouseholdSettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("This Device") {
-                    SyncStatusView()
+                    if SyncStatusView.isVisible(in: store) { SyncStatusView() }
                     Text(store.session.location == nil
                          ? "This family is saved only on this device. Invite a family member from Manage Family to begin sharing."
                          : "Family changes synchronize through the invited household in iCloud.")
@@ -60,6 +69,7 @@ struct HouseholdSettingsView: View {
         .refreshable { await refreshFamily() }
         .themedListBackground()
         .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
         .alert(store.session.pendingFamilyDeletion == true ? "Finish Deleting?" : "Delete All Data?",
                isPresented: $confirmingDeletion) {
             Button(store.session.pendingFamilyDeletion == true ? "Finish Deleting" : "Delete All Data",

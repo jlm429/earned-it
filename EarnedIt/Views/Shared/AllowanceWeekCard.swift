@@ -44,7 +44,7 @@ struct AllowanceWeekCard: View {
         VStack(alignment: .leading, spacing: 12) {
             WeekHeading(week: week)
             allowanceSummary
-            .font(.title3.weight(.semibold))
+            .font(.system(.title, design: .rounded, weight: .bold))
             .foregroundStyle(week.amount == nil ? AppTheme.secondaryText : Color.primary)
             .fixedSize(horizontal: false, vertical: true)
             if week.earned {
@@ -126,7 +126,9 @@ struct WeeklyProgressBar: View {
                 progressLabel
             }
             ProgressView(value: Double(week.accountedCount), total: Double(max(week.items.count, 1)))
-                .tint(week.earned ? AppTheme.success : AppTheme.accent)
+                .tint(AppTheme.accent)
+                .scaleEffect(x: 1, y: 1.6, anchor: .center)
+                .padding(.vertical, 4)
         }
         .font(.subheadline.weight(.medium))
         .accessibilityElement(children: .ignore)

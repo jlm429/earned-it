@@ -5,6 +5,27 @@ enum AppLinks {
     static let support = URL(string: "https://github.com/jlm429/earned-it/issues")!
 }
 
+extension AllowanceAmount {
+    var weeklyAllowanceAccessibilityLabel: String {
+        "Weekly allowance, \(formatted()) \(currencyCode)"
+    }
+}
+
+/// Reads allowance context and localized currency as one field without relabeling its visual Text.
+struct AllowanceValue: View {
+    let amount: AllowanceAmount?
+    var fallback = "Allowance not set"
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(amount?.formatted() ?? fallback)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Weekly allowance")
+        .accessibilityValue(amount.map { "\($0.formatted()) \($0.currencyCode)" } ?? "Not set")
+    }
+}
+
 struct LegalLinksView: View {
     var body: some View {
         Link("Privacy Policy", destination: AppLinks.privacyPolicy)
@@ -102,8 +123,8 @@ struct AvatarView: View {
             }
         }
             .frame(width: size, height: size)
-            .background(AppTheme.accent.opacity(0.12), in: Circle())
-            .overlay(Circle().strokeBorder(AppTheme.accent.opacity(0.18), lineWidth: 1))
+            .background(AppTheme.inset, in: RoundedRectangle(cornerRadius: size * 0.35))
+            .overlay(RoundedRectangle(cornerRadius: size * 0.35).strokeBorder(AppTheme.border.opacity(0.5), lineWidth: 1))
             .accessibilityHidden(true)
     }
 
@@ -155,7 +176,7 @@ struct ProfileHeader: View {
     private var titleStack: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.title2.bold())
+                .font(.system(.title, design: .rounded, weight: .bold))
                 .fixedSize(horizontal: false, vertical: true)
             Text(subtitle)
                 .foregroundStyle(AppTheme.secondaryText)
@@ -171,9 +192,9 @@ struct CategoryBadge: View {
         Label(category.rawValue, systemImage: category.symbolName)
             .font(.caption.weight(.semibold))
             .foregroundStyle(category.tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(category.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(category.tint.opacity(0.09), in: Capsule())
             .accessibilityElement(children: .combine)
     }
 }
@@ -191,7 +212,7 @@ struct StatusBadge: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .fixedSize(horizontal: false, vertical: true)
-            .background(status.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .background(status.tint.opacity(0.10), in: Capsule())
             .accessibilityLabel("Weekly status: \(status.rawValue)")
     }
 }
@@ -202,7 +223,7 @@ struct SectionCard<Content: View>: View {
 
     var body: some View {
         content
-            .padding(16)
+            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(ThemedSurface(tint: tint))
     }
@@ -214,12 +235,14 @@ struct SectionHeading: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title).foregroundStyle(.primary)
+            Spacer(minLength: 8)
             Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
                 .foregroundStyle(AppTheme.accent)
                 .accessibilityHidden(true)
-            Text(title).foregroundStyle(.primary)
         }
-        .font(.title2.bold())
+        .font(.system(.title2, design: .rounded, weight: .bold))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }

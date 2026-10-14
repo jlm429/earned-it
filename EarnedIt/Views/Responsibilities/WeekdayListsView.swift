@@ -5,6 +5,15 @@ struct WeekdayListsView: View {
     var body: some View {
         List {
             Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Find your family's rhythm", systemImage: "calendar")
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.accent)
+                    Text("A few small habits, shared through the week.")
+                        .foregroundStyle(AppTheme.secondaryText)
+                }.padding(.vertical, 8)
+            }
+            Section {
                 NavigationLink("As Needed Chores") { AsNeededConfigurationView() }
                     .accessibilityIdentifier("as-needed-chores")
             } header: {
@@ -14,7 +23,16 @@ struct WeekdayListsView: View {
             }
             Section {
                 ForEach(store.household?.weekdayLists ?? []) { list in
-                    NavigationLink(list.weekday.title) { WeekdayConfigurationView(weekday: list.weekday) }
+                    NavigationLink { WeekdayConfigurationView(weekday: list.weekday) } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "calendar")
+                                .foregroundStyle(AppTheme.accent)
+                                .frame(width: 36, height: 36)
+                                .background(AppTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                                .accessibilityHidden(true)
+                            Text(list.weekday.title).font(.headline)
+                        }.padding(.vertical, 4)
+                    }
                         .accessibilityIdentifier("weekday-\(list.weekday.rawValue)")
                 }
             } header: {
@@ -25,6 +43,7 @@ struct WeekdayListsView: View {
         }
         .themedListBackground()
         .navigationTitle("Chores")
+        .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("weekday-lists")
     }
 }

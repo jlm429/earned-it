@@ -24,6 +24,105 @@ final class EarnedItUITests: XCTestCase {
         }
     }
 
+    /// The same native flow captures both device categories and checks real completion persistence.
+    func testPremiumRedesignDemoAndAccessibility() throws {
+        func audit() throws {
+            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped]) { issue in
+                print("Accessibility audit: \(issue.compactDescription); \(issue.element?.debugDescription ?? "No element supplied")")
+                if issue.element == nil { print(self.app.debugDescription) }
+                return false
+            }
+        }
+        func launchDemo(member: String = "alex-smith", reset: Bool = false, accessible: Bool = false) {
+            app.terminate()
+            app.launchArguments = ["--ui-test-store", "--marketing-demo", "--marketing-member=\(member)",
+                                   "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+            if reset { app.launchArguments.append("--ui-test-reset") }
+            if accessible {
+                app.launchArguments += ["--ui-test-dark", "--ui-test-reduce-motion",
+                    "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+            }
+            app.launch()
+            XCTAssertTrue(screen(member == "alex-smith" ? "parent-dashboard" : "child-home").waitForExistence(timeout: 10))
+        }
+
+        keepScreenshot("qa-welcome")
+        launchDemo(reset: true)
+        XCTAssertTrue(screen("parent-profile-header").label.contains("The Smiths"))
+        keepScreenshot("marketing-daily-chores")
+        try audit()
+        tap("family-management")
+        XCTAssertTrue(app.navigationBars["Manage Family"].waitForExistence(timeout: 5))
+        keepScreenshot("marketing-family")
+        try audit()
+        let familyAllowance = screen("family-allowance-remy-smith")
+        reveal(familyAllowance)
+        XCTAssertEqual(familyAllowance.label, "Weekly allowance")
+        XCTAssertTrue((familyAllowance.value as? String)?.contains("$12.00 USD") == true)
+        try audit()
+        tap("family-add-child")
+        XCTAssertTrue(app.textFields["family-display-name"].waitForExistence(timeout: 5))
+        keepScreenshot("qa-member-form")
+        tap("Cancel")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("parent-child-remy-smith")
+        XCTAssertTrue(screen("parent-child-detail").waitForExistence(timeout: 5))
+        keepScreenshot("qa-parent-progress")
+        try audit()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("weekday-lists-link")
+        XCTAssertTrue(screen("weekday-lists").waitForExistence(timeout: 5))
+        keepScreenshot("qa-chore-management")
+        tap("weekday-4")
+        tap("add-responsibility")
+        XCTAssertTrue(app.textFields["responsibility-title"].waitForExistence(timeout: 5))
+        keepScreenshot("qa-chore-form")
+        tap("Cancel")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("family-activity-button")
+        XCTAssertTrue(screen("family-activity").waitForExistence(timeout: 5))
+        keepScreenshot("qa-family-activity")
+        tap("Done")
+        tap("about-menu")
+        app.buttons["about-settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        keepScreenshot("qa-settings")
+
+        launchDemo(member: "remy-smith")
+        XCTAssertTrue(screen("child-weekly-allowance-value").label.contains("$12.00 USD"))
+        keepScreenshot("marketing-progress")
+        try audit()
+        tap("view-weekly-summary")
+        XCTAssertTrue(screen("weekly-summary").waitForExistence(timeout: 5))
+        keepScreenshot("qa-weekly-history")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("state-pack-your-school-bag-remy-smith")
+        XCTAssertTrue(waitForLabel(app.buttons["state-pack-your-school-bag-remy-smith"], containing: "Done"))
+        XCTAssertFalse(app.buttons["state-pack-your-school-bag-piper-smith"].exists)
+        launchDemo(member: "remy-smith")
+        reveal(app.buttons["state-pack-your-school-bag-remy-smith"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-pack-your-school-bag-remy-smith"], containing: "Done"))
+        launchDemo(member: "piper-smith")
+        reveal(app.buttons["state-pack-your-school-bag-piper-smith"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-pack-your-school-bag-piper-smith"], containing: "Unmarked"))
+
+        launchDemo(member: "remy-smith", accessible: true)
+        keepScreenshot("qa-child-dark-largest-text-reduced-motion")
+        try audit()
+        tap("view-weekly-summary")
+        keepScreenshot("qa-history-dark-largest-text-reduced-motion")
+        try audit()
+        launchDemo(accessible: true)
+        keepScreenshot("qa-parent-dark-largest-text-reduced-motion")
+        try audit()
+        tap("family-management")
+        keepScreenshot("qa-family-dark-largest-text-reduced-motion")
+        try audit()
+        // Leave the fictional demo reset and pristine for subsequent manual captures.
+        launchDemo(reset: true)
+    }
+
     func testNotificationPreferenceOnOffRelaunchAndRefresh() throws {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-profile-binding=parent",
@@ -1209,7 +1308,7 @@ final class EarnedItUITests: XCTestCase {
         replaceAmount("12.34")
         keepScreenshot("weekly-edit-fractional-allowance")
         tap("save-allowance")
-        XCTAssertTrue(app.staticTexts["$12.34"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForLabel(screen("current-weekly-allowance-value"), containing: "$12.34"))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         tap("parent-child-alek")
         tap("edit-allowance")

@@ -32,7 +32,7 @@ struct WeekStrip: View {
             Image(systemName: status.symbolName)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(status.tint)
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .background(status.tint.opacity(0.13), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(facts.date, format: .dateTime.weekday(.wide))
@@ -56,7 +56,7 @@ struct WeekStrip: View {
             Image(systemName: status.symbolName)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(status.tint)
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .background(status.tint.opacity(0.13), in: Circle())
             if !compact {
                 Text(status.shortLabel)
@@ -67,7 +67,10 @@ struct WeekStrip: View {
                     .multilineTextAlignment(.center)
             }
         }
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
+        .background(calendar.isDate(facts.date, inSameDayAs: today) ? AppTheme.accent.opacity(0.08) : .clear,
+                    in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel(for: facts, status: status))
         .accessibilityIdentifier(accessibilityIdentifier(for: facts))

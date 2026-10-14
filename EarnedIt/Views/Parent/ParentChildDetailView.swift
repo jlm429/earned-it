@@ -25,8 +25,8 @@ struct ParentChildDetailView: View {
                     HStack(spacing: 12) {
                         AvatarView(user: child)
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(child.displayName).font(.title2.bold())
-                            Label("\(MetricsService.streak(childID: child.id, snapshot: store.snapshot, today: today)) day streak", systemImage: "flame.fill")
+                            Text(child.displayName).font(.system(.title, design: .rounded, weight: .bold))
+                            Label("\(MetricsService.streak(childID: child.id, snapshot: store.snapshot, today: today)) day streak", systemImage: "flame.fill").foregroundStyle(AppTheme.sunshine)
                         }
                     }
                 }
@@ -55,6 +55,8 @@ struct ParentChildDetailView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Current weekly allowance").font(.headline)
                             Text(store.allowanceWeek(for: child.id).amount?.formatted() ?? "Not set")
+                                .accessibilityLabel(store.allowanceWeek(for: child.id).amount?.weeklyAllowanceAccessibilityLabel ?? "Weekly allowance not set")
+                                .accessibilityIdentifier("current-weekly-allowance-value")
                             Button("Edit Weekly Allowance") { editingAllowance = true }
                                 .buttonStyle(.bordered).controlSize(.large)
                                 .accessibilityIdentifier("edit-allowance")
@@ -85,6 +87,7 @@ struct ParentChildDetailView: View {
         }
         .background(AppTheme.canvas)
         .navigationTitle(child.displayName)
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $editingAllowance) {
             AllowanceEditorView(child: child, amount: store.allowanceWeek(for: child.id).amount)
         }
