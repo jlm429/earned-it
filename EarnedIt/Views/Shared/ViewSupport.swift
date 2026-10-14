@@ -14,11 +14,10 @@ extension AllowanceAmount {
 /// Reads allowance context and localized currency as one field without relabeling its visual Text.
 struct AllowanceValue: View {
     let amount: AllowanceAmount?
-    var fallback = "Allowance not set"
 
     var body: some View {
         HStack(spacing: 0) {
-            Text(amount?.formatted() ?? fallback)
+            Text(amount?.formatted() ?? "Allowance not set")
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Weekly allowance")

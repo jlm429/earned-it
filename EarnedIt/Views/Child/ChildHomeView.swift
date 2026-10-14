@@ -96,13 +96,13 @@ struct ChildHomeView: View {
                 .accessibilityIdentifier("child-weekly-allowance-value")
             Text(current.amount == nil ? "Allowance not set" : "Weekly allowance")
                 .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
-            Text(current.earned ? "Earned It" : "Every required item counts.")
+            Text("Every required item counts.")
                 .font(.caption).foregroundStyle(AppTheme.heroSecondary)
         }
     }
 
     private var progressRing: some View {
-        ProgressRing(completed: current.accountedCount, total: current.items.count, onHero: true)
+        ProgressRing(completed: current.accountedCount, total: current.items.count)
     }
 
     private var streakLabel: some View {

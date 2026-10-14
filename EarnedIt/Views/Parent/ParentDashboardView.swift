@@ -177,6 +177,6 @@ struct DailyOverviewCard: View {
     }
 
     private var ring: some View {
-        ProgressRing(completed: complete, total: required.count, onHero: true)
+        ProgressRing(completed: complete, total: required.count)
     }
 }

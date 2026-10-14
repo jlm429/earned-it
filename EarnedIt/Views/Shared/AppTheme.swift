@@ -92,27 +92,25 @@ struct HomeColumns<Primary: View, Secondary: View>: View {
 struct ProgressRing: View {
     let completed: Int
     let total: Int
-    var onHero = false
-    var size: CGFloat = 88
     @Environment(\.dynamicTypeSize) private var typeSize
     @MotionPreference private var reduceMotion
 
-    private var ringSize: CGFloat { typeSize.isAccessibilitySize ? max(size, 160) : size }
+    private var ringSize: CGFloat { typeSize.isAccessibilitySize ? 160 : 88 }
     private var fraction: Double { Double(completed) / Double(max(total, 1)) }
 
     var body: some View {
         ZStack {
-            Circle().stroke(onHero ? .white.opacity(0.16) : AppTheme.inset, lineWidth: 7)
+            Circle().stroke(.white.opacity(0.16), lineWidth: 7)
             Circle()
                 .trim(from: 0, to: min(fraction, 1))
-                .stroke(onHero ? AppTheme.heroSecondary : AppTheme.accent,
+                .stroke(AppTheme.heroSecondary,
                         style: StrokeStyle(lineWidth: 7, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             VStack(spacing: 0) {
                 Text("\(completed)").font(.system(size: ringSize * 0.32, weight: .bold, design: .rounded))
                 Text("of \(total)").font(.system(size: ringSize * 0.15, weight: .medium))
             }
-            .foregroundStyle(onHero ? AppTheme.heroText : .primary)
+            .foregroundStyle(AppTheme.heroText)
         }
         .frame(width: ringSize, height: ringSize)
         .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: completed)
