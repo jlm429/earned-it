@@ -123,6 +123,104 @@ final class EarnedItUITests: XCTestCase {
         launchDemo(reset: true)
     }
 
+    /// Run unchanged against the pre-redesign app and the redesign to compare actual role behavior.
+    func testChildChoreFunctionalEquivalence() {
+        createFamily(name: "The Smiths", parent: "Alex Smith")
+        addChild("Remy Smith")
+        addChild("Piper Smith")
+        tap("setup-weekday-lists")
+        tap("weekday-\(Calendar.current.component(.weekday, from: Date()))")
+
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Make your bed")
+        tap("save-responsibility")
+
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Water plants")
+        tap("chore-requirement")
+        tap("One child")
+        app.switches["eligible-piper-smith"].switches.firstMatch.tap()
+        tap("save-responsibility")
+
+        tap("add-responsibility")
+        fill("responsibility-title", with: "Set the table")
+        tap("chore-requirement")
+        tap("Alternate / take turns")
+        app.switches["eligible-remy-smith"].switches.firstMatch.tap()
+        app.switches["eligible-piper-smith"].switches.firstMatch.tap()
+        tap("alternating-first-child")
+        tap("Piper Smith")
+        tap("save-responsibility")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("finish-setup")
+
+        XCTAssertTrue(app.buttons["family-management"].exists)
+        XCTAssertTrue(app.buttons["weekday-lists-link"].exists)
+        tap("state-make-your-bed-piper-smith")
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-piper-smith"], containing: "Done"))
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Unmarked"))
+        keepScreenshot("equivalence-parent-independent-completions")
+
+        launchBoundMember("remy-smith")
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
+        XCTAssertTrue(screen("child-profile-header").label.contains("Remy Smith"))
+        XCTAssertFalse(app.buttons["family-management"].exists)
+        XCTAssertFalse(app.buttons["weekday-lists-link"].exists)
+        let sibling = screen("state-make-your-bed-piper-smith")
+        reveal(sibling)
+        XCTAssertTrue(sibling.label.contains("Done"))
+        XCTAssertEqual(sibling.value as? String, "View only")
+        XCTAssertFalse(app.buttons["state-make-your-bed-piper-smith"].exists)
+        XCTAssertFalse(app.buttons["state-menu-make-your-bed-piper-smith"].exists)
+        sibling.tap()
+        XCTAssertTrue(sibling.label.contains("Done"))
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Unmarked"))
+        XCTAssertFalse(app.staticTexts["Water plants"].exists)
+        XCTAssertFalse(app.staticTexts["Set the table"].exists)
+        keepScreenshot("equivalence-remy-read-only-sibling")
+
+        tap("state-make-your-bed-remy-smith")
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Done"))
+        tap("state-make-your-bed-remy-smith")
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Unmarked"))
+        tap("state-menu-make-your-bed-remy-smith")
+        XCTAssertFalse(app.buttons["Not Needed Today"].exists)
+        XCTAssertFalse(app.buttons["Missed"].exists)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Done"))
+        relaunch()
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
+        reveal(app.buttons["state-make-your-bed-remy-smith"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Done"))
+        XCTAssertEqual(screen("state-make-your-bed-piper-smith").value as? String, "View only")
+
+        launchBoundMember("piper-smith")
+        XCTAssertTrue(screen("child-home").waitForExistence(timeout: 8))
+        XCTAssertTrue(screen("child-profile-header").label.contains("Piper Smith"))
+        reveal(app.buttons["state-water-plants-piper-smith"])
+        XCTAssertTrue(app.buttons["state-water-plants-piper-smith"].exists)
+        XCTAssertFalse(app.buttons["state-water-plants-remy-smith"].exists)
+        reveal(app.buttons["state-set-the-table-piper-smith"])
+        XCTAssertTrue(app.staticTexts["full-status-set-the-table"].label.contains("Your turn"))
+        XCTAssertFalse(app.buttons["state-set-the-table-remy-smith"].exists)
+        keepScreenshot("equivalence-piper-particular-and-current-turn")
+        tap("state-set-the-table-piper-smith")
+        XCTAssertTrue(waitForLabel(app.buttons["state-set-the-table-piper-smith"], containing: "Done"))
+
+        launchBoundMember("alex-smith")
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        reveal(app.buttons["state-make-your-bed-remy-smith"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Done"))
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-piper-smith"], containing: "Done"))
+        tap("state-make-your-bed-remy-smith")
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-remy-smith"], containing: "Unmarked"))
+        XCTAssertTrue(waitForLabel(app.buttons["state-make-your-bed-piper-smith"], containing: "Done"))
+        reveal(app.buttons["state-set-the-table-piper-smith"])
+        XCTAssertTrue(waitForLabel(app.buttons["state-set-the-table-piper-smith"], containing: "Done"))
+        keepScreenshot("equivalence-parent-persisted-results")
+    }
+
     func testNotificationPreferenceOnOffRelaunchAndRefresh() throws {
         app.terminate()
         app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-profile-binding=parent",
@@ -1418,10 +1516,10 @@ final class EarnedItUITests: XCTestCase {
         }
     }
 
-    private func createFamily() {
+    private func createFamily(name: String = "Test Family", parent: String = "Test Parent") {
         tap("create-family")
-        fill("family-name", with: "Test Family")
-        fill("parent-name", with: "Test Parent")
+        fill("family-name", with: name)
+        fill("parent-name", with: parent)
         tap("save-family")
         XCTAssertTrue(app.navigationBars["Family Setup"].waitForExistence(timeout: 5))
     }
