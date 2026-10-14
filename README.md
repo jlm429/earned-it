@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="marketing-assets/1.1.0/earned-it-new-banner.png" alt="Earned It: Free, no ads, no tracking, with previews of chores, weekly progress, and family management">
+  <a href="https://apps.apple.com/app/id6809452728">
+    <img src="marketing-assets/1.1.0/earned-it-new-banner.png" alt="Earned It: Free, no ads, no tracking, with previews of chores, weekly progress, and family management">
+  </a>
 </p>
 
 # Earned It
