@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
+  <img src="marketing-assets/1.1.0/earned-it-new-banner.png" alt="Earned It: Free, no ads, no tracking, with previews of chores, weekly progress, and family management">
 </p>
 
 # Earned It
@@ -34,6 +34,8 @@ A parent creates the family, adds children, and sets up chores. They can invite 
 
 Children check their list and mark chores complete. Parents manage the family name and assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
 
+The refreshed Today screens highlight daily chores, weekly progress, streaks, and allowance eligibility. On iPad, daily work and weekly context appear side by side; accessibility text sizes use a single column. Parents can open a child's progress from Today or review each child in Manage Family.
+
 For a punt, choose **Request a Punt** on today's alternating chore and select a sibling. The sibling accepts or declines in **Activity**, opened from the bell. Use Activity's **Notifications** card to turn alerts on or off. See the [punt and activity guide](docs/punt-notifications.md) for eligibility, responsibility, privacy, and delivery limits.
 
 ## Privacy
@@ -60,6 +62,7 @@ Open `EarnedIt.xcodeproj` in Xcode 26.6 or later. Use the `EarnedItCI` scheme fo
 
 - [Technical overview](docs/technical-overview.md)
 - [Shared household architecture and product rules](docs/shared-household-architecture.md)
+- [Redesign and QA evidence](docs/premium-redesign.md)
 - [App Store release readiness](docs/app-store/release-readiness.md)
 
 The source is currently published without an open-source license. Public visibility does not grant permission to reuse, modify, or redistribute it.

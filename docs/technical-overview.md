@@ -8,6 +8,8 @@ Earned It persists immutable typed facts in a local SwiftData journal. The local
 
 Synchronization is eventual; offline facts remain pending for retry. This section owns synchronization triggers, work ownership, and recovery. The [punt and activity guide](punt-notifications.md) owns background delivery configuration, alert behavior, and their release prerequisites. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
 
+The [marketing capture guide](../marketing-assets/1.1.0/README.md#reproduce) owns the opt-in Simulator demo journal and capture recipe.
+
 The CloudKit schema used by the current transport includes the fact journal envelope and private account-membership records. The exact implementation is in `CloudKitHouseholdTransport.swift`. Production schema changes are manual release operations.
 
 ### Work ownership and recovery

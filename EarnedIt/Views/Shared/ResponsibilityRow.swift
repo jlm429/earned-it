@@ -6,12 +6,22 @@ struct ResponsibilityRow: View {
     let actor: FamilyMember
     @State private var choosingRotationBehavior = false
     @State private var confirmingNotNeeded = false
+    @State private var feedback = 0
+    @MotionPreference private var reduceMotion
 
     var body: some View {
         SectionCard(tint: chore.isNotNeeded ? AppTheme.info : chore.isFullyComplete ? AppTheme.success : nil) {
             VStack(alignment: .leading, spacing: 12) {
-                CategoryBadge(category: chore.configuration.category)
-                    .accessibilityIdentifier("category-\(chore.configuration.title.accessibilitySlug)")
+                HStack(alignment: .top) {
+                    CategoryBadge(category: chore.configuration.category)
+                        .accessibilityIdentifier("category-\(chore.configuration.title.accessibilitySlug)")
+                    Spacer(minLength: 8)
+                    if chore.isFullyComplete && !chore.isNotNeeded {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(AppTheme.success).font(.title3)
+                            .accessibilityHidden(true)
+                    }
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(chore.configuration.title).font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
@@ -87,6 +97,8 @@ struct ResponsibilityRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chore-\(chore.configuration.title.accessibilitySlug)")
+        .sensoryFeedback(.success, trigger: feedback)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.28), value: chore.isFullyComplete)
     }
 
     private var completionLabel: String {
@@ -115,7 +127,7 @@ struct ResponsibilityRow: View {
                 Button { update(member, state: nextState) } label: {
                     memberLabel(member, state: state)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressFeedbackStyle())
                 .accessibilityLabel("\(member.displayName), \(chore.configuration.title), \(state.rawValue)")
                 .accessibilityValue(state.rawValue)
                 .accessibilityHint(state == .done ? "Tap to undo completion." : "Tap to mark done.")
@@ -150,21 +162,31 @@ struct ResponsibilityRow: View {
         HStack(spacing: 6) {
             Image(systemName: state.symbolName)
                 .foregroundStyle(state.tint)
+                .font(.title3)
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(member.displayName).font(.subheadline.weight(.medium))
+                Text(compactName(member)).font(.subheadline.weight(.medium))
                 if state == .notNeeded || state == .missed {
                     Text(state == .notNeeded ? "Not needed" : "Missed").font(.caption)
                 }
             }
             .foregroundStyle(.primary)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(minWidth: 44, minHeight: 44)
         .background(state.isAccountedFor ? state.tint.opacity(0.14) : AppTheme.inset,
-                    in: RoundedRectangle(cornerRadius: 12))
-        .contentShape(RoundedRectangle(cornerRadius: 12))
+                    in: RoundedRectangle(cornerRadius: 14))
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func compactName(_ member: FamilyMember) -> String {
+        let first = member.displayName.split(separator: " ").first.map(String.init) ?? member.displayName
+        let matches = store.snapshot.members.filter {
+            $0.displayName.split(separator: " ").first.map(String.init) == first
+        }
+        return matches.count == 1 ? first : member.displayName
     }
 
     private func historicalContributionLabel(_ contribution: HistoricalContribution) -> some View {
@@ -196,6 +218,7 @@ struct ResponsibilityRow: View {
             try store.setCompletion(choreID: chore.choreID, occurrenceID: chore.occurrenceID,
                                     memberID: member.id,
                                     date: chore.day.date(in: store.calendar), state: state)
+            if state == .done { feedback += 1 }
         }
     }
 

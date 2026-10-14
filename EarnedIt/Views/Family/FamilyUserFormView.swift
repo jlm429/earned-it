@@ -20,6 +20,20 @@ struct FamilyUserFormView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    HStack(spacing: 16) {
+                        Text(avatar.rawValue).font(.system(size: 44))
+                            .frame(width: 72, height: 72)
+                            .background(AppTheme.inset, in: RoundedRectangle(cornerRadius: 24))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(displayName.isEmpty ? "Someone special" : displayName)
+                                .font(.system(.title2, design: .rounded, weight: .bold))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(role.title).foregroundStyle(AppTheme.secondaryText)
+                        }
+                    }.padding(.vertical, 8)
+                }
                 Section(role.title) {
                     TextField("Display name", text: $displayName).textContentType(.name)
                         .accessibilityIdentifier("family-display-name")

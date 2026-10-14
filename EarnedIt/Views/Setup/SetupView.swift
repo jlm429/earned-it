@@ -14,21 +14,27 @@ struct SetupView: View {
             Form {
                 if store.household == nil {
                     Section {
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 18) {
                             Image(systemName: "checkmark.seal.fill")
-                                .font(.largeTitle)
-                                .foregroundStyle(AppTheme.accent)
-                                .padding(12)
-                                .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                                .font(.system(size: 44, weight: .medium))
+                                .foregroundStyle(AppTheme.heroSecondary)
                                 .accessibilityHidden(true)
-                            Text("Earned It").font(.largeTitle.bold())
-                            Text("One family. The right view for everyone.")
-                                .font(.title3.weight(.medium))
-                            Text("Parents manage the shared week. Children see and complete only the work connected to their invited profile.")
-                                .foregroundStyle(AppTheme.secondaryText)
+                            Text("Earned It")
+                                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                                .foregroundStyle(AppTheme.heroText)
+                            Text("Little things.\nLasting habits.")
+                                .font(.system(.title, design: .rounded, weight: .semibold))
+                                .foregroundStyle(AppTheme.heroText)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("A calmer chore routine. A shared sense of progress. A little pride in a job well done.")
+                                .foregroundStyle(AppTheme.heroSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .padding(.vertical, 8)
-                        .listRowBackground(AppTheme.surface)
+                        .padding(28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(HeroSurface())
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                     }
                     if creatingFamily {
                         Section {
@@ -74,7 +80,7 @@ struct SetupView: View {
                         }
                     }
                     Section {
-                        Label("Joining never creates a second copy of a family or lets a device choose its own authority.",
+                        Label("One shared family. Each child joins with an invitation for their own profile.",
                               systemImage: "lock.shield")
                             .foregroundStyle(AppTheme.secondaryText)
                     }
@@ -83,9 +89,18 @@ struct SetupView: View {
                     }
                 } else {
                     Section("Your family") {
-                        Text(store.household?.name ?? "Family").font(.title2.bold())
+                        Label("A good start, together", systemImage: "sparkles")
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .foregroundStyle(AppTheme.accent)
+                        Text(store.household?.name ?? "Family").font(.headline)
                         ForEach(store.snapshot.members) { member in
-                            Label("\(member.displayName) · \(member.role.title)", systemImage: "checkmark.circle")
+                            HStack(spacing: 12) {
+                                AvatarView(user: member, size: 40)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(member.displayName).font(.headline)
+                                    Text(member.role.title).font(.caption).foregroundStyle(AppTheme.secondaryText)
+                                }
+                            }
                                 .accessibilityIdentifier("setup-user-\(member.displayName.accessibilitySlug)")
                         }
                         Button("Add Child") { addingChild = true }
@@ -113,6 +128,7 @@ struct SetupView: View {
                 }
             }
             .themedListBackground()
+            .navigationBarTitleDisplayMode(.inline)
             .navigationTitle(store.household == nil ? "Welcome" : "Family Setup")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

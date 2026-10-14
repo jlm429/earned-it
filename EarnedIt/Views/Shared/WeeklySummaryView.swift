@@ -7,8 +7,10 @@ struct WeeklySummaryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                ProfileHeader(user: child, title: "Effort, over time.", subtitle: child.displayName,
+                              accessibilityIdentifier: "history-profile-header")
                 ForEach(store.allowanceHistory(for: child.id)) { week in
-                    SectionCard {
+                    SectionCard(tint: week.earned ? AppTheme.success : nil) {
                         VStack(alignment: .leading, spacing: 16) {
                             AllowanceWeekCard(week: week)
                             if let actor = store.selectedMember {
@@ -19,7 +21,7 @@ struct WeeklySummaryView: View {
                 }
                 Text("Current week and up to 12 finished weeks. Done and Not Needed count; excused days are excluded. Optional chores cannot replace required items.")
                     .font(.footnote).foregroundStyle(AppTheme.secondaryText)
-            }.padding()
+            }.padding(20)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
         }

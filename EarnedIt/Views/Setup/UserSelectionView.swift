@@ -34,7 +34,7 @@ struct UserSelectionView: View {
                     if store.profiles.isEmpty {
                         invitationAccess
                     }
-                    SyncStatusView()
+                    if SyncStatusView.isVisible(in: store) { SyncStatusView() }
                 }
                 .padding(20)
                 .frame(maxWidth: 760)
@@ -139,9 +139,11 @@ struct SyncStatusView: View {
         }
     }
 
-    private var shouldShowStatus: Bool {
-        store.isSyncing || store.cloudAccessBlocked || store.cloudIsReadOnly
+    private var shouldShowStatus: Bool { Self.isVisible(in: store) }
+
+    static func isVisible(in store: HouseholdStore) -> Bool {
+        store.session.location != nil && (store.isSyncing || store.cloudAccessBlocked || store.cloudIsReadOnly
             || store.syncMessage == "Sync needs attention. Changes are kept."
-            || store.pendingCount > 0 || !store.rejectedChanges.isEmpty
+            || store.pendingCount > 0 || !store.rejectedChanges.isEmpty)
     }
 }

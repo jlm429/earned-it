@@ -16,11 +16,21 @@ struct EarnedItApp: App {
         let readOnlyPreflight = arguments.contains("--owner-transition-preflight")
             || arguments.contains("--child-recovery-preflight")
         let isUITest = arguments.contains("--ui-test-store")
+        #if targetEnvironment(simulator)
+        if MarketingDemoFixture.enabled {
+            url = URL.documentsDirectory.appending(path: "marketing-demo-only.store")
+        } else if isUITest {
+            url = URL.documentsDirectory.appending(path: "shared-household-ui-tests.store")
+        } else {
+            url = URL.applicationSupportDirectory.appending(path: "shared-household-v1.store")
+        }
+        #else
         if isUITest {
             url = URL.documentsDirectory.appending(path: "shared-household-ui-tests.store")
         } else {
             url = URL.applicationSupportDirectory.appending(path: "shared-household-v1.store")
         }
+        #endif
         #else
         let arguments: [String] = []
         let readOnlyPreflight = false
@@ -105,13 +115,21 @@ struct EarnedItApp: App {
                 alerts = AppleActivityAlerts.shared
             }
             let initialStore = try HouseholdStore(repository: repository, transport: transport,
-                clock: { WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now },
+                clock: {
+                    #if targetEnvironment(simulator)
+                    if MarketingDemoFixture.enabled { return MarketingDemoFixture.now }
+                    #endif
+                    return WeeklyUITestFixture.enabled ? WeeklyUITestFixture.now : .now
+                },
                 automaticSync: !readOnlyPreflight, performLocalMigrations: !readOnlyPreflight,
                 activityAlerts: alerts,
                 localDataResetter: localDataResetter,
                 accountDataResetCloudBoundary: resetBoundary,
                 accountDataResetJournal: journal)
             if !readOnlyPreflight { try WeeklyUITestFixture.prepare(initialStore) }
+            #if targetEnvironment(simulator)
+            if !readOnlyPreflight { try MarketingDemoFixture.prepare(initialStore) }
+            #endif
             if !readOnlyPreflight && isUITest
                 && arguments.contains("--ui-test-stale-owner-membership") {
                 initialStore.prepareStaleOwnerMembershipRecoveryUITest()

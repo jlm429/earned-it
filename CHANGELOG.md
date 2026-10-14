@@ -6,6 +6,7 @@ User-visible changes to Earned It.
 
 ### Changed
 
+- Refreshed parent and child Today screens, onboarding, family management, settings, and history with adaptive cards, progress rings, and completion feedback. See the [design and QA report](docs/premium-redesign.md).
 - Activity now has a labeled notification switch, separate preference and iOS permission states, and an Open iOS Settings button when permission is denied. Turning alerts off clears system alerts while retaining Activity and punt requests.
 - Added child-approved punts and family Activity with optional alerts. See the [punt and activity guide](docs/punt-notifications.md) for usage and delivery limits.
 - Added compact child Punt Stats in Activity for this week and last week. See the [stats rules](docs/punt-notifications.md#child-punt-stats).

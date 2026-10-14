@@ -220,11 +220,12 @@ struct RootView: View {
             }
         }
         .tint(AppTheme.accent)
+        .environment(\.defaultMinListRowHeight, 52)
         .task(id: "\(store.activityRevision)/\(scenePhase)") {
             if !readOnlyPreflightMode && scenePhase == .active { await store.processActivityAlerts() }
         }
         #if DEBUG
-        .preferredColorScheme(WeeklyUITestFixture.enabled && ProcessInfo.processInfo.arguments.contains("--ui-test-dark") ? .dark : nil)
+        .modifier(UITestPresentation())
         #endif
         .environment(\.calendar, store.calendar)
         .environment(\.timeZone, store.calendar.timeZone)
@@ -463,3 +464,17 @@ private struct ScrollableUnavailableView<Actions: View>: View {
         }
     }
 }
+
+#if DEBUG
+private struct UITestPresentation: ViewModifier {
+    private let arguments = ProcessInfo.processInfo.arguments
+    private var enabled: Bool { arguments.contains("--ui-test-store") }
+    private var colorScheme: ColorScheme? { enabled && arguments.contains("--ui-test-dark") ? .dark : nil }
+    private var motion: Bool { enabled && arguments.contains("--ui-test-reduce-motion") }
+
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(colorScheme)
+            .environment(\.previewReduceMotion, motion)
+    }
+}
+#endif

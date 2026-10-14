@@ -14,29 +14,72 @@ struct FamilyManagementView: View {
 
     var body: some View {
         List {
+            Section {
+                VStack(alignment: .leading, spacing: 14) {
+                    FeatureHeading(title: "BETTER TOGETHER", systemImage: "person.2.fill")
+                    Text(store.household?.name ?? "Your family")
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                        .foregroundStyle(AppTheme.heroText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Everyone has a part. Every little bit matters.")
+                        .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                .background(HeroSurface())
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
             Section("Family Members") {
                 ForEach(store.snapshot.members.filter { $0.archivedFrom == nil || store.snapshot.isActive($0, on: store.day) }) { member in
-                    HStack(spacing: 12) {
-                        AvatarView(user: member, size: 44)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(member.displayName).font(.headline)
-                            Text(member.role.title).font(.caption).foregroundStyle(.secondary)
-                            if member.joinedDay > store.day { Text("Joins lists tomorrow").font(.caption) }
-                            if member.archivedFrom != nil && !store.snapshot.isActive(member, on: store.tomorrow) { Text("Leaves family lists tomorrow").font(.caption) }
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 14) {
+                            AvatarView(user: member, size: 52)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(member.displayName).font(.headline)
+                                Text(member.role.title).font(.subheadline).foregroundStyle(AppTheme.secondaryText)
+                                if member.joinedDay > store.day { Text("Joins lists tomorrow").font(.caption) }
+                                if member.archivedFrom != nil && !store.snapshot.isActive(member, on: store.tomorrow) {
+                                    Text("Leaves family lists tomorrow").font(.caption)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            Menu {
+                                Button("Edit Member") { editing = member }
+                                Button("Remove Family Member", role: .destructive) { archiving = member }
+                            } label: {
+                                Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                                    .background(AppTheme.inset, in: Circle())
+                            }
+                            .accessibilityLabel("Manage \(member.displayName)")
                         }
-                        Spacer()
-                        Menu {
-                            Button("Edit Member") { editing = member }
-                            Button("Remove Family Member", role: .destructive) { archiving = member }
-                        } label: { Image(systemName: "ellipsis.circle") }
-                        .accessibilityLabel("Manage \(member.displayName)")
+                        if member.role == .child {
+                            let week = store.allowanceWeek(for: member.id)
+                            WeeklyProgressBar(week: week,
+                                accessibilityIdentifier: "family-progress-\(member.displayName.accessibilitySlug)")
+                            ViewThatFits(in: .horizontal) {
+                                HStack {
+                                    familyStreak(member)
+                                    Spacer(minLength: 8)
+                                    AllowanceValue(amount: week.amount)
+                                        .accessibilityIdentifier("family-allowance-\(member.displayName.accessibilitySlug)")
+                                        .font(.subheadline.weight(.semibold)).foregroundStyle(AppTheme.accent)
+                                }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    familyStreak(member)
+                                    AllowanceValue(amount: week.amount).font(.subheadline)
+                                        .accessibilityIdentifier("family-allowance-\(member.displayName.accessibilitySlug)")
+                                }
+                            }
+                        }
                     }
+                    .padding(.vertical, 10)
                 }
-                Button("Add Child") { addingRole = .child }.accessibilityIdentifier("family-add-child")
-                Button("Add Parent Profile") { addingRole = .parent }
+                Button("Add Child", systemImage: "plus.circle.fill") { addingRole = .child }.accessibilityIdentifier("family-add-child")
+                Button("Add Parent Profile", systemImage: "person.badge.plus") { addingRole = .parent }
             }
             Section("Sharing") {
-                SyncStatusView()
+                if SyncStatusView.isVisible(in: store) { SyncStatusView() }
                 Button("Invite Family Member", systemImage: "person.badge.plus") { inviting = true }
                     .disabled(busy)
                     .accessibilityIdentifier("invite-profile")
@@ -130,7 +173,11 @@ struct FamilyManagementView: View {
         }
         .refreshable { await refreshFamily() }
         .themedListBackground()
+        .frame(maxWidth: 920)
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.canvas)
         .navigationTitle("Manage Family")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $addingRole) { role in FamilyUserFormView(role: role) }
         .sheet(item: $editing) { member in FamilyUserFormView(role: member.role, existing: member) }
         .sheet(isPresented: $inviting) { FamilyInvitationView() }
@@ -169,6 +216,12 @@ struct FamilyManagementView: View {
             Text("The code will stop working. If it was already used, that device will lose family access without changing family data.")
         }
         .accessibilityIdentifier("family-management-screen")
+    }
+
+    private func familyStreak(_ member: FamilyMember) -> some View {
+        Label("\(MetricsService.streak(childID: member.id, snapshot: store.snapshot, today: store.today)) day streak",
+              systemImage: "flame.fill")
+            .font(.caption.weight(.semibold)).foregroundStyle(AppTheme.sunshine)
     }
 
     private func profileNames(_ ids: [UUID]) -> String {
