@@ -8,7 +8,9 @@ struct ParentDashboardView: View {
     @State private var selectedDate: Date?
 
     private var date: Date { selectedDate ?? today }
-    private var chores: [DailyChore] { store.dailyList(on: date) }
+    private var chores: [DailyChore] {
+        ChoreRules.visibleList(store.dailyList(on: date), to: parent)
+    }
 
     var body: some View {
         ScrollView {

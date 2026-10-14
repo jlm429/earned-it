@@ -47,6 +47,7 @@ final class EarnedItUITests: XCTestCase {
         }
 
         keepScreenshot("qa-welcome")
+        try checkDeletedChoreDailyOverview()
         launchDemo(reset: true)
         XCTAssertTrue(screen("parent-profile-header").label.contains("The Smiths"))
         keepScreenshot("marketing-daily-chores")
@@ -1514,6 +1515,62 @@ final class EarnedItUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(button.frame.minX, 0)
             XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.width)
         }
+    }
+
+    private func checkDeletedChoreDailyOverview() throws {
+        createFamily(name: "The Smiths", parent: "Alex Smith")
+        addChild("Remy Smith")
+        let weekday = Calendar.current.component(.weekday, from: Date())
+        tap("setup-weekday-lists")
+        tap("weekday-\(weekday)")
+        for title in ["Pack school bag", "Water plants"] {
+            tap("add-responsibility")
+            fill("responsibility-title", with: title)
+            tap("save-responsibility")
+        }
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tap("finish-setup")
+        tap("state-pack-school-bag-remy-smith")
+        tap("state-menu-water-plants-remy-smith")
+        app.buttons["Missed"].tap()
+        XCTAssertTrue(waitForLabel(app.buttons["state-water-plants-remy-smith"], containing: "Missed"))
+        reveal(app.staticTexts["1 of 2 chores accounted for"])
+        XCTAssertTrue(app.staticTexts["1 of 2 chores accounted for"].exists)
+
+        for title in ["Pack school bag", "Water plants"] {
+            tap("weekday-lists-link")
+            tap("weekday-\(weekday)")
+            app.buttons["Delete Chore"].firstMatch.tap()
+            let alert = app.alerts["Delete \"\(title)\"?"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 5))
+            alert.buttons["Delete"].tap()
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            if title == "Pack school bag" {
+                XCTAssertTrue(app.staticTexts["0 of 1 chores accounted for"].exists)
+                XCTAssertTrue(app.staticTexts["Good things add up."].exists)
+            }
+        }
+        let emptyList = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label BEGINSWITH 'Nothing expected'"
+        )).firstMatch
+        reveal(emptyList)
+        XCTAssertTrue(emptyList.exists)
+        app.scrollViews.firstMatch.swipeDown()
+        keepScreenshot("qa-deleted-chores-empty-dashboard")
+        XCTAssertTrue(app.staticTexts["Room to breathe."].exists)
+        XCTAssertTrue(app.staticTexts["No chores expected for this day."].exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == 'daily-overview' AND label == %@", "0 of 0 accounted for"
+        )).firstMatch.exists)
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        tap("parent-child-remy-smith")
+        reveal(screen("parent-weekly-count"))
+        XCTAssertEqual(screen("parent-weekly-count").label, "1 of 2 required items accounted for this week")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH 'weekly-item-' AND identifier ENDSWITH '-water-plants'"
+        )).firstMatch.exists)
     }
 
     private func createFamily(name: String = "Test Family", parent: String = "Test Parent") {

@@ -138,11 +138,13 @@ struct WeeklyProgressBar: View {
 
     private var progressLabel: some View {
         Text("\(week.accountedCount) of \(week.items.count) this week")
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var percentageLabel: some View {
         Text(progressPercentage, format: .percent.precision(.fractionLength(0)))
             .foregroundStyle(AppTheme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var progressPercentage: Double {

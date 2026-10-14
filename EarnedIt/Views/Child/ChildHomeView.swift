@@ -38,7 +38,9 @@ struct ChildHomeView: View {
         .navigationTitle("Today")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.refresh() }
-        .sensoryFeedback(.success, trigger: celebratingWeekID)
+        .sensoryFeedback(.success, trigger: celebratingWeekID) { _, newValue in
+            newValue != nil
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: celebratingWeekID)
         .task(id: "\(previous?.id ?? "")/\(previous?.earned ?? false)") {
             guard previous?.earned == true else { celebratingWeekID = nil; return }
