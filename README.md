@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/earned-it-banner.png" alt="Earned It app preview showing the parent dashboard and a child's chore list">
+  <img src="marketing-assets/1.1.0/earned-it-new-banner.png" alt="Earned It: Free, no ads, no tracking, with previews of chores, weekly progress, and family management">
 </p>
 
 # Earned It
