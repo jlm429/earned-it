@@ -5,6 +5,62 @@ import XCTest
 final class AllowanceTests: XCTestCase {
     private let us = Locale(identifier: "en_US")
 
+    func testProgressWindowBoundsAndHouseholdCivilMondayAcrossDSTAndYear() throws {
+        let family = try TestFamily()
+        func starts() -> [String] {
+            AllowanceService.progressWeekStarts(snapshot: family.store.snapshot, today: family.clock.now).map(\.rawValue)
+        }
+        XCTAssertEqual(starts(), ["2026-09-07"])
+        family.move(to: "2026-09-21T16:00:00Z")
+        XCTAssertEqual(starts(), ["2026-09-07", "2026-09-14", "2026-09-21"])
+        family.move(to: "2026-11-02T04:59:59Z")
+        XCTAssertEqual(starts().count, 7)
+        XCTAssertEqual(starts().first, "2026-09-14")
+        XCTAssertEqual(starts().last, "2026-10-26")
+        family.move(to: "2026-11-02T05:00:00Z")
+        XCTAssertEqual(starts().first, "2026-09-21")
+        XCTAssertEqual(starts().last, "2026-11-02")
+        family.move(to: "2027-01-04T05:00:00Z")
+        XCTAssertEqual(starts().first, "2026-11-23")
+        XCTAssertEqual(starts().last, "2027-01-04")
+        XCTAssertTrue(AllowanceService.progressWeekStarts(snapshot: HouseholdSnapshot(facts: []), today: family.clock.now).isEmpty)
+    }
+
+    func testProgressHistoryKeepsDatedRequirementsStatesAndRatesAfterAssignmentChangesAndReload() throws {
+        let family = try TestFamily()
+        let chore = try family.chore(.particular, ids: [family.hanna.id])
+        let monday = family.clock.now
+        try family.store.saveAllowance(memberID: family.hanna.id, text: "12.34", currencyCode: "USD", locale: us)
+        try family.complete(chore, as: family.hanna)
+        family.move(to: "2026-09-14T16:00:00Z")
+        let missingMonday = family.clock.now
+        family.move(to: "2026-09-21T16:00:00Z")
+        let completed = family.store.allowanceWeek(for: family.hanna.id, containing: monday)
+        let missing = family.store.allowanceWeek(for: family.hanna.id, containing: missingMonday)
+        XCTAssertEqual(completed.accountedCount, 1)
+        XCTAssertTrue(completed.earned)
+        XCTAssertEqual(missing.items.count, 1)
+        XCTAssertEqual(missing.missing.count, 1)
+        try family.store.selectProfile(family.parent.id)
+        try family.store.saveChore(choreID: chore, weekday: .tuesday, title: "New task", mode: .particular, memberIDs: [family.alek.id])
+        try family.store.saveAllowance(memberID: family.hanna.id, text: "25", currencyCode: "USD", locale: us)
+        _ = try family.store.saveChore(weekday: .monday, title: "New chore", mode: .all, memberIDs: [])
+        family.move(to: "2026-09-28T16:00:00Z")
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        for store in [family.store, reopened] {
+            let old = store.allowanceWeek(for: family.hanna.id, containing: monday)
+            let missed = store.allowanceWeek(for: family.hanna.id, containing: missingMonday)
+            XCTAssertEqual(old.items, completed.items)
+            XCTAssertEqual(old.amount, completed.amount)
+            XCTAssertEqual(old.earned, completed.earned)
+            XCTAssertEqual(missed.items, missing.items)
+            XCTAssertEqual(missed.missing.count, 1)
+            XCTAssertTrue(store.allowanceWeek(for: family.alek.id, containing: monday).items.isEmpty)
+            XCTAssertFalse(store.allowanceWeek(for: family.hanna.id).items.contains { $0.choreID == chore })
+            XCTAssertTrue(store.allowanceWeek(for: family.alek.id).items.contains { $0.choreID == chore })
+        }
+    }
+
     func testDecimalInputCurrencyPrecisionAndValidation() throws {
         let usd = try XCTUnwrap(AllowanceAmount.parse("12.34", currencyCode: "USD", locale: us))
         XCTAssertEqual(usd.minorUnits, 1234)

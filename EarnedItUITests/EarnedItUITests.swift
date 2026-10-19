@@ -16,6 +16,10 @@ final class EarnedItUITests: XCTestCase {
         if name.contains("WeeklyAllowance") {
             app.launchArguments += ["--ui-test-weekly-fixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         }
+        if name.contains("ProgressHistory") {
+            app.launchArguments += ["--ui-test-progress-history", "--ui-test-date=2026-09-21T16:00:00Z"]
+            if name.contains("LargeType") { app.launchArguments += ["--ui-test-dark", "--ui-test-reduce-motion"] }
+        }
         app.launch()
         if name.contains("WeeklyAllowance") {
             XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
@@ -1110,6 +1114,69 @@ final class EarnedItUITests: XCTestCase {
         app.swipeDown()
         XCTAssertTrue(app.navigationBars["Manage Family"].exists)
         keepScreenshot("manage-family-pull-to-refresh")
+    }
+
+    func testWeeklyAllowanceProgressHistorySwipeBoundsAndRelaunch() throws {
+        let pager = app.scrollViews["parent-weekly-pager"]
+        reveal(pager)
+        let previous = app.buttons["progress-previous-week"]
+        let next = app.buttons["progress-next-week"]
+        let current = app.buttons["progress-current-week"]
+        func check(_ day: String, _ count: String) {
+            let heading = screen("progress-week-\(day)")
+            XCTAssertTrue(heading.waitForExistence(timeout: 3))
+            XCTAssertGreaterThan(heading.frame.width, 0)
+            XCTAssertGreaterThanOrEqual(heading.frame.minX, app.frame.minX)
+            XCTAssertLessThanOrEqual(heading.frame.maxX, app.frame.maxX)
+            XCTAssertEqual(screen("parent-weekly-progress-hanna").label, count)
+        }
+        check("2026-09-21", "0 of 2 required items accounted for this week")
+        XCTAssertTrue(screen("progress-week-2026-09-21").label.contains("Current week"))
+        XCTAssertTrue(screen("progress-week-2026-09-21").label.contains("Week of Sep 21, 2026 through Sep 27, 2026"))
+        XCTAssertFalse(next.isEnabled)
+        XCTAssertFalse(current.isEnabled)
+        pager.swipeLeft()
+        check("2026-09-21", "0 of 2 required items accounted for this week")
+        pager.swipeRight()
+        check("2026-09-14", "0 of 2 required items accounted for that week")
+        XCTAssertTrue(screen("progress-week-2026-09-14").label.contains("Finished week"))
+        XCTAssertTrue(screen("progress-week-2026-09-14").label.contains("Week of Sep 14, 2026 through Sep 20, 2026"))
+        pager.swipeRight()
+        check("2026-09-07", "1 of 2 required items accounted for that week")
+        reveal(screen("parent-weekly-progress-hanna"))
+        keepScreenshot("progress-history-previous-week")
+        tap("parent-child-hanna")
+        XCTAssertTrue(app.staticTexts["$12.34 weekly allowance"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        reveal(pager)
+        check("2026-09-07", "1 of 2 required items accounted for that week")
+        for _ in 0..<4 { tap("progress-previous-week") }
+        check("2026-08-10", "0 of 2 required items accounted for that week")
+        XCTAssertFalse(previous.isEnabled)
+        pager.swipeRight()
+        check("2026-08-10", "0 of 2 required items accounted for that week")
+        tap("progress-current-week")
+        check("2026-09-21", "0 of 2 required items accounted for this week")
+        pager.swipeRight()
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "--ui-test-reset" }
+        app.launch()
+        reveal(pager)
+        check("2026-09-21", "0 of 2 required items accounted for this week")
+        keepScreenshot("progress-history-current-after-relaunch")
+    }
+
+    func testWeeklyAllowanceProgressHistoryLargeType() throws {
+        reveal(app.buttons["progress-previous-week"])
+        checkControls(["progress-previous-week", "progress-current-week", "progress-next-week"])
+        XCTAssertLessThan(app.buttons["progress-current-week"].frame.height, app.frame.height / 3,
+                          "The current-week label must wrap at words rather than form a tall column of letters.")
+        app.buttons["progress-previous-week"].tap()
+        let heading = screen("progress-week-2026-09-14")
+        XCTAssertTrue(heading.waitForExistence(timeout: 3))
+        reveal(heading)
+        keepScreenshot("progress-history-largest-type")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
     }
 
     func testWeeklyAllowancePolishAtLargeType() throws {

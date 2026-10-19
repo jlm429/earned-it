@@ -132,12 +132,12 @@ struct WeeklyProgressBar: View {
         }
         .font(.subheadline.weight(.medium))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(week.accountedCount) of \(week.items.count) required items accounted for this week")
+        .accessibilityLabel("\(week.accountedCount) of \(week.items.count) required items accounted for \(week.isFinished ? "that week" : "this week")")
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var progressLabel: some View {
-        Text("\(week.accountedCount) of \(week.items.count) this week")
+        Text("\(week.accountedCount) of \(week.items.count) \(week.isFinished ? "that week" : "this week")")
             .fixedSize(horizontal: false, vertical: true)
     }
 
