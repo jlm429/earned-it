@@ -372,6 +372,181 @@ final class FamilyPolishTests: XCTestCase {
         XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).dueToday.count, 1)
     }
 
+    func testSwapAccountingIgnoresLosingRevisionCompletionsAndReversalsAtBothEndpoints() throws {
+        for repayment in [false, true] {
+            for losingState in [DailyStateKind.done, .unmarked] {
+                let family = try TestFamily()
+                let (chore, requestID) = try setupSwap(family)
+                try accept(family, requestID)
+                let request = try XCTUnwrap(family.store.swaps.first?.request)
+                let old = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: request.scope.day))
+                let endpointDay = repayment ? request.repaymentDay : request.scope.day
+                let endpointMember = repayment ? family.hanna.id : family.alek.id
+                let otherDay = repayment ? request.scope.day : request.repaymentDay
+                let otherMember = repayment ? family.alek.id : family.hanna.id
+                let revision = ChoreRevision(id: UUID(), householdID: old.householdID, choreID: chore,
+                    weekday: old.weekday, effectiveDay: endpointDay, title: "Water the garden", notes: old.notes,
+                    category: old.category, mode: old.mode, memberIDs: old.memberIDs, isArchived: false)
+                let start = try XCTUnwrap(family.store.snapshot.orderedFacts.last?.sequence)
+                let edit = fact(family, body: .chore(revision), author: family.parent.id, sequence: start + 1)
+                let otherRevision = repayment ? old.id : revision.id
+                var merged = [edit, fact(family, body: .completion(DatedCompletion(choreID: chore,
+                    revisionID: otherRevision, memberID: otherMember, day: otherDay, state: .done,
+                    eligibleMemberIDs: [otherMember], mode: .alternating, recordedByMemberID: otherMember)),
+                    author: otherMember, sequence: start + 2)]
+                if losingState == .unmarked {
+                    merged.append(fact(family, body: .completion(DatedCompletion(choreID: chore,
+                        revisionID: revision.id, memberID: endpointMember, day: endpointDay, state: .done,
+                        eligibleMemberIDs: [endpointMember], mode: .alternating, recordedByMemberID: endpointMember)),
+                        author: endpointMember, sequence: start + 3))
+                }
+                merged.append(fact(family, body: .completion(DatedCompletion(choreID: chore,
+                    revisionID: old.id, memberID: endpointMember, day: endpointDay, state: losingState,
+                    eligibleMemberIDs: [endpointMember], mode: .alternating, recordedByMemberID: endpointMember)),
+                    author: endpointMember, sequence: start + 4))
+                try family.repository.commit(facts: merged)
+                family.move(to: "2026-09-14T16:00:00Z")
+                let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+                let row = try XCTUnwrap(reopened.dailyList(on: endpointDay.date(in: reopened.calendar)).first)
+                let incomplete: DailyStateKind = endpointDay < reopened.day ? .missed : .unmarked
+                XCTAssertEqual(row.state(for: endpointMember), losingState == .done ? incomplete : .done)
+                XCTAssertEqual(reopened.swaps.first?.status, losingState == .done ? .accepted : .completed)
+                if losingState == .done {
+                    XCTAssertTrue(reopened.swaps.first?.isActive == true)
+                    try reopened.selectProfile(family.parent.id)
+                    try reopened.setCompletion(choreID: chore, memberID: endpointMember,
+                        date: endpointDay.date(in: reopened.calendar), state: .done)
+                    XCTAssertEqual(reopened.swaps.first?.status, .completed)
+                }
+            }
+        }
+    }
+
+    func testReleasedSwapEndpointsCannotBeOfferedOrSavedForAnotherExchange() throws {
+        let family = try TestFamily()
+        let zoe = try family.store.saveMember(name: "Zoe", role: .child, avatar: .star)
+        let chore = try family.chore(.alternating, ids: [family.hanna.id, zoe.id, family.alek.id])
+        try family.store.selectProfile(family.hanna.id)
+        try family.store.requestSwap(choreID: chore, recipientID: family.alek.id)
+        let requestID = try XCTUnwrap(family.store.swaps.first?.id)
+        XCTAssertEqual(family.store.swaps.first?.request.repaymentDay,
+                       family.store.day.adding(days: 14, calendar: family.store.calendar))
+        try accept(family, requestID)
+        try family.store.selectProfile(family.parent.id)
+        try family.store.markOccurrenceNotNeeded(choreID: chore, date: family.clock.now,
+                                                 alternatingSkipBehavior: .advanceRotation)
+        XCTAssertEqual(family.store.swaps.first?.status, .released)
+        family.move(to: "2026-09-14T16:00:00Z")
+        try family.store.selectProfile(zoe.id)
+        let row = try XCTUnwrap(family.store.dailyList().first)
+        XCTAssertEqual(row.turnOwnerID, zoe.id)
+        XCTAssertFalse(family.store.swapCandidates(for: row).contains { $0.0.id == family.alek.id })
+        let before = family.store.snapshot.orderedFacts
+        XCTAssertThrowsError(try family.store.requestSwap(choreID: chore, recipientID: family.alek.id))
+        XCTAssertEqual(family.store.snapshot.orderedFacts, before)
+        XCTAssertTrue(family.store.swapCandidates(for: row).contains { $0.0.id == family.hanna.id })
+        try family.store.requestSwap(choreID: chore, recipientID: family.hanna.id)
+        XCTAssertEqual(family.store.swaps.last?.status, .pending)
+        XCTAssertEqual(family.store.swaps.last?.request.requesterID, zoe.id)
+    }
+
+    func testOnboardingInvitationImmediatelyRedeemsExactProfileAndAllowsFurtherEditing() async throws {
+        let server = TestCloudServer()
+        let clock = TestClock()
+        let repository = try HouseholdRepository(inMemory: true)
+        let ownerTransport = TestTransport(server: server, account: "owner")
+        let owner = try HouseholdStore(repository: repository, transport: ownerTransport,
+            clock: { clock.now }, automaticSync: false)
+        try owner.createFamily(name: "Test Family", parentName: "Test Parent",
+                               timeZone: TimeZone(identifier: "America/New_York")!)
+        let parent = try XCTUnwrap(owner.selectedMember)
+        let child = try owner.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        XCTAssertEqual(owner.household?.isSetupComplete, false)
+        XCTAssertTrue(owner.snapshot.invitations.isEmpty)
+        XCTAssertNil(owner.session.location)
+        let issued = try await owner.createChildInvitation(memberID: child.id)
+        let childRepository = try HouseholdRepository(inMemory: true)
+        let childTransport = TestTransport(server: server, account: "child")
+        let joining = try HouseholdStore(repository: childRepository, transport: childTransport,
+            clock: { clock.now }, automaticSync: false)
+        try await joining.redeemInvitation(issued.qrPayload)
+        XCTAssertEqual(owner.household?.isSetupComplete, true)
+        XCTAssertEqual(joining.household?.id, owner.household?.id)
+        XCTAssertEqual(joining.selectedMember?.id, child.id)
+        XCTAssertEqual(joining.snapshot.invitationClaim(issued.invitation.id)?.memberID, child.id)
+        XCTAssertThrowsError(try joining.selectProfile(parent.id))
+        let sibling = try owner.saveMember(name: "Alek", role: .child, avatar: .rocket)
+        let chore = try owner.saveChore(weekday: .monday, title: "Water plants", mode: .all, memberIDs: [])
+        try owner.renameFamily("Our Team")
+        try await owner.synchronize()
+        try await joining.synchronize()
+        XCTAssertThrowsError(try joining.selectProfile(sibling.id))
+        XCTAssertTrue(joining.dailyList().contains { $0.choreID == chore })
+        XCTAssertEqual(joining.household?.name, "Our Team")
+        let reopened = try HouseholdStore(repository: childRepository, transport: childTransport,
+            clock: { clock.now }, automaticSync: false)
+        XCTAssertEqual(reopened.selectedMember?.id, child.id)
+        XCTAssertEqual(reopened.household?.isSetupComplete, true)
+        let retry = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: "other-child"), clock: { clock.now }, automaticSync: false)
+        do {
+            try await retry.redeemInvitation(issued.qrPayload)
+            XCTFail("A claimed onboarding invitation must not be reusable")
+        } catch {}
+        XCTAssertNil(retry.household)
+    }
+
+    func testOnboardingParentInvitationFinalizesSetupAndRedeemsRawAppleURL() async throws {
+        let server = TestCloudServer()
+        let clock = TestClock()
+        let owner = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: "owner"), clock: { clock.now }, automaticSync: false)
+        try owner.createFamily(name: "Test Family", parentName: "Test Parent",
+                               timeZone: TimeZone(identifier: "America/New_York")!)
+        _ = try owner.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        let issued = try await owner.createParentInvitation(name: "Another Parent", avatar: .sun)
+        let transport = TestTransport(server: server, account: "other-parent")
+        let joining = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+            transport: transport, clock: { clock.now }, automaticSync: false)
+        let location = try await transport.invitationLocation(for: issued.shareURL)
+        try await joining.acceptSystemInvitation(location: location) {
+            try await transport.accept(url: issued.shareURL, expected: location)
+        }
+        XCTAssertEqual(owner.household?.isSetupComplete, true)
+        XCTAssertEqual(joining.selectedMember?.id, issued.invitation.memberID)
+        XCTAssertEqual(joining.selectedMember?.role, .parent)
+        XCTAssertEqual(joining.household?.id, owner.household?.id)
+        XCTAssertEqual(joining.snapshot.invitationClaim(issued.invitation.id)?.memberID, issued.invitation.memberID)
+        XCTAssertFalse(joining.session.location?.isOwner == true)
+        try joining.renameFamily("Our Team")
+        try await joining.synchronize()
+        try await owner.synchronize()
+        XCTAssertEqual(owner.household?.name, "Our Team")
+    }
+
+    func testOnboardingInvitationPreservesMandatoryChildAndRoleValidation() async throws {
+        let server = TestCloudServer()
+        let clock = TestClock()
+        let owner = try HouseholdStore(repository: HouseholdRepository(inMemory: true),
+            transport: TestTransport(server: server, account: "owner"), clock: { clock.now }, automaticSync: false)
+        try owner.createFamily(name: "Test Family", parentName: "Test Parent",
+                               timeZone: TimeZone(identifier: "America/New_York")!)
+        do {
+            _ = try await owner.createParentInvitation(name: "Another Parent", avatar: .sun)
+            XCTFail("An invitation must not bypass the required child profile")
+        } catch { XCTAssertEqual(error as? HouseholdError, .missingChildren) }
+        XCTAssertEqual(owner.household?.isSetupComplete, false)
+        XCTAssertTrue(owner.snapshot.invitations.isEmpty)
+        XCTAssertNil(owner.session.location)
+        let child = try owner.saveMember(name: "Hanna", role: .child, avatar: .flower)
+        try owner.selectProfile(child.id)
+        do {
+            _ = try await owner.createChildInvitation(memberID: child.id)
+            XCTFail("A child cannot finalize setup or issue invitations")
+        } catch { XCTAssertEqual(error as? HouseholdError, .permission) }
+        XCTAssertEqual(owner.household?.isSetupComplete, false)
+    }
+
     func testExtrasSyncOfflineAcrossExactInvitedProfilesAndRelaunch() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

@@ -32,6 +32,8 @@ Both children are reserved from the first valid request. The recipient must expl
 | Ended | Return completion grace ended, or a parent corrected a previously settled outcome. Reservations stay released; original exchanged responsibilities and their corrected credit remain in their actual weeks. |
 | Released | A structural schedule, membership, deletion, or Not Needed change invalidated the promise. Return obligation cancelled without moving it to another date. The accepted source assignment and its recorded outcome remain historical. |
 
+Only completions and corrections for each endpoint's winning dated revision supply active credit or settle an exchange. Losing-revision contributions remain historical. Accepted endpoints remain unavailable to later exchanges even after release, and both offered choices and request admission enforce that restriction.
+
 Ordinary title/notes/category edits preserve a compatible dated return. Changing schedule, rotation membership/order, archiving, removing a participant, or disposing an unpaid endpoint releases an invalid return. A release does not revive after a later configuration edit or restoration. Done wins a concurrent Not Needed disposition, including the base-rotation consumption. Completion history can still be corrected by parents through existing rules.
 
 All requests and decisions replay globally in Lamport sequence and UUID order. This reserves participants across chores, admits the first non-overlapping request and first valid decision, prevents chains, and retains rejected/conflicting facts as audit evidence. Acceptance reads its preceding journal and cannot pass an earlier completion or disposal. An on-time offline decision can arrive later and remain valid; a decision dated after the request day is ineffective. Devices may disagree temporarily while offline and converge after merging the same facts.
@@ -48,7 +50,7 @@ Parent mutations remain in `HouseholdStore`; child decisions require the exact s
 
 The family name is part of the Daily Picture, replacing the separate avatar/header and motivational sentence. Child home puts a compact greeting and weekly summary above today's responsibilities; weekly history and supporting information follow the work on iPhone and sit beside it on iPad. Redundant quote cards are removed. Existing progress/completion motion respects Reduce Motion; native controls retain accessible sizes and wrapped text.
 
-Saving a child immediately offers Connect Now with that exact profile preselected, or Add Device Later. Setup and Manage Family retain Not connected yet or Invitation waiting until the existing membership facts prove connection. Opening the invitation form does not create or claim an invitation.
+Saving a child immediately offers Connect Now with that exact profile preselected, or Add Device Later. Setup and Manage Family retain Not connected yet or Invitation waiting until the existing membership facts prove connection. Opening the invitation form does not create or claim an invitation. Issuing an invitation from unfinished setup first uses the existing validated Finish Setup path, requiring a child profile before upload. The invitation stays presented while setup completes, so it can be shared and redeemed immediately. Add Device Later leaves unfinished setup unchanged; parents can continue editing family members and chores afterward.
 
 ## Local verification
 

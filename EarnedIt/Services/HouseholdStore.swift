@@ -1423,6 +1423,7 @@ final class HouseholdStore {
             throw HouseholdError.permission
         }
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        if !household.isSetupComplete { try finishSetup() }
         let diagnostics = transport.familyTransitionDiagnostics
         diagnostics.beginInvitation(
             householdID: household.id,

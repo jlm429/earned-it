@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SetupView: View {
     @Environment(HouseholdStore.self) private var store
+    @Binding var connectionPresented: Bool
     @State private var creatingFamily = false
     @State private var joiningFamily = false
     @State private var addingChild = false
@@ -103,7 +104,9 @@ struct SetupView: View {
                                     }
                                 }
                                 .accessibilityIdentifier("setup-user-\(member.displayName.accessibilitySlug)")
-                                if member.role == .child { ChildConnectionRow(child: member) }
+                                if member.role == .child {
+                                    ChildConnectionRow(child: member) { connectionPresented = $0 }
+                                }
                             }
                         }
                         Button("Add Child") { addingChild = true }
@@ -145,6 +148,7 @@ struct SetupView: View {
             }
             .sheet(isPresented: $joiningFamily) { JoinFamilyView() }
             .sheet(isPresented: $addingChild) { FamilyUserFormView(role: .child) }
+            .onChange(of: addingChild) { _, presented in connectionPresented = presented }
             .alert("Unable to Create Family", isPresented: Binding(
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "Please try again.") }

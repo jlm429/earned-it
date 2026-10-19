@@ -1547,15 +1547,16 @@ final class EarnedItUITests: XCTestCase {
 
     private func tap(_ identifier: String) {
         let element = app.buttons[identifier]
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        _ = element.waitForExistence(timeout: 5)
         // Wait before classifying a newly pushed toolbar. iOS can expose its floating
         // buttons outside the navigation bar subtree while the transition settles.
         let bar = app.navigationBars.firstMatch
-        let isTopBarControl = bar.exists && element.isHittable
+        let isTopBarControl = element.exists && bar.exists && element.isHittable
             && element.frame.minY >= bar.frame.minY - 1 && element.frame.maxY <= bar.frame.maxY + 1
         if identifier != "test-clock" && !isTopBarControl && !app.navigationBars.buttons[identifier].exists {
             reveal(element)
         }
+        XCTAssertTrue(element.exists)
         element.tap()
     }
 

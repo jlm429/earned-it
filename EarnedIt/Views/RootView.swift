@@ -11,6 +11,7 @@ struct RootView: View {
     @State private var diagnosticPreflightAvailable = false
     @State private var confirmsStaleOwnerRelease = false
     @State private var confirmsUnavailableFamilyReset = false
+    @State private var setupConnectionPresented = false
 
     var body: some View {
         @Bindable var store = store
@@ -207,8 +208,8 @@ struct RootView: View {
                     .accessibilityIdentifier("retry-family-access")
                 }
                 .accessibilityIdentifier("family-access-ended")
-            } else if store.household == nil || store.household?.isSetupComplete == false {
-                SetupView()
+            } else if store.household == nil || store.household?.isSetupComplete == false || setupConnectionPresented {
+                SetupView(connectionPresented: $setupConnectionPresented)
                     .id(store.session.deviceID)
                     .onAppear { store.recordJoinRootRoute(.onboarding) }
             } else if let member = store.selectedMember {

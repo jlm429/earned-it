@@ -4,6 +4,7 @@ import SwiftUI
 struct ChildConnectionRow: View {
     @Environment(HouseholdStore.self) private var store
     let child: FamilyMember
+    var onInvitationPresentationChange: (Bool) -> Void = { _ in }
     @State private var inviting = false
 
     private var connected: Bool {
@@ -18,22 +19,25 @@ struct ChildConnectionRow: View {
     }
 
     var body: some View {
-        if connected {
-            Label("Connected", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(AppTheme.success)
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                Label(invitationWaiting ? "Invitation waiting" : "Not connected yet", systemImage: "person.crop.circle.badge.clock")
-                    .font(.caption).foregroundStyle(AppTheme.secondaryText)
-                if store.session.location == nil || store.session.location?.isOwner == true {
-                    Button("Connect \(child.displayName)", systemImage: "person.badge.plus") { inviting = true }
-                        .frame(minHeight: 44).accessibilityIdentifier("connect-\(child.displayName.accessibilitySlug)")
-                } else {
-                    Text("Ask the family owner to send an invitation.").font(.footnote)
+        Group {
+            if connected {
+                Label("Connected", systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(AppTheme.success)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(invitationWaiting ? "Invitation waiting" : "Not connected yet", systemImage: "person.crop.circle.badge.clock")
+                        .font(.caption).foregroundStyle(AppTheme.secondaryText)
+                    if store.session.location == nil || store.session.location?.isOwner == true {
+                        Button("Connect \(child.displayName)", systemImage: "person.badge.plus") { inviting = true }
+                            .frame(minHeight: 44).accessibilityIdentifier("connect-\(child.displayName.accessibilitySlug)")
+                    } else {
+                        Text("Ask the family owner to send an invitation.").font(.footnote)
+                    }
                 }
             }
-            .sheet(isPresented: $inviting) { FamilyInvitationView(childID: child.id) }
         }
+        .sheet(isPresented: $inviting) { FamilyInvitationView(childID: child.id) }
+        .onChange(of: inviting) { _, presented in onInvitationPresentationChange(presented) }
     }
 }
 

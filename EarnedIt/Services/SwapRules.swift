@@ -79,9 +79,11 @@ enum SwapRules {
                                     snapshot: HouseholdSnapshot) -> Bool {
         let day = repayment ? request.repaymentDay : request.scope.day
         let member = repayment ? request.requesterID : request.recipientID
+        guard let revision = snapshot.configuration(choreID: request.scope.choreID, on: day),
+              revision.mode == .alternating else { return false }
         return snapshot.recordedAssignments.last {
             $0.choreID == request.scope.choreID && $0.day == day && $0.memberID == member
-                && $0.mode == .alternating
+                && $0.revisionID == revision.id && $0.mode == .alternating
         }?.state.isAccountedFor == true
     }
 
@@ -242,7 +244,10 @@ enum SwapRules {
             guard child.id != actor.id,
                   !swaps.contains(where: { $0.isActive && $0.participantIDs.contains(child.id) }),
                   let repayment = repaymentDay(for: chore, recipientID: child.id, snapshot: state),
-                  snapshot.member(actor.id)?.isActive(on: repayment) == true else { return nil }
+                  !swaps.contains(where: { $0.wasAccepted && $0.request.scope.choreID == chore.choreID
+                      && ($0.request.scope.day == repayment || $0.request.repaymentDay == repayment) }),
+                  repaymentAvailable(SwapRequest(scope: ChoreScope(chore), requesterID: actor.id,
+                      recipientID: child.id, repaymentDay: repayment), snapshot: state) else { return nil }
             return (child, repayment)
         }
     }
