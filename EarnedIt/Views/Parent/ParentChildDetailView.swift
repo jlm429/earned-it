@@ -10,6 +10,13 @@ struct ParentChildDetailView: View {
     @State private var editingAllowance = false
     @State private var awardingBonus = false
 
+    init(parent: FamilyMember, child: FamilyMember, today: Date, initialWeekOffset: Int = 0) {
+        self.parent = parent
+        self.child = child
+        self.today = today
+        _weekOffset = State(initialValue: initialWeekOffset)
+    }
+
     private var date: Date { selectedDate ?? today }
     private var weekDate: Date { store.calendar.date(byAdding: .day, value: 7 * weekOffset, to: today) ?? today }
     private var days: [DayFacts] { store.weekFacts(for: child.id, containing: weekDate) }

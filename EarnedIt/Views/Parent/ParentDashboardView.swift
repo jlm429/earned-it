@@ -64,63 +64,7 @@ struct ParentDashboardView: View {
     }
 
     private var weeklyProgress: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SectionHeading(title: "Weekly progress", systemImage: "chart.bar.fill")
-            if let child = store.snapshot.members.first(where: { $0.role == .child }) {
-                WeekHeading(week: store.allowanceWeek(for: child.id))
-            }
-            ForEach(store.snapshot.members.filter { $0.role == .child }) { child in
-                let week = store.allowanceWeek(for: child.id)
-                NavigationLink {
-                    ParentChildDetailView(parent: parent, child: child, today: today)
-                } label: {
-                    SectionCard(tint: week.earned ? AppTheme.success : nil) {
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack(spacing: 12) {
-                                AvatarView(user: child, size: 48)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(child.displayName).font(.headline).foregroundStyle(.primary)
-                                    Label("\(MetricsService.streak(childID: child.id, snapshot: store.snapshot, today: today)) day streak",
-                                          systemImage: "flame.fill")
-                                        .font(.caption.weight(.medium)).foregroundStyle(AppTheme.sunshine)
-                                }
-                                Spacer(minLength: 8)
-                                Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(AppTheme.secondaryText)
-                            }
-                            if !week.items.isEmpty {
-                                WeeklyProgressBar(week: week,
-                                    accessibilityIdentifier: "parent-weekly-progress-\(child.displayName.accessibilitySlug)")
-                            }
-                            ViewThatFits(in: .horizontal) {
-                                HStack {
-                                    StatusBadge(status: week.status)
-                                    Spacer(minLength: 8)
-                                    allowanceLabel(week)
-                                }
-                                VStack(alignment: .leading, spacing: 8) {
-                                    StatusBadge(status: week.status)
-                                    allowanceLabel(week)
-                                }
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(PressFeedbackStyle())
-                .accessibilityIdentifier("parent-child-\(child.displayName.accessibilitySlug)")
-                .accessibilityValue(week.amount?.weeklyAllowanceAccessibilityLabel ?? "Weekly allowance not set")
-            }
-            if store.children.isEmpty {
-                SectionCard {
-                    Label("Make room for your family", systemImage: "person.badge.plus").font(.headline)
-                    Text("Add a child in Manage Family to see their week here.").foregroundStyle(AppTheme.secondaryText)
-                }
-            }
-        }
-    }
-
-    private func allowanceLabel(_ week: AllowanceWeek) -> some View {
-        Text(week.amount?.formatted() ?? "Allowance not set")
-            .font(.subheadline.weight(.semibold)).foregroundStyle(AppTheme.secondaryText)
+        ParentWeeklyProgressView(parent: parent, today: today)
     }
 
     private var familyDayLabel: some View {

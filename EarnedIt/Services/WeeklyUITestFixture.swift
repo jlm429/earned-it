@@ -14,6 +14,8 @@ enum WeeklyUITestFixture {
     static func prepare(_ store: HouseholdStore) throws {
         guard enabled else { return }
         if store.household == nil {
+            let history = ProcessInfo.processInfo.arguments.contains("--ui-test-progress-history")
+            if history { now = ISO8601DateFormatter().date(from: "2026-08-03T16:00:00Z")! }
             try store.createFamily(name: "Test Family", parentName: "Test Parent", timeZone: TimeZone(identifier: "America/New_York")!)
             let child = try store.saveMember(name: "Hanna", role: .child, avatar: .flower)
             _ = try store.saveMember(name: "Alek", role: .child, avatar: .rocket)
@@ -21,6 +23,17 @@ enum WeeklyUITestFixture {
             _ = try store.saveChore(weekday: .sunday, title: "Pack school bag", mode: .all, memberIDs: [])
             try store.setCompletion(choreID: monday, memberID: child.id, date: now, state: .done)
             try store.finishSetup()
+            if history {
+                try store.saveAllowance(memberID: child.id, text: "12.34", currencyCode: "USD", locale: Locale(identifier: "en_US"))
+                for date in ["2026-08-17T16:00:00Z", "2026-08-31T16:00:00Z", "2026-09-07T16:00:00Z"] {
+                    now = ISO8601DateFormatter().date(from: date)!
+                    store.refreshDate()
+                    try store.setCompletion(choreID: monday, memberID: child.id, date: now, state: .done)
+                }
+                now = ISO8601DateFormatter().date(from: "2026-09-21T16:00:00Z")!
+                store.refreshDate()
+                try store.saveAllowance(memberID: child.id, text: "20.05", currencyCode: "USD", locale: Locale(identifier: "en_US"))
+            }
         }
         if ProcessInfo.processInfo.arguments.contains("--ui-test-family-polish"),
            !store.snapshot.revisions.contains(where: { $0.title == "Team dishes" }),

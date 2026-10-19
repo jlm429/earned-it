@@ -88,6 +88,11 @@ struct AllowanceWeek: Identifiable, Equatable {
 enum AllowanceService {
     static let completedWeekLimit = 12
 
+    /// Dashboard pages stop at the first recorded household week, never inferred earlier history.
+    static func progressWeekStarts(snapshot: HouseholdSnapshot, today: Date) -> [CivilDay] {
+        weekStarts(snapshot: snapshot, today: today, limit: 6).reversed()
+    }
+
     static func week(childID: UUID, containing date: Date, snapshot: HouseholdSnapshot, today: Date) -> AllowanceWeek {
         let calendar = snapshot.household?.calendar ?? AppCalendar.current
         let start = CivilDay(AppCalendar.weekStart(containing: date, calendar: calendar), calendar: calendar)
@@ -117,13 +122,20 @@ enum AllowanceService {
 
     /// Bounded projections, not materialized summary records or broad journal deletion.
     static func history(childID: UUID, snapshot: HouseholdSnapshot, today: Date) -> [AllowanceWeek] {
+        let calendar = snapshot.household?.calendar ?? AppCalendar.current
+        return weekStarts(snapshot: snapshot, today: today, limit: completedWeekLimit).map {
+            week(childID: childID, containing: $0.date(in: calendar), snapshot: snapshot, today: today)
+        }
+    }
+
+    private static func weekStarts(snapshot: HouseholdSnapshot, today: Date, limit: Int) -> [CivilDay] {
         guard let household = snapshot.household else { return [] }
         let calendar = household.calendar
         let first = AppCalendar.weekStart(containing: household.createdDay.date(in: calendar), calendar: calendar)
         let current = AppCalendar.weekStart(containing: today, calendar: calendar)
-        return (0...completedWeekLimit).compactMap { offset in
+        return (0...limit).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: -7 * offset, to: current), date >= first else { return nil }
-            return week(childID: childID, containing: date, snapshot: snapshot, today: today)
+            return CivilDay(date, calendar: calendar)
         }
     }
 }
