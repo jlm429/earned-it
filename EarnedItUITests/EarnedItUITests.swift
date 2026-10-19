@@ -332,7 +332,21 @@ final class EarnedItUITests: XCTestCase {
         tap("Cancel")
         reveal(app.buttons["finish-setup"])
         XCTAssertFalse(app.buttons["finish-setup"].isEnabled)
-        addChild("Hanna")
+        tap("setup-add-child")
+        fill("family-display-name", with: "Hanna")
+        tap("save-family-user")
+        XCTAssertTrue(app.buttons["connect-child-now"].waitForExistence(timeout: 5))
+        reveal(app.buttons["connect-child-now"])
+        keepScreenshot("family-polish-connect-next-step")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        tap("connect-child-now")
+        XCTAssertTrue(app.navigationBars["Invite Family"].waitForExistence(timeout: 5))
+        reveal(app.buttons["create-invitation"])
+        XCTAssertTrue(app.buttons["create-invitation"].isEnabled)
+        keepScreenshot("family-polish-prefilled-invitation")
+        tap("Cancel")
+        tap("connect-child-later")
+        XCTAssertTrue(app.staticTexts["Not connected yet"].waitForExistence(timeout: 5))
         tap("setup-add-child")
         fill("family-display-name", with: " hanna ")
         tap("save-family-user")
@@ -955,238 +969,6 @@ final class EarnedItUITests: XCTestCase {
         keepScreenshot("as-needed-completed-after-relaunch")
     }
 
-    func testPuntApprovalRelaunchAndRecipientCompletion() {
-        verifyPuntRegressionInteractions()
-        app.terminate()
-        app.launchArguments = ["--ui-test-store", "--ui-test-reset"]
-        app.launch()
-        XCTAssertTrue(app.navigationBars["Welcome"].waitForExistence(timeout: 8))
-        preparePuntChore()
-        launchBoundMember("hanna")
-        sendUIPuntRequest()
-        XCTAssertTrue(app.buttons["cancel-punt-punt-dishwasher"].waitForExistence(timeout: 5))
-        relaunch()
-        XCTAssertTrue(app.buttons["cancel-punt-punt-dishwasher"].waitForExistence(timeout: 5))
-        launchBoundMember("alek")
-        XCTAssertFalse(asNeededStateButtons("state-punt-dishwasher-alek").firstMatch.exists)
-        tap("family-activity-button")
-        XCTAssertTrue(screen("family-activity").waitForExistence(timeout: 5))
-        tap("accept-punt")
-        XCTAssertFalse(app.buttons["accept-punt"].exists)
-        keepScreenshot("punt-accepted-activity")
-        tap("Done")
-        let state = asNeededStateButton("state-punt-dishwasher-alek", state: "Unmarked")
-        reveal(state)
-        state.tap()
-        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-punt-dishwasher"], containing: "Complete"))
-        relaunch()
-        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-punt-dishwasher"], containing: "Complete"))
-        keepScreenshot("punt-recipient-done-after-relaunch")
-    }
-
-    func testPuntDeclineAndDeniedAlertsRemainUsefulAtLargeType() throws {
-        launchPuntFixture("--ui-test-activity-overflow", largeType: true, dark: true)
-        XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 53 unread")
-        tap("family-activity-button")
-        XCTAssertTrue(app.staticTexts["activity-alerts-denied"].waitForExistence(timeout: 5))
-        let alertsToggle = app.switches["activity-alerts-toggle"]
-        alertsToggle.tap()
-        XCTAssertTrue(waitForLabel(app.staticTexts["activity-alerts-preference"], containing: "On"))
-        XCTAssertTrue(app.staticTexts["activity-alerts-denied"].exists)
-        tap("activity-alerts-settings")
-        XCTAssertTrue(XCUIApplication(bundleIdentifier: "com.apple.Preferences")
-            .wait(for: .runningForeground, timeout: 5))
-        app.activate()
-        XCTAssertTrue(app.staticTexts["activity-alerts-denied"].waitForExistence(timeout: 5))
-        alertsToggle.tap()
-        XCTAssertTrue(waitForLabel(app.staticTexts["activity-alerts-preference"], containing: "Off"))
-        let unread = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'read-activity-'"))
-        XCTAssertEqual(unread.count, 53)
-        var readIDs = Set<String>()
-        for _ in 0..<53 {
-            let button = unread.firstMatch
-            reveal(button)
-            XCTAssertTrue(readIDs.insert(button.identifier).inserted)
-            button.tap()
-        }
-        XCTAssertEqual(readIDs.count, 53)
-        XCTAssertEqual(unread.count, 0)
-        keepScreenshot("all-53-updates-read")
-        tap("Done")
-        XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 0 unread")
-        relaunchWeekly(date: "2026-09-07T16:00:00Z", largeType: true, hideClock: true)
-        XCTAssertEqual(app.buttons["family-activity-button"].label, "Activity, 0 unread")
-        tap("family-activity-button")
-        XCTAssertEqual(unread.count, 0)
-        XCTAssertTrue(app.buttons["accept-punt"].exists)
-        XCTAssertTrue(app.buttons["decline-punt"].exists)
-        keepScreenshot("pending-punt-preserved-after-reading-and-relaunch")
-        tap("decline-punt")
-        keepScreenshot("punt-declined-denied-alerts-largest-text")
-        tap("Done")
-        launchBoundMember("hanna")
-        XCTAssertTrue(app.buttons["state-punt-dishwasher-hanna"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["cancel-punt-punt-dishwasher"].exists)
-        try app.performAccessibilityAudit(for: .sufficientElementDescription)
-    }
-
-    func testPuntStatsWeekSwitchEmptyStateAndRelaunch() throws {
-        launchPuntFixture("--ui-test-punt-stats")
-        tap("family-activity-button")
-        XCTAssertEqual(app.staticTexts["punt-stats-empty"].label, "No accepted punts this week.")
-        tap("punt-stats-last-week")
-        XCTAssertTrue(app.buttons["punt-stats-last-week"].isSelected)
-        XCTAssertGreaterThanOrEqual(app.buttons["punt-stats-last-week"].frame.height, 44)
-        XCTAssertEqual(app.staticTexts["punt-stats-punted"].label, "You punted: 1")
-        XCTAssertEqual(app.staticTexts["punt-stats-covered"].label, "You covered: 2")
-        XCTAssertTrue(app.staticTexts["You punted to Alek 1 time."].exists)
-        XCTAssertTrue(app.staticTexts["You covered for Alek 2 times."].exists)
-        keepScreenshot("punt-stats-last-week")
-        tap("punt-stats-this-week")
-        XCTAssertTrue(app.staticTexts["punt-stats-empty"].exists)
-        app.terminate()
-        app.launchArguments = ["--ui-test-store", "--ui-test-weekly-fixture", "--ui-test-hide-clock",
-                               "--ui-test-date=2026-09-14T16:00:00Z"]
-        app.launch()
-        tap("family-activity-button")
-        tap("punt-stats-last-week")
-        XCTAssertEqual(app.staticTexts["punt-stats-covered"].label, "You covered: 2")
-        try app.performAccessibilityAudit(for: .sufficientElementDescription)
-        tap("Done")
-        launchBoundMember("test-parent")
-        tap("family-activity-button")
-        XCTAssertFalse(screen("punt-stats").exists)
-    }
-
-    func testPuntStatsEmptyAndBreakdownAtLargeType() throws {
-        launchPuntFixture("--ui-test-punt-stats", largeType: true)
-        tap("family-activity-button")
-        let lastWeek = app.buttons["punt-stats-last-week"]
-        XCTAssertTrue(lastWeek.waitForExistence(timeout: 5))
-        XCTAssertLessThan(lastWeek.frame.height, app.frame.height / 3,
-                          "Week choices must remain readable without a column of individual letters.")
-        reveal(app.staticTexts["punt-stats-empty"])
-        XCTAssertEqual(app.staticTexts["punt-stats-empty"].label, "No accepted punts this week.")
-        keepScreenshot("punt-stats-empty-largest-text")
-        tap("punt-stats-last-week")
-        reveal(app.staticTexts["You covered for Alek 2 times."])
-        XCTAssertTrue(app.staticTexts["You covered for Alek 2 times."].isHittable)
-        XCTAssertEqual(app.staticTexts["punt-stats-punted"].label, "You punted: 1")
-        keepScreenshot("punt-stats-breakdown-largest-text")
-        tap("punt-stats-this-week")
-        XCTAssertTrue(app.staticTexts["punt-stats-empty"].exists)
-        try app.performAccessibilityAudit(for: .sufficientElementDescription)
-    }
-
-    private func launchPuntFixture(_ flag: String, largeType: Bool = false, dark: Bool = false) {
-        app.terminate()
-        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-weekly-fixture", "--ui-test-hide-clock", flag,
-                               "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
-        if largeType { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
-        if dark { app.launchArguments += ["--ui-test-dark"] }
-        app.launch()
-        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8) || screen("child-home").exists)
-    }
-
-    private func verifyPuntRegressionInteractions() {
-        launchPuntFixture("--ui-test-punt-regressions")
-        tap("not-needed-restore-task")
-        let keepTurn = app.buttons["keep-turn"].firstMatch
-        XCTAssertTrue(keepTurn.waitForExistence(timeout: 5))
-        keepTurn.tap()
-        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-restore-task"], containing: "Not needed today"))
-        tap("restore-requirement-restore-task")
-        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-restore-task"], containing: "Hanna"))
-        XCTAssertFalse(app.buttons["restore-requirement-restore-task"].exists)
-        keepScreenshot("scheduled-requirement-restored-with-implicit-punt-capability")
-        tap("not-needed-stale-task")
-        XCTAssertTrue(keepTurn.waitForExistence(timeout: 5))
-        keepTurn.tap()
-        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-stale-task"], containing: "Not needed today"))
-        XCTAssertTrue(screen("history-stale-task-hanna").exists)
-        keepScreenshot("stale-former-owner-done-remains-audit-only")
-        relaunchWeekly(date: "2026-09-07T16:00:00Z", hideClock: true)
-        XCTAssertTrue(waitForLabel(app.staticTexts["full-status-stale-task"], containing: "Not needed today"))
-        XCTAssertFalse(app.buttons["restore-requirement-restore-task"].exists)
-        tap("weekday-lists-link")
-        tap("as-needed-chores")
-        keepScreenshot("completed-legacy-next-turn")
-        XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Alek"),
-                      app.staticTexts["next-turn-legacy-task"].debugDescription)
-        tap("skip-next-legacy-task")
-        XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Hanna"))
-        tap("make-available-legacy-task")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        launchBoundMember("hanna")
-        let legacyID = asNeededStateElement("state-legacy-task-hanna", state: "Done").identifier
-        tap("request-punt-legacy-task")
-        tap("Ask Alek")
-        tap("Send Punt Request")
-        // Cancel and retry so the recipient sees a displaced request alongside the current one.
-        tap("cancel-punt-legacy-task")
-        tap("request-punt-legacy-task")
-        tap("Ask Alek")
-        tap("Send Punt Request")
-        launchBoundMember("alek")
-        XCTAssertFalse(app.staticTexts["full-status-stale-task"].exists)
-        tap("family-activity-button")
-        XCTAssertEqual(app.buttons.matching(identifier: "accept-punt").count, 1)
-        XCTAssertTrue(app.staticTexts["Cancelled. The original child keeps this turn."].exists)
-        keepScreenshot("displaced-request-has-no-approval-control")
-        tap("accept-punt")
-        XCTAssertFalse(app.buttons["accept-punt"].exists)
-        XCTAssertFalse(app.buttons["decline-punt"].exists)
-        tap("Done")
-        XCTAssertFalse(app.buttons["request-punt-legacy-task"].exists)
-        let fresh = asNeededStateButton("state-legacy-task-alek", state: "Unmarked")
-        reveal(fresh)
-        let freshID = fresh.identifier
-        XCTAssertNotEqual(freshID.components(separatedBy: "-alek-").last, legacyID.components(separatedBy: "-hanna-").last)
-        fresh.tap()
-        relaunchWeekly(date: "2026-09-07T16:00:00Z", hideClock: true)
-        XCTAssertEqual(asNeededStateElement("state-legacy-task-alek", state: "Done").identifier, freshID)
-        keepScreenshot("fresh-legacy-occurrence-recipient-credit-persists")
-        launchBoundMember("hanna")
-        XCTAssertEqual(asNeededStateElement("state-legacy-task-hanna", state: "Done").identifier, legacyID)
-        XCTAssertFalse(asNeededStateButtons("state-legacy-task-alek").firstMatch.exists)
-        launchBoundMember("test-parent")
-        tap("weekday-lists-link")
-        tap("as-needed-chores")
-        XCTAssertTrue(waitForLabel(app.staticTexts["next-turn-legacy-task"], containing: "Alek"))
-        XCTAssertTrue(app.staticTexts["Completed 2 times today"].exists)
-        keepScreenshot("original-rotation-slot-and-both-occurrences-preserved")
-    }
-
-    private func preparePuntChore() {
-        createFamily()
-        addChild("Hanna")
-        addChild("Alek")
-        tap("finish-setup")
-        tap("weekday-lists-link")
-        tap("as-needed-chores")
-        tap("add-as-needed-chore")
-        fill("responsibility-title", with: "Punt dishwasher")
-        tap("chore-requirement")
-        tap("Alternate / take turns")
-        reveal(app.switches["eligible-hanna"])
-        app.switches["eligible-hanna"].switches.firstMatch.tap()
-        reveal(app.switches["eligible-alek"])
-        app.switches["eligible-alek"].switches.firstMatch.tap()
-        tap("alternating-first-child")
-        tap("Hanna")
-        tap("save-responsibility")
-        tap("make-available-punt-dishwasher")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-    }
-
-    private func sendUIPuntRequest() {
-        tap("request-punt-punt-dishwasher")
-        tap("Ask Alek")
-        tap("Send Punt Request")
-    }
-
     func testConvertingChoreToAlternatingRequiresFirstChild() {
         createFamily()
         addChild("Hanna")
@@ -1567,7 +1349,7 @@ final class EarnedItUITests: XCTestCase {
             app.navigationBars.buttons.element(boundBy: 0).tap()
             if title == "Pack school bag" {
                 XCTAssertTrue(app.staticTexts["0 of 1 chores accounted for"].exists)
-                XCTAssertTrue(app.staticTexts["Good things add up."].exists)
+                XCTAssertTrue(screen("parent-profile-header").exists)
             }
         }
         let emptyList = app.descendants(matching: .any).matching(NSPredicate(
@@ -1577,7 +1359,7 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(emptyList.exists)
         app.scrollViews.firstMatch.swipeDown()
         keepScreenshot("qa-deleted-chores-empty-dashboard")
-        XCTAssertTrue(app.staticTexts["Room to breathe."].exists)
+        XCTAssertTrue(screen("parent-profile-header").exists)
         XCTAssertTrue(app.staticTexts["No chores expected for this day."].exists)
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == 'daily-overview' AND label == %@", "0 of 0 accounted for"
@@ -1589,6 +1371,107 @@ final class EarnedItUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH 'weekly-item-' AND identifier ENDSWITH '-water-plants'"
         )).firstMatch.exists)
+    }
+
+    func testFamilyPolishBonusNudgeSwapAndPersistence() throws {
+        app.terminate()
+        app.launchArguments = ["--ui-test-store", "--ui-test-reset", "--ui-test-weekly-fixture", "--ui-test-family-polish",
+                               "--ui-test-hide-clock", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        XCTAssertTrue(screen("parent-dashboard").waitForExistence(timeout: 8))
+        tap("nudge-team-dishes")
+        XCTAssertEqual(app.buttons["nudge-team-dishes"].label, "Reminder saved")
+        tap("nudge-feed-fish")
+        tap("parent-child-hanna")
+        let awardButton = app.buttons["award-bonus"]
+        XCTAssertTrue(awardButton.waitForExistence(timeout: 5))
+        reveal(awardButton)
+        XCTAssertGreaterThanOrEqual(awardButton.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(awardButton.frame.height, 44)
+        tap("award-bonus")
+        fill("bonus-amount", with: "3.50")
+        fill("bonus-note", with: "Helping the team")
+        tap("save-bonus")
+        reveal(screen("bonus-history"))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Helping the team")).firstMatch.exists)
+        keepScreenshot("family-polish-parent-bonus-history")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        launchBoundMember("hanna")
+        XCTAssertFalse(app.buttons["family-management"].exists)
+        tap("request-swap-team-dishes")
+        tap("Ask Alek")
+        tap("Send Swap Request")
+        XCTAssertTrue(app.buttons["cancel-swap-request"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "--ui-test-reset" }
+        app.launch()
+        XCTAssertTrue(app.buttons["cancel-swap-request"].waitForExistence(timeout: 5))
+        launchBoundMember("alek")
+        tap("family-activity-button")
+        keepScreenshot("family-polish-pending-exchange")
+        tap("accept-swap")
+        XCTAssertFalse(app.buttons["accept-swap"].exists)
+        XCTAssertFalse(app.staticTexts["Punt Stats"].exists)
+        keepScreenshot("family-polish-accepted-exchange")
+        tap("Done")
+        tap("state-team-dishes-alek")
+        XCTAssertTrue(waitForLabel(app.buttons["state-team-dishes-alek"], containing: "Done"))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(waitForLabel(app.buttons["state-team-dishes-alek"], containing: "Done"))
+        launchBoundMember("hanna")
+        tap("view-weekly-summary")
+        reveal(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Helping the team")).firstMatch)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Helping the team")).firstMatch.exists)
+        keepScreenshot("family-polish-child-bonus-history")
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+    }
+
+    func testFamilyPolishVisualHierarchyAndLargeType() throws {
+        func launch(member: String, accessible: Bool = false, reset: Bool = false) {
+            app.terminate()
+            app.launchArguments = ["--ui-test-store", "--marketing-demo", "--marketing-member=\(member)",
+                                   "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+            if reset { app.launchArguments.append("--ui-test-reset") }
+            if accessible {
+                app.launchArguments += ["--ui-test-dark", "--ui-test-reduce-motion",
+                    "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+            }
+            app.launch()
+            XCTAssertTrue(screen(member == "alex-smith" ? "parent-dashboard" : "child-home").waitForExistence(timeout: 8))
+        }
+        launch(member: "alex-smith", reset: true)
+        XCTAssertFalse(app.staticTexts["A little teamwork. A little more together."].exists)
+        XCTAssertTrue(screen("parent-profile-header").label.contains("The Smiths"))
+        keepScreenshot("family-polish-parent-light")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        tap("parent-child-remy-smith")
+        checkControls(["award-bonus"])
+        XCTAssertTrue(app.buttons["award-bonus"].isHittable)
+        keepScreenshot("family-polish-bonus-placement-light")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        launch(member: "remy-smith")
+        XCTAssertTrue(app.buttons["state-pack-your-school-bag-remy-smith"].isHittable)
+        keepScreenshot("family-polish-child-light")
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        launch(member: "alex-smith", accessible: true)
+        keepScreenshot("family-polish-parent-dark-largest-type")
+        reveal(app.buttons["state-pack-your-school-bag-remy-smith"])
+        checkControls(["state-pack-your-school-bag-remy-smith", "nudge-pack-your-school-bag"])
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
+        tap("parent-child-remy-smith")
+        checkControls(["award-bonus"])
+        XCTAssertTrue(app.buttons["award-bonus"].isHittable)
+        keepScreenshot("family-polish-bonus-placement-dark-largest-type")
+        tap("award-bonus")
+        XCTAssertTrue(app.navigationBars["Award a Bonus"].waitForExistence(timeout: 5))
+        reveal(app.textFields["bonus-amount"])
+        XCTAssertTrue(app.textFields["bonus-amount"].isHittable)
+        keepScreenshot("family-polish-bonus-form-largest-type")
+        launch(member: "remy-smith", accessible: true)
+        keepScreenshot("family-polish-child-dark-largest-type")
+        reveal(app.buttons["state-pack-your-school-bag-remy-smith"])
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .textClipped])
     }
 
     private func createFamily(name: String = "Test Family", parent: String = "Test Parent") {
@@ -1605,6 +1488,7 @@ final class EarnedItUITests: XCTestCase {
         tap("save-family-user")
         let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.textFields["family-display-name"])
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        if app.buttons["connect-child-later"].waitForExistence(timeout: 2) { tap("connect-child-later") }
     }
 
     private func fill(_ identifier: String, with text: String) {
@@ -1663,11 +1547,16 @@ final class EarnedItUITests: XCTestCase {
 
     private func tap(_ identifier: String) {
         let element = app.buttons[identifier]
-        if identifier == "test-clock" || app.navigationBars.buttons[identifier].exists {
-            XCTAssertTrue(element.waitForExistence(timeout: 5))
-        } else {
+        _ = element.waitForExistence(timeout: 5)
+        // Wait before classifying a newly pushed toolbar. iOS can expose its floating
+        // buttons outside the navigation bar subtree while the transition settles.
+        let bar = app.navigationBars.firstMatch
+        let isTopBarControl = element.exists && bar.exists && element.isHittable
+            && element.frame.minY >= bar.frame.minY - 1 && element.frame.maxY <= bar.frame.maxY + 1
+        if identifier != "test-clock" && !isTopBarControl && !app.navigationBars.buttons[identifier].exists {
             reveal(element)
         }
+        XCTAssertTrue(element.exists)
         element.tap()
     }
 
@@ -1702,12 +1591,14 @@ final class EarnedItUITests: XCTestCase {
             return element.frame.midY > top && element.frame.midY < bottom
         }
         let scroll: XCUIElement
-        if app.scrollViews.firstMatch.exists {
-            scroll = app.scrollViews.firstMatch
-        } else if app.collectionViews.firstMatch.exists {
-            scroll = app.collectionViews.firstMatch
-        } else if app.tables.firstMatch.exists {
-            scroll = app.tables.firstMatch
+        // An iPad sheet can leave its dimmed page in the accessibility tree.
+        // Prefer the foreground form so gestures scroll the presented content.
+        if let form = app.collectionViews.allElementsBoundByIndex.last(where: { $0.isHittable }) {
+            scroll = form
+        } else if let table = app.tables.allElementsBoundByIndex.last(where: { $0.isHittable }) {
+            scroll = table
+        } else if let content = app.scrollViews.allElementsBoundByIndex.last(where: { $0.isHittable }) {
+            scroll = content
         } else {
             scroll = app
         }

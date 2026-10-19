@@ -101,7 +101,6 @@ struct EarnedItApp: App {
             if !readOnlyPreflight {
                 try ProfileUITestFixture.prepare(repository: repository)
                 try PuntUITestFixture.prepare(repository: repository)
-                try PuntStatsUITestFixture.prepare(repository: repository)
                 try ProfileUITestFixture.bindRequestedMember(repository: repository)
             }
             let alerts: any ActivityAlerting

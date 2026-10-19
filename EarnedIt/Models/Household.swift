@@ -218,6 +218,7 @@ struct AlternatingTurnAdvance: Codable, Equatable {
 struct JournalCapability: Codable, Equatable {
     static let occurrenceAwareChores = 2
     static let puntApprovals = 3
+    static let familyExtras = 4
 
     let minimumVersion: Int
     let recordedByMemberID: UUID
@@ -399,6 +400,10 @@ struct InvitationRevocation: Codable, Equatable {
 }
 
 enum HouseholdFactBody: Codable, Equatable {
+    case swapRequest(SwapRequest)
+    case swapDecision(SwapDecision)
+    case bonusAward(BonusAward)
+    case choreNudge(ChoreNudge)
     case puntRequest(PuntRequest)
     case puntDecision(PuntDecision)
     case household(Household)
@@ -439,6 +444,7 @@ struct HouseholdFact: Codable, Equatable, Identifiable {
 }
 
 struct HouseholdSnapshot: Equatable {
+    let replaysSwaps: Bool
     private(set) var orderedFacts: [HouseholdFact] = []
     var household: Household?
     var members: [FamilyMember] = []
@@ -463,6 +469,7 @@ struct HouseholdSnapshot: Equatable {
         orderedFacts.compactMap { fact in
             switch fact.body {
             case .journalCapability(let capability): return capability.minimumVersion
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge: return JournalCapability.familyExtras
             case .puntRequest, .puntDecision: return JournalCapability.puntApprovals
             default: return nil
             }
@@ -472,7 +479,7 @@ struct HouseholdSnapshot: Equatable {
     var occurrenceCapabilityIndex: Int {
         orderedFacts.firstIndex { fact in
             switch fact.body {
-            case .puntRequest, .puntDecision: return true
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge, .puntRequest, .puntDecision: return true
             case .journalCapability(let capability):
                 return capability.minimumVersion >= JournalCapability.occurrenceAwareChores
             default: return false
@@ -480,7 +487,8 @@ struct HouseholdSnapshot: Equatable {
         } ?? orderedFacts.endIndex
     }
 
-    init(facts: [HouseholdFact] = []) {
+    init(facts: [HouseholdFact] = [], replaysSwaps: Bool = true) {
+        self.replaysSwaps = replaysSwaps
         var membersByID: [UUID: FamilyMember] = [:]
         var creationSequence: [UUID: Int64] = [:]
         var completionsByKey: [String: DatedCompletion] = [:]
@@ -495,7 +503,7 @@ struct HouseholdSnapshot: Equatable {
         orderedFacts = facts.sorted(by: HouseholdFact.precedes)
         for fact in orderedFacts {
             switch fact.body {
-            case .puntRequest, .puntDecision: break
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge, .puntRequest, .puntDecision: break
             case .household(let value):
                 household = value
                 if creatorMemberID == nil { creatorMemberID = fact.authorMemberID }
@@ -573,6 +581,15 @@ struct HouseholdSnapshot: Equatable {
             }?.element
     }
 
+    func alternatingCompletion(choreID: UUID, on day: CivilDay, memberID: UUID) -> DatedCompletion? {
+        guard let revision = configuration(choreID: choreID, on: day),
+              revision.mode == .alternating else { return nil }
+        return recordedAssignments.last {
+            $0.choreID == choreID && $0.day == day && $0.memberID == memberID
+                && $0.revisionID == revision.id && $0.mode == .alternating
+        }
+    }
+
     func isChoreDeleted(_ choreID: UUID, on day: CivilDay) -> Bool {
         choreDeletions.contains { $0.choreID == choreID && $0.day <= day }
             || occurrenceAwareChoreDeletions.contains { $0.choreID == choreID && $0.day <= day }
@@ -587,10 +604,6 @@ struct HouseholdSnapshot: Equatable {
     }
 
     func member(_ id: UUID) -> FamilyMember? { members.first { $0.id == id } }
-
-    func occurrence(choreID: UUID, on day: CivilDay) -> ChoreOccurrenceDisposition? {
-        occurrenceDispositions.first { $0.choreID == choreID && $0.day == day }
-    }
 
     func scheduledOccurrence(choreID: UUID, revisionID: UUID,
                              on day: CivilDay, hasDone: Bool) -> ChoreOccurrenceDisposition? {

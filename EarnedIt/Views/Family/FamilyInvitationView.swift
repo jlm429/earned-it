@@ -12,6 +12,10 @@ struct FamilyInvitationView: View {
     @State private var busy = false
     @State private var errorMessage: String?
 
+    init(childID: UUID? = nil) {
+        _childID = State(initialValue: childID)
+    }
+
     var body: some View {
         NavigationStack {
             Group {

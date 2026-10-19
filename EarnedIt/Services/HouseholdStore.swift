@@ -6,7 +6,7 @@ import UIKit
 @MainActor
 @Observable
 final class HouseholdStore {
-    static let supportedJournalCapability = JournalCapability.puntApprovals
+    static let supportedJournalCapability = JournalCapability.familyExtras
     @TaskLocal private static var cloudMutationToken: UUID?
 
     private enum MissingFamilyAccessOutcome: Equatable {
@@ -521,6 +521,79 @@ final class HouseholdStore {
         AllowanceService.history(childID: memberID, snapshot: snapshot, today: today)
     }
 
+    func bonusHistory(for memberID: UUID) -> [RecordedBonus] {
+        FamilyExtrasRules.bonuses(memberID: memberID, snapshot: snapshot)
+    }
+
+    func awardBonus(memberID: UUID, text: String, currencyCode: String, note: String,
+                    awardID: UUID, locale: Locale = .autoupdatingCurrent) throws {
+        refreshDate()
+        try requireParent()
+        guard let parent = selectedMember, let child = snapshot.member(memberID),
+              child.role == .child, snapshot.isActive(child, on: day),
+              let amount = try AllowanceAmount.parse(text, currencyCode: currencyCode, locale: locale),
+              amount.minorUnits > 0, note.count <= 120 else { throw HouseholdError.invalidBonus }
+        let award = BonusAward(memberID: memberID, amount: amount, day: day,
+                               note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+                               recordedByMemberID: parent.id)
+        // Repeated Save on the same form is idempotent. Independent awards remain distinct.
+        if let existing = snapshot.orderedFacts.first(where: { $0.id == awardID }) {
+            guard existing.body == .bonusAward(award) else { throw HouseholdError.invalidBonus }
+            return
+        }
+        try append(.bonusAward(award), id: awardID)
+    }
+
+    func canNudge(_ chore: DailyChore) -> Bool {
+        guard selectedMember?.role == .parent, !cloudIsReadOnly, !cloudAccessBlocked else { return false }
+        return FamilyExtrasRules.nudgeTargets(for: chore).contains {
+            !FamilyExtrasRules.hasNudge(for: chore, memberID: $0.id, snapshot: snapshot)
+        }
+    }
+
+    func nudge(choreID: UUID, occurrenceID: UUID? = nil) throws {
+        refreshDate()
+        try requireParent()
+        guard let parent = selectedMember,
+              let chore = dailyList().first(where: { $0.choreID == choreID && $0.occurrenceID == occurrenceID }),
+              canNudge(chore) else { throw HouseholdError.nudgeUnavailable }
+        for child in FamilyExtrasRules.nudgeTargets(for: chore) where
+            !FamilyExtrasRules.hasNudge(for: chore, memberID: child.id, snapshot: snapshot) {
+            try append(.choreNudge(ChoreNudge(scope: ChoreScope(chore), memberID: child.id,
+                                             recordedByMemberID: parent.id)))
+        }
+    }
+
+    var swaps: [ProjectedSwap] { SwapRules.project(snapshot: snapshot, today: day) }
+
+    func swapCandidates(for chore: DailyChore) -> [(FamilyMember, CivilDay)] {
+        guard let actor = selectedMember, !cloudIsReadOnly, !cloudAccessBlocked else { return [] }
+        return SwapRules.candidates(for: chore, actor: actor, snapshot: snapshot, today: day)
+    }
+
+    func requestSwap(choreID: UUID, recipientID: UUID) throws {
+        refreshDate()
+        try requireWriteAccess()
+        guard let actor = selectedMember,
+              let chore = dailyList().first(where: { $0.choreID == choreID && $0.occurrenceID == nil }),
+              let candidate = swapCandidates(for: chore).first(where: { $0.0.id == recipientID })
+        else { throw HouseholdError.swapUnavailable }
+        try append(.swapRequest(SwapRequest(scope: ChoreScope(chore), requesterID: actor.id,
+                                            recipientID: recipientID, repaymentDay: candidate.1)))
+    }
+
+    func decideSwap(requestFactID: UUID, kind: SwapDecisionKind) throws {
+        refreshDate()
+        try requireWriteAccess()
+        guard let actor = selectedMember, actor.role == .child,
+              let swap = swaps.first(where: { $0.id == requestFactID }), swap.status == .pending,
+              swap.request.scope.day == day,
+              actor.id == (kind == .cancelled ? swap.request.requesterID : swap.request.recipientID)
+        else { throw HouseholdError.swapUnavailable }
+        try append(.swapDecision(SwapDecision(requestFactID: requestFactID, memberID: actor.id,
+                                              day: day, kind: kind)))
+    }
+
     func saveAllowance(memberID: UUID, text: String, currencyCode: String, locale: Locale = .autoupdatingCurrent) throws {
         try requireParent()
         guard let member = snapshot.member(memberID), member.role == .child,
@@ -662,12 +735,14 @@ final class HouseholdStore {
         }
         guard !unprocessed.isEmpty else { return }
         let incoming = unprocessed.filter { item in
-            snapshot.orderedFacts.first(where: { $0.id == item.id })?.authorMemberID != member.id
+            item.isAlertEligible && snapshot.orderedFacts.first(where: { $0.id == item.id })?.authorMemberID != member.id
                 && (item.punt == nil || item.punt?.status == .pending)
         }
         do {
             if activityAlertsEnabled, activityAlertPermission == .allowed, let latest = incoming.first {
                 try await activityAlerts.deliver(identifier: activityKey(latest, memberID: member.id))
+                // A chore may be completed while the native notification call is suspended.
+                if !activity.contains(where: { $0.id == latest.id }) { await activityAlerts.clear() }
             }
             guard selectedMember?.id == member.id, session.householdID == expectedHouseholdID,
                   !familyAccessLost, !hasPendingAccountDataReset else {
@@ -1348,6 +1423,7 @@ final class HouseholdStore {
             throw HouseholdError.permission
         }
         guard let transport else { throw HouseholdError.cloudUnavailable }
+        if !household.isSetupComplete { try finishSetup() }
         let diagnostics = transport.familyTransitionDiagnostics
         diagnostics.beginInvitation(
             householdID: household.id,
@@ -5100,8 +5176,8 @@ final class HouseholdStore {
         try PermissionService.requireParent(selectedMember)
     }
 
-    private func append(_ body: HouseholdFactBody) throws {
-        try append([body])
+    private func append(_ body: HouseholdFactBody, id: UUID? = nil) throws {
+        try append([body], factIDs: id.map { [$0] })
     }
 
     private func appendOccurrenceAware(_ body: HouseholdFactBody,
@@ -5125,13 +5201,14 @@ final class HouseholdStore {
         try append(bodies)
     }
 
-    private func append(_ bodies: [HouseholdFactBody], scheduleSynchronization: Bool = true) throws {
+    private func append(_ bodies: [HouseholdFactBody], scheduleSynchronization: Bool = true,
+                        factIDs: [UUID]? = nil) throws {
         guard let householdID = session.householdID else { throw HouseholdError.noHousehold }
         let previousSequence = facts.map(\.sequence).max() ?? 0
         guard bodies.count <= Int64.max - previousSequence else { throw HouseholdError.malformedData }
         let actorID = selectedMember?.id
         let appended = bodies.enumerated().map { index, body in
-            HouseholdFact(id: UUID(), householdID: householdID, sequence: previousSequence + Int64(index) + 1,
+            HouseholdFact(id: factIDs?[index] ?? UUID(), householdID: householdID, sequence: previousSequence + Int64(index) + 1,
                           authorDeviceID: session.deviceID, authorMemberID: actorID, body: body)
         }
         try repository.commit(facts: appended)
@@ -5175,6 +5252,10 @@ final class HouseholdStore {
             guard let memberID = fact.authorMemberID, approvedIDs.contains(memberID),
                   let author = snapshot.member(memberID) else { throw HouseholdError.missingProfile }
             switch fact.body {
+            case .swapRequest(let request):
+                guard author.role == .child, request.requesterID == author.id else { throw HouseholdError.permission }
+            case .swapDecision(let decision):
+                guard author.role == .child, decision.memberID == author.id else { throw HouseholdError.permission }
             case .puntRequest(let request):
                 guard author.role == .child, request.requesterID == author.id else { throw HouseholdError.permission }
             case .puntDecision(let decision):
@@ -5193,6 +5274,22 @@ final class HouseholdStore {
         if let author = fact.authorMemberID, available.member(author) == nil { return false }
         func hasMembers(_ ids: [UUID]) -> Bool { ids.allSatisfy { available.member($0) != nil } }
         switch fact.body {
+        case .swapRequest(let request):
+            return hasMembers([request.requesterID, request.recipientID])
+                && available.revisions.contains { $0.id == request.scope.revisionID && $0.choreID == request.scope.choreID }
+        case .swapDecision(let decision):
+            return hasMembers([decision.memberID]) && available.orderedFacts.contains {
+                guard $0.id == decision.requestFactID, case .swapRequest = $0.body else { return false }
+                return true
+            }
+        case .bonusAward(let value): return hasMembers([value.memberID, value.recordedByMemberID])
+        case .choreNudge(let value):
+            return hasMembers([value.memberID, value.recordedByMemberID])
+                && available.revisions.contains { $0.id == value.scope.revisionID && $0.choreID == value.scope.choreID }
+                && (value.scope.occurrenceID == nil || available.orderedFacts.contains {
+                    if case .asNeededOccurrence(let occurrence) = $0.body { return occurrence.id == value.scope.occurrenceID }
+                    return $0.id == value.scope.occurrenceID
+                })
         case .puntRequest(let request):
             return hasMembers([request.requesterID, request.recipientID])
                 && available.revisions.contains { $0.id == request.scope.revisionID && $0.choreID == request.scope.choreID }
@@ -5313,6 +5410,63 @@ final class HouseholdStore {
         return value
     }
 
+    private func validateFamilyExtras(_ facts: [HouseholdFact], snapshot: HouseholdSnapshot) throws {
+        func hasScope(_ scope: ChoreScope) -> Bool {
+            guard let revision = snapshot.revisions.first(where: {
+                $0.id == scope.revisionID && $0.choreID == scope.choreID
+            }), revision.effectiveDay <= scope.day else { return false }
+            if let occurrenceID = scope.occurrenceID {
+                return revision.schedulingMode == .asNeeded && facts.contains {
+                    if case .asNeededOccurrence(let occurrence) = $0.body {
+                        return occurrence.id == occurrenceID && occurrence.choreID == scope.choreID
+                            && occurrence.revisionID == scope.revisionID && occurrence.day == scope.day
+                    }
+                    if case .occurrence(let occurrence) = $0.body {
+                        return $0.id == occurrenceID && occurrence.choreID == scope.choreID
+                            && occurrence.revisionID == scope.revisionID && occurrence.day == scope.day
+                            && occurrence.state == .available
+                    }
+                    return false
+                }
+            }
+            return revision.schedulingMode == .scheduled
+        }
+        for fact in facts {
+            switch fact.body {
+            case .bonusAward(let value):
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      snapshot.member(value.recordedByMemberID)?.role == .parent,
+                      snapshot.member(value.memberID)?.role == .child,
+                      value.amount.isValid, value.amount.minorUnits > 0, value.note.count <= 120
+                else { throw HouseholdError.malformedData }
+            case .choreNudge(let value):
+                guard fact.authorMemberID == value.recordedByMemberID,
+                      snapshot.member(value.recordedByMemberID)?.role == .parent,
+                      snapshot.member(value.memberID)?.role == .child, hasScope(value.scope)
+                else { throw HouseholdError.malformedData }
+            case .swapRequest(let value):
+                guard fact.authorMemberID == value.requesterID,
+                      snapshot.member(value.requesterID)?.role == .child,
+                      snapshot.member(value.recipientID)?.role == .child,
+                      value.requesterID != value.recipientID, value.scope.occurrenceID == nil,
+                      hasScope(value.scope), value.scope.day < value.repaymentDay,
+                      let calendar = snapshot.household?.calendar,
+                      value.repaymentDay <= value.scope.day.adding(days: SwapRules.repaymentWindow, calendar: calendar),
+                      snapshot.revisions.first(where: { $0.id == value.scope.revisionID })?.mode == .alternating
+                else { throw HouseholdError.malformedData }
+            case .swapDecision(let value):
+                guard fact.authorMemberID == value.memberID,
+                      snapshot.member(value.memberID)?.role == .child,
+                      facts.contains(where: {
+                          guard $0.id == value.requestFactID, case .swapRequest(let request) = $0.body else { return false }
+                          return value.day == request.scope.day
+                              && value.memberID == (value.kind == .cancelled ? request.requesterID : request.recipientID)
+                      }) else { throw HouseholdError.malformedData }
+            default: continue
+            }
+        }
+    }
+
     private func validate(_ facts: [HouseholdFact], householdID: UUID) throws {
         guard Set(facts.map(\.id)).count == facts.count,
               facts.allSatisfy({ $0.householdID == householdID && $0.sequence > 0 }) else {
@@ -5320,6 +5474,10 @@ final class HouseholdStore {
         }
         let ordered = facts.sorted(by: HouseholdFact.precedes)
         let capabilityIndex = ordered.firstIndex { fact in
+            switch fact.body {
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge: return true
+            default: break
+            }
             if case .puntRequest = fact.body { return true }
             if case .puntDecision = fact.body { return true }
             if case .journalCapability(let capability) = fact.body {
@@ -5450,6 +5608,7 @@ final class HouseholdStore {
             }
         }
         let resolved = HouseholdSnapshot(facts: facts)
+        try validateFamilyExtras(facts, snapshot: resolved)
         for fact in facts {
             let scope: PuntScope
             switch fact.body {

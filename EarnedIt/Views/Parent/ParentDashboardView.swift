@@ -14,16 +14,16 @@ struct ParentDashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 16) {
+                DailyOverviewCard(chores: chores, familyName: store.household?.name ?? "Your family")
                 familyHeader
-                DailyOverviewCard(chores: chores)
                 HomeColumns {
                     SharedDailyList(actor: parent, date: date)
                 } secondary: {
                     weeklyProgress
                 }
             }
-            .padding(20)
+            .padding(16)
             .frame(maxWidth: 1120)
             .frame(maxWidth: .infinity)
         }
@@ -44,12 +44,6 @@ struct ParentDashboardView: View {
 
     private var familyHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ProfileHeader(
-                user: parent,
-                title: store.household?.name ?? "Family overview",
-                subtitle: "A little teamwork. A little more together.",
-                accessibilityIdentifier: "parent-profile-header"
-            )
             ViewThatFits(in: .horizontal) {
                 HStack {
                     familyDayLabel
@@ -132,7 +126,7 @@ struct ParentDashboardView: View {
     private var familyDayLabel: some View {
         Label("Family day", systemImage: "calendar")
             .font(.subheadline.weight(.medium)).foregroundStyle(AppTheme.secondaryText)
-            .fixedSize(horizontal: true, vertical: true)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var familyDayPicker: some View {
@@ -146,6 +140,7 @@ struct ParentDashboardView: View {
 /// Summarizes the visible daily list without changing retained historical outcomes.
 struct DailyOverviewCard: View {
     let chores: [DailyChore]
+    var familyName = "Your family"
     @Environment(\.dynamicTypeSize) private var typeSize
     private var required: [DailyChore] { chores.filter { !$0.isNotNeeded && !$0.eligibleMembers.isEmpty } }
     private var complete: Int { required.filter(\.isFullyComplete).count }
@@ -153,23 +148,25 @@ struct DailyOverviewCard: View {
     var body: some View {
         Group {
             if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 20) { summary; ring }
+                VStack(alignment: .leading, spacing: 12) { summary; ring }
             } else {
-                HStack(spacing: 20) { summary; Spacer(minLength: 0); ring }
+                HStack(spacing: 16) { summary; Spacer(minLength: 0); ring }
             }
         }
-        .padding(24)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(HeroSurface())
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("daily-overview")
     }
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 8) {
             FeatureHeading(title: "THE DAILY PICTURE", systemImage: "sun.max")
-            Text(required.isEmpty ? "Room to breathe." : complete == required.count ? "All taken care of." : "Good things add up.")
+            Text(familyName)
                 .font(.system(.title2, design: .rounded, weight: .bold))
                 .foregroundStyle(AppTheme.heroText).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("parent-profile-header")
             Text(required.isEmpty ? "No chores expected for this day." : "\(complete) of \(required.count) chores accounted for")
                 .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
                 .fixedSize(horizontal: false, vertical: true)

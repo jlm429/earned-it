@@ -16,15 +16,16 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 - Provides parent and child roles with appropriate controls.
 - Supports recurring weekday chores and as-needed chores.
 - Assigns chores to every child, a particular child, or alternating children.
-- Lets children request an approved punt of today's alternating turn.
-- Shows children accepted punts sent and covered this week or last week in Activity.
+- Lets children agree to swap today's alternating turn for a sibling's next scheduled turn.
+- Lets parents nudge children about unfinished chores.
 - Keeps chore requests and family updates in Activity, with optional alerts.
 - Lets children mark their own work while parents manage the family.
 - Shows weekly progress and streaks.
 - Optionally tracks weekly allowance eligibility without moving money.
+- Records parent-awarded bonus allowance separately from weekly eligibility.
 - Shares through iCloud, synchronizes automatically, and works offline.
 
-The source for the [next App Store release](Configuration/Version.xcconfig) includes approved punts, Activity with optional alerts, and weekly Punt Stats. Parent and child homes stay on the bound person and no longer expose Switch Profile. Store availability remains pending release.
+Parent and child homes stay on the bound person and do not expose Switch Profile. Store availability of the [next release](Configuration/Version.xcconfig) remains pending.
 
 Still planned:
 
@@ -32,13 +33,15 @@ Still planned:
 
 ## How families use it
 
-A parent creates the family, adds children, and sets up chores. They can invite another parent or a child through iCloud, and each person sees the profile and controls intended for them.
+A parent creates the family, adds children, and sets up chores. After saving a child, choose **Connect Now** to open their invitation or **Add Device Later** to continue setup. Parents can also invite family members from Manage Family. Each person sees the profile and controls intended for them.
 
 Children check their list and mark chores complete. Parents manage the family name and assignments and follow the family's progress. Changes are saved on the device and synchronize when a connection is available.
 
 The refreshed Today screens highlight daily chores, weekly progress, streaks, and allowance eligibility. On iPad, daily work and weekly context appear side by side; accessibility text sizes use a single column. Parents can open a child's progress from Today or review each child in Manage Family.
 
-For a punt, choose **Request a Punt** on today's alternating chore and select a sibling. The sibling accepts or declines in **Activity**, opened from the bell. Use Activity's **Notifications** card to turn alerts on or off. See the [punt and activity guide](docs/punt-notifications.md) for eligibility, responsibility, privacy, and delivery limits.
+For an exchange, choose **Swap Turns** on today's alternating chore, select a sibling, and review the return date before sending. The sibling chooses **Accept Swap** or **No Thanks** in **Activity**, opened from the bell.
+
+Parents can press **Nudge** beside unfinished work or open a child's progress and choose **Award Bonus**. See the [family progress and turn exchange guide](docs/family-polish.md) for eligibility, history, and exchange rules. Use Activity's **Notifications** card to turn alerts on or off; the [Activity guide](docs/punt-notifications.md#communication-coverage-and-privacy) explains privacy and delivery limits.
 
 ## Privacy
 

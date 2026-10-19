@@ -9,17 +9,15 @@ SF Symbols, and the existing app's own data and actions.
 - Warm ivory canvas, white cards, deep teal feature surfaces, mint progress, and
   restrained gold streak accents. Dark mode uses deep blue-green surfaces and
   lighter semantic colors. Rounded display headings pair with standard body text.
-- Parent home separates identity, date selection, the daily picture, daily chores,
-  and weekly progress. Progress cards combine each child's name, streak, required
+- Parent home presentation follows the [current interface guide](family-polish.md#interface).
+  Progress cards combine each child's name, streak, required
   item counts, weekly state, and allowance eligibility.
   The daily picture starts from the chore cards' visible list, then omits Not Needed
   occurrences and chores without eligible children from its counts. It counts chore
   outcomes rather than individual child contributions. Deleted chores do not
   contribute to daily totals; their outcomes remain in weekly progress and history.
-- Child home gives allowance and weekly effort a prominent progress ring and a
-  dated week strip, followed by actionable chores, last week's outcome, yesterday's
-  items, and the existing daily thought. The amount is allowance eligibility, not
-  a payment or an earned balance.
+- Child home hierarchy follows the [current interface guide](family-polish.md#interface).
+  The amount is allowance eligibility, not a payment or an earned balance.
 - Completed chore cards have a restrained tinted surface, seal, state symbol,
   and text. Completion controls respond to presses and replace state symbols.
   Success haptics occur only after a successful local store action. A remote

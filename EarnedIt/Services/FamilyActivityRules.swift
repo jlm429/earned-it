@@ -7,11 +7,14 @@ struct FamilyActivity: Identifiable, Equatable {
     let detail: String
     let day: CivilDay?
     let punt: ProjectedPunt?
+    var swap: ProjectedSwap? = nil
+    var isAlertEligible = true
 }
 
 enum FamilyActivityRules {
     static func activity(snapshot: HouseholdSnapshot, today: CivilDay) -> [FamilyActivity] {
-        guard snapshot.household != nil else { return [] }
+        guard let household = snapshot.household else { return [] }
+        func date(_ day: CivilDay) -> String { AppCalendar.displayDay(day, calendar: household.calendar) }
         func name(_ id: UUID) -> String { snapshot.member(id)?.displayName ?? "Family member" }
         func parents(on day: CivilDay) -> Set<UUID> {
             Set(snapshot.members.filter { $0.role == .parent && snapshot.isActive($0, on: day) }.map(\.id))
@@ -19,14 +22,55 @@ enum FamilyActivityRules {
         func recipients(_ revision: ChoreRevision, on day: CivilDay) -> Set<UUID> {
             Set(ChoreRules.eligibleMembers(for: revision, on: day, snapshot: snapshot).map(\.id))
         }
+        let swaps = SwapRules.project(snapshot: snapshot, today: today)
+        var nudgeIDs: Set<UUID> = []
         return snapshot.orderedFacts.reversed().compactMap { fact in
+            var activityID = fact.id
             var targets: Set<UUID> = []
             var title = ""
             var detail = ""
             var day: CivilDay?
             var punt: ProjectedPunt?
+            var swap: ProjectedSwap?
             let author = fact.authorMemberID.flatMap { snapshot.member($0) }
             switch fact.body {
+            case .bonusAward(let award) where author?.role == .parent:
+                targets = [award.memberID]
+                title = "Bonus awarded"
+                detail = "\(name(award.recordedByMemberID)) awarded you \(award.amount.formatted())."
+                if !award.note.isEmpty { detail += " \(award.note)" }
+                day = award.day
+            case .choreNudge(let nudge) where author?.role == .parent:
+                guard nudge.scope.day == today,
+                      let chore = ChoreRules.dailyList(snapshot: snapshot, day: today, today: today).first(where: {
+                          nudge.matches($0)
+                      }), FamilyExtrasRules.nudgeTargets(for: chore).contains(where: { $0.id == nudge.memberID })
+                else { return nil }
+                activityID = nudge.activityID(householdID: fact.householdID)
+                guard nudgeIDs.insert(activityID).inserted else { return nil }
+                targets = [nudge.memberID]
+                title = "A little reminder"
+                detail = "Your parent reminded you about \(chore.configuration.title). It is still on your list today."
+                day = today
+            case .swapRequest(let request):
+                guard let projected = swaps.first(where: { $0.id == fact.id }) else { return nil }
+                targets = [request.requesterID, request.recipientID]
+                let chore = snapshot.revisions.first { $0.id == request.scope.revisionID }?.title ?? "this chore"
+                title = "Swap turns"
+                detail = "\(name(request.requesterID)) asks \(name(request.recipientID)) to cover \(chore) on \(date(request.scope.day)). In return, \(name(request.requesterID)) covers \(date(request.repaymentDay))."
+                day = request.scope.day
+                swap = projected
+            case .swapDecision(let decision):
+                guard let projected = swaps.first(where: {
+                    $0.id == decision.requestFactID && $0.decisionFactID == fact.id
+                }) else { return nil }
+                targets = projected.participantIDs.union(parents(on: projected.request.scope.day))
+                title = "Swap \(decision.kind.rawValue)"
+                detail = "\(name(decision.memberID)) \(decision.kind.rawValue) the turn exchange."
+                if decision.kind == .accepted {
+                    detail += " \(name(projected.request.recipientID)) covers \(date(projected.request.scope.day)); \(name(projected.request.requesterID)) covers \(date(projected.request.repaymentDay))."
+                }
+                day = decision.day
             case .chore(let revision) where author?.role == .parent:
                 guard snapshot.configuration(choreID: revision.choreID, on: revision.effectiveDay)?.id == revision.id else { return nil }
                 // An inactive As Needed definition is management, not a request to do it.
@@ -96,7 +140,7 @@ enum FamilyActivityRules {
                                                    snapshot: snapshot, today: today)
                 guard let projected = projection.requests.first(where: { $0.id == fact.id }) else { return nil }
                 targets = [request.requesterID, request.recipientID]
-                title = "Punt request"
+                title = "Earlier turn request"
                 let chore = snapshot.revisions.first { $0.id == request.scope.revisionID }?.title ?? "Chore"
                 detail = "\(name(request.requesterID)) asked \(name(request.recipientID)) to take \(chore) today."
                 day = request.scope.day
@@ -110,8 +154,8 @@ enum FamilyActivityRules {
                           $0.id == source.id && $0.decisionFactID == fact.id
                       }) else { return nil }
                 targets = decision.kind == .cancelled ? [request.recipientID] : [request.requesterID]
-                title = "Punt \(projected.status.rawValue)"
-                detail = "\(name(decision.memberID)) \(projected.status.rawValue) the punt request."
+                title = "Earlier turn request \(projected.status.rawValue)"
+                detail = "\(name(decision.memberID)) \(projected.status.rawValue) the turn request."
                 day = request.scope.day
             case .completion(let completion):
                 targets = author?.role == .parent ? [completion.memberID] : parents(on: completion.day)
@@ -150,9 +194,11 @@ enum FamilyActivityRules {
                 detail = "A parent updated this installation’s approved profiles."
             default: return nil
             }
-            if let authorID = fact.authorMemberID, punt == nil { targets.remove(authorID) }
+            if let authorID = fact.authorMemberID, punt == nil, swap == nil { targets.remove(authorID) }
             guard !targets.isEmpty else { return nil }
-            return FamilyActivity(id: fact.id, recipientIDs: targets, title: title, detail: detail, day: day, punt: punt)
+            return FamilyActivity(id: activityID, recipientIDs: targets, title: title, detail: detail, day: day,
+                                  punt: punt, swap: swap,
+                                  isAlertEligible: swap == nil || swap?.status == .pending)
         }
     }
 }

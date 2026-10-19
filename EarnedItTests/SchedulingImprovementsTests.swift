@@ -275,7 +275,7 @@ final class SchedulingImprovementsTests: XCTestCase {
         XCTAssertThrowsError(try reopened.markOccurrenceNotNeeded(choreID: chore, date: family.clock.now)) {
             XCTAssertEqual($0 as? HouseholdError, .unavailableDay)
         }
-        XCTAssertNil(reopened.snapshot.occurrence(choreID: chore, on: reopened.day))
+        XCTAssertNil(reopened.dailyList().first { $0.choreID == chore }?.occurrenceDisposition)
     }
 
     func testConflictingAlternatingChoicesConvergeInEitherDeliveryOrder() throws {
@@ -312,8 +312,8 @@ final class SchedulingImprovementsTests: XCTestCase {
         let firstRow = ChoreRules.dailyList(snapshot: first, day: nextDay, today: nextDay).first { $0.choreID == chore }
         let secondRow = ChoreRules.dailyList(snapshot: second, day: nextDay, today: nextDay).first { $0.choreID == chore }
 
-        XCTAssertEqual(first.occurrence(choreID: chore, on: family.store.day)?.alternatingSkipBehavior,
-                       .advanceRotation)
+        XCTAssertEqual(ChoreRules.dailyList(snapshot: first, day: family.store.day, today: family.store.day)
+            .first { $0.choreID == chore }?.occurrenceDisposition?.alternatingSkipBehavior, .advanceRotation)
         XCTAssertEqual(second.occurrenceDispositions, first.occurrenceDispositions)
         XCTAssertEqual(firstRow?.turnOwnerID, revision.memberIDs[1])
         XCTAssertEqual(secondRow?.turnOwnerID, firstRow?.turnOwnerID)
@@ -413,8 +413,8 @@ final class SchedulingImprovementsTests: XCTestCase {
         try await peer.synchronize()
         try await family.store.synchronize()
 
-        XCTAssertEqual(peer.snapshot.occurrence(choreID: alternating, on: peer.day),
-                       family.store.snapshot.occurrence(choreID: alternating, on: family.store.day))
+        XCTAssertEqual(peer.dailyList().first { $0.choreID == alternating }?.occurrenceDisposition,
+                       family.store.dailyList().first { $0.choreID == alternating }?.occurrenceDisposition)
         let nextMonday = ISO8601DateFormatter().date(from: "2026-09-14T16:00:00Z")!
         XCTAssertEqual(peer.dailyList(on: nextMonday).first { $0.choreID == alternating }?.turnOwnerID,
                        family.store.dailyList(on: nextMonday).first { $0.choreID == alternating }?.turnOwnerID)

@@ -981,6 +981,9 @@ final class FamilyTransitionDiagnostics {
 
     private static func householdErrorName(_ error: HouseholdError) -> String {
         switch error {
+        case .swapUnavailable: "swapUnavailable"
+        case .invalidBonus: "invalidBonus"
+        case .nudgeUnavailable: "nudgeUnavailable"
         case .puntUnavailable: "puntUnavailable"
         case .invalidAllowance: "invalidAllowance"
         case .completionLocked: "completionLocked"

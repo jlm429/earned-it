@@ -6,7 +6,7 @@ This document keeps implementation context out of the public README. The authori
 
 Earned It persists immutable typed facts in a local SwiftData journal. The local store is `shared-household-v1.store`. SwiftData CloudKit mirroring is disabled. `CloudKitHouseholdTransport` explicitly exchanges the same facts through one custom zone in the owner's private database and invited participants' shared database.
 
-Synchronization is eventual; offline facts remain pending for retry. This section owns synchronization triggers, work ownership, and recovery. The [punt and activity guide](punt-notifications.md) owns background delivery configuration, alert behavior, and their release prerequisites. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
+Synchronization is eventual; offline facts remain pending for retry. This section owns synchronization triggers, work ownership, and recovery. The [Activity guide](punt-notifications.md#communication-coverage-and-privacy) owns background delivery configuration, alert behavior, and their release prerequisites. Production never seeds a household. Debug UI tests use a separate store and compile-gated fixtures.
 
 The [marketing capture guide](../marketing-assets/1.1.0/README.md#reproduce) owns the opt-in Simulator demo journal and capture recipe.
 
@@ -32,7 +32,7 @@ All live callers await completion of the required passes. A failed pass can reco
 | CloudKit database silent change hint | The enabled app delegate invokes validated synchronization and Activity processing, in foreground or background, with a 25-second callback watchdog. |
 | Manual action | Parent home, child home, Activity pull-to-refresh and root retry controls use the same synchronization boundary. |
 
-Opening Activity processes the current local feed and authorization; it does not itself fetch remote facts. Foreground devices can receive updates without manual refresh when a CloudKit database hint is delivered, or when another listed trigger runs. There is no continuous foreground listener or periodic polling. APNs hints are best effort and may be coalesced, delayed, throttled or dropped. A device remaining foreground with no delivered hint or local trigger can remain stale until a refresh or foreground transition. Notifications being off or denied does not disable sync, Activity or punt decisions. Background delivery also depends on system scheduling, Background App Refresh and process availability. Force quit can prevent wake.
+Opening Activity processes the current local feed and authorization; it does not itself fetch remote facts. Foreground devices can receive updates without manual refresh when a CloudKit database hint is delivered, or when another listed trigger runs. There is no continuous foreground listener or periodic polling. APNs hints are best effort and may be coalesced, delayed, throttled or dropped. A device remaining foreground with no delivered hint or local trigger can remain stale until a refresh or foreground transition. Notifications being off or denied does not disable sync, Activity or turn decisions. Background delivery also depends on system scheduling, Background App Refresh and process availability. Force quit can prevent wake.
 
 ## Identity and invitations
 

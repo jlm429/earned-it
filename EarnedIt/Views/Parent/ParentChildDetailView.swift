@@ -8,6 +8,7 @@ struct ParentChildDetailView: View {
     @State private var selectedDate: Date?
     @State private var weekOffset = 0
     @State private var editingAllowance = false
+    @State private var awardingBonus = false
 
     private var date: Date { selectedDate ?? today }
     private var weekDate: Date { store.calendar.date(byAdding: .day, value: 7 * weekOffset, to: today) ?? today }
@@ -41,6 +42,15 @@ struct ParentChildDetailView: View {
                                 .disabled(weekOffset == 0).accessibilityIdentifier("next-week")
                         }.labelStyle(.iconOnly).buttonStyle(.bordered).controlSize(.large)
                         AllowanceWeekCard(week: week)
+                        if store.snapshot.isActive(child, on: store.day) {
+                            Button { awardingBonus = true } label: {
+                                Label("Award Bonus", systemImage: "gift")
+                                    .frame(minWidth: 44, minHeight: 44)
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("award-bonus")
+                        }
+                        BonusHistoryView(memberID: child.id, week: week)
                         WeekStrip(days: days, today: today, compact: false)
                         WeeklyItemsView(week: week, actor: parent)
                         NavigationLink("View all retained weeks") { WeeklySummaryView(child: child) }
@@ -88,6 +98,7 @@ struct ParentChildDetailView: View {
         .background(AppTheme.canvas)
         .navigationTitle(child.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $awardingBonus) { BonusAllowanceEditor(child: child) }
         .sheet(isPresented: $editingAllowance) {
             AllowanceEditorView(child: child, amount: store.allowanceWeek(for: child.id).amount)
         }

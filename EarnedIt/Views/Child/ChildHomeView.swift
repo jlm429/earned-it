@@ -15,22 +15,17 @@ struct ChildHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                ProfileHeader(
-                    user: child,
-                    title: "Hi, \(child.displayName)!",
-                    subtitle: "Small steps. Something to be proud of.",
-                    accessibilityIdentifier: "child-profile-header"
-                )
+                weekHero
                 HomeColumns {
-                    weekOverview
+                    SharedDailyList(actor: child, date: today)
                 } secondary: {
-                    VStack(alignment: .leading, spacing: 24) {
-                        SharedDailyList(actor: child, date: today)
+                    VStack(alignment: .leading, spacing: 18) {
+                        weekDetails
                         supportingContent
                     }
                 }
             }
-            .padding(20)
+            .padding(16)
             .frame(maxWidth: 1120)
             .frame(maxWidth: .infinity)
         }
@@ -51,24 +46,36 @@ struct ChildHomeView: View {
         .accessibilityIdentifier("child-home")
     }
 
-    private var weekOverview: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 18) {
-                FeatureHeading(title: "YOUR EFFORT ADDS UP", systemImage: "sparkle")
-                if typeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 18) { allowance; progressRing }
-                } else {
-                    HStack(spacing: 16) { allowance; Spacer(minLength: 0); progressRing }
-                }
-                Text("\(current.accountedCount) of \(current.items.count) required items accounted for this week")
-                    .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
-                    .accessibilityIdentifier("child-weekly-count")
+    private var weekHero: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                AvatarView(user: child, size: 36)
+                Text("Hi, \(child.displayName)!")
+                    .font(.system(.title3, design: .rounded, weight: .bold))
+                    .foregroundStyle(AppTheme.heroText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HeroSurface())
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("child-profile-header")
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) { allowance; progressRing }
+            } else {
+                HStack(spacing: 12) { allowance; Spacer(minLength: 0); progressRing }
+            }
+            Text("\(current.accountedCount) of \(current.items.count) required items accounted for this week")
+                .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("child-weekly-count")
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(HeroSurface())
+    }
+
+    private var weekDetails: some View {
+        VStack(alignment: .leading, spacing: 16) {
             SectionCard {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     ViewThatFits(in: .horizontal) {
                         HStack { WeekHeading(week: current); Spacer(minLength: 8); streakLabel }
                         VStack(alignment: .leading, spacing: 12) { WeekHeading(week: current); streakLabel }
@@ -81,6 +88,7 @@ struct ChildHomeView: View {
                             Image(systemName: "arrow.up.right").font(.subheadline.weight(.semibold))
                         }.frame(minHeight: 44)
                     }.accessibilityIdentifier("view-weekly-summary")
+                    BonusHistoryView(memberID: child.id, week: current)
                 }
             }
             if SyncStatusView.isVisible(in: store) { SyncStatusView() }
@@ -90,14 +98,12 @@ struct ChildHomeView: View {
     private var allowance: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(current.amount?.formatted() ?? "Your week")
-                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .font(.system(.title, design: .rounded, weight: .bold))
                 .foregroundStyle(AppTheme.heroText).fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel(current.amount?.weeklyAllowanceAccessibilityLabel ?? "Weekly allowance not set")
                 .accessibilityIdentifier("child-weekly-allowance-value")
             Text(current.amount == nil ? "Allowance not set" : "Weekly allowance")
                 .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
-            Text("Every required item counts.")
-                .font(.caption).foregroundStyle(AppTheme.heroSecondary)
         }
     }
 
@@ -152,13 +158,6 @@ struct ChildHomeView: View {
                 .accessibilityIdentifier("yesterday-items")
             Text("You have the scheduled day and the next calendar day to mark an item. After that, ask your parent for a correction. Dates use your family timezone.")
                 .font(.footnote).foregroundStyle(AppTheme.secondaryText)
-            SectionCard(tint: AppTheme.warning) {
-                let quote = QuoteService.quote(for: today, calendar: store.calendar)
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("A thought for today", systemImage: "quote.opening").font(.headline)
-                    Text(quote.text)
-                }
-            }
         }
     }
 }
