@@ -79,12 +79,8 @@ enum SwapRules {
                                     snapshot: HouseholdSnapshot) -> Bool {
         let day = repayment ? request.repaymentDay : request.scope.day
         let member = repayment ? request.requesterID : request.recipientID
-        guard let revision = snapshot.configuration(choreID: request.scope.choreID, on: day),
-              revision.mode == .alternating else { return false }
-        return snapshot.recordedAssignments.last {
-            $0.choreID == request.scope.choreID && $0.day == day && $0.memberID == member
-                && $0.revisionID == revision.id && $0.mode == .alternating
-        }?.state.isAccountedFor == true
+        return snapshot.alternatingCompletion(choreID: request.scope.choreID, on: day,
+                                               memberID: member)?.state.isAccountedFor == true
     }
 
     private static func repaymentAvailable(_ request: SwapRequest, snapshot: HouseholdSnapshot) -> Bool {
@@ -103,7 +99,7 @@ enum SwapRules {
     /// Acceptance reads only its preceding journal. Later offline facts cannot silently
     /// move an approval across an already completed turn or resurrect a released exchange.
     static func project(snapshot: HouseholdSnapshot, today: CivilDay) -> [ProjectedSwap] {
-        guard snapshot.orderedFacts.contains(where: {
+        guard snapshot.replaysSwaps, snapshot.orderedFacts.contains(where: {
             if case .swapRequest = $0.body { return true }; return false
         }), let household = snapshot.household else { return [] }
         var result: [ProjectedSwap] = []
@@ -122,8 +118,12 @@ enum SwapRules {
                     let paid = isAccounted(request, repayment: true, snapshot: state)
                     let covered = isAccounted(request, repayment: false, snapshot: state)
                     // Done wins a concurrent Not Needed fact. A cancelled promise never revives.
+                    let sourceDisposition = state.configuration(choreID: request.scope.choreID, on: request.scope.day).flatMap {
+                        state.scheduledOccurrence(choreID: request.scope.choreID, revisionID: $0.id,
+                                                  on: request.scope.day, hasDone: covered)
+                    }
                     let sourceRemoved = !covered && (state.isChoreDeleted(request.scope.choreID, on: request.scope.day)
-                        || state.occurrence(choreID: request.scope.choreID, on: request.scope.day)?.state == .notNeeded)
+                        || sourceDisposition != nil)
                     if sourceRemoved || !paid && !repaymentAvailable(request, snapshot: state) {
                         result[index].repaymentCancelled = true
                         result[index].status = .released
@@ -138,7 +138,8 @@ enum SwapRules {
         for fact in snapshot.orderedFacts {
             switch fact.body {
             case .swapRequest(let request):
-                let state = HouseholdSnapshot(facts: prefix)
+                defer { prefix.append(fact) }
+                let state = HouseholdSnapshot(facts: prefix, replaysSwaps: false)
                 settle(request.scope.day, state)
                 guard fact.authorMemberID == request.requesterID, request.requesterID != request.recipientID,
                       request.participants.allSatisfy({ state.member($0)?.role == .child }),
@@ -150,7 +151,8 @@ enum SwapRules {
                       repaymentAvailable(request, snapshot: state) else { continue }
                 result.append(ProjectedSwap(id: fact.id, request: request))
             case .swapDecision(let decision):
-                let state = HouseholdSnapshot(facts: prefix)
+                defer { prefix.append(fact) }
+                let state = HouseholdSnapshot(facts: prefix, replaysSwaps: false)
                 settle(decision.day, state)
                 guard let index = result.firstIndex(where: { $0.id == decision.requestFactID }),
                       result[index].status == .pending,
@@ -185,11 +187,11 @@ enum SwapRules {
                 if result.contains(where: { $0.isActive }) && affectsExchange(fact, swaps: result) {
                     // Reconcile structural changes as soon as they enter the journal, including
                     // future effective changes. Historical accepted source turns stay bound.
-                    settle(household.createdDay, HouseholdSnapshot(facts: prefix))
+                    settle(household.createdDay, HouseholdSnapshot(facts: prefix, replaysSwaps: false))
                 }
             }
         }
-        settle(today, HouseholdSnapshot(facts: prefix))
+        settle(today, HouseholdSnapshot(facts: prefix, replaysSwaps: false))
         // A correction changes credit without reopening a settled exchange or claiming
         // both turns are still complete. Later exchanges retain their original admission.
         for index in result.indices where result[index].status == .completed {

@@ -422,6 +422,99 @@ final class FamilyPolishTests: XCTestCase {
         }
     }
 
+    func testWinningRevisionDoneAndCorrectionControlRotationAtBothSwapEndpoints() throws {
+        for repayment in [false, true] {
+            for winningState in [DailyStateKind.done, .unmarked] {
+                let family = try TestFamily()
+                let (chore, requestID) = try setupSwap(family)
+                try accept(family, requestID)
+                let request = try XCTUnwrap(family.store.swaps.first?.request)
+                let original = try XCTUnwrap(family.store.snapshot.configuration(choreID: chore, on: request.scope.day))
+                let day = repayment ? request.repaymentDay : request.scope.day
+                let memberID = repayment ? family.hanna.id : family.alek.id
+                let revision = ChoreRevision(id: UUID(), householdID: original.householdID, choreID: chore,
+                    weekday: original.weekday, effectiveDay: day, title: "Water the garden", notes: original.notes,
+                    category: original.category, mode: .alternating, memberIDs: original.memberIDs, isArchived: false)
+                let start = try XCTUnwrap(family.store.snapshot.orderedFacts.last?.sequence)
+                let merged = family.store.snapshot.orderedFacts + [
+                    fact(family, body: .chore(revision), author: family.parent.id, sequence: start + 1),
+                    fact(family, body: .occurrence(ChoreOccurrenceDisposition(choreID: chore,
+                        revisionID: revision.id, day: day, state: .notNeeded, alternatingSkipBehavior: .keepTurn,
+                        recordedByMemberID: family.parent.id, assignedMemberID: memberID)),
+                        author: family.parent.id, sequence: start + 2),
+                    fact(family, body: .completion(DatedCompletion(choreID: chore, revisionID: revision.id,
+                        memberID: memberID, day: day, state: .done, eligibleMemberIDs: [memberID],
+                        mode: .alternating, recordedByMemberID: memberID)), author: memberID, sequence: start + 3),
+                    fact(family, body: .completion(DatedCompletion(choreID: chore, revisionID: revision.id,
+                        memberID: memberID, day: day, state: winningState, eligibleMemberIDs: [memberID],
+                        mode: .alternating, recordedByMemberID: family.parent.id)),
+                        author: family.parent.id, sequence: start + 4),
+                    fact(family, body: .completion(DatedCompletion(choreID: chore, revisionID: original.id,
+                        memberID: memberID, day: day, state: winningState == .done ? .unmarked : .done,
+                        eligibleMemberIDs: [memberID], mode: .alternating, recordedByMemberID: memberID)),
+                        author: memberID, sequence: start + 5)
+                ]
+                for delivered in [merged, Array(merged.reversed())] {
+                    let snapshot = HouseholdSnapshot(facts: delivered)
+                    let next = day.adding(days: 7, calendar: family.store.calendar)
+                    let row = try XCTUnwrap(ChoreRules.dailyList(snapshot: snapshot, day: day, today: day).first)
+                    XCTAssertEqual(row.state(for: memberID), winningState)
+                    XCTAssertEqual(row.isNotNeeded, winningState != .done)
+                    let expectedOwner = repayment
+                        ? (winningState == .done ? family.hanna.id : family.alek.id)
+                        : (winningState == .done ? family.alek.id : family.hanna.id)
+                    XCTAssertEqual(ChoreRules.rotationOwner(choreID: chore, on: next, snapshot: snapshot)?.id, expectedOwner)
+                    XCTAssertEqual(SwapRules.project(snapshot: snapshot, today: day).first?.status,
+                                   winningState == .done ? .accepted : .released)
+                }
+            }
+        }
+    }
+
+    func testDeclinedSwapCapabilitySurvivesRestorationAndTransportReplay() async throws {
+        for decision in [SwapDecisionKind.declined, .cancelled] {
+            let server = TestCloudServer()
+            let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+            let (chore, firstID) = try setupSwap(family)
+            try family.store.selectProfile(decision == .declined ? family.alek.id : family.hanna.id)
+            try family.store.decideSwap(requestFactID: firstID, kind: decision)
+            try family.store.selectProfile(family.parent.id)
+            try family.store.markOccurrenceNotNeeded(choreID: chore, date: family.clock.now,
+                                                     alternatingSkipBehavior: .keepTurn)
+            try family.store.restoreScheduledRequirement(choreID: chore, date: family.clock.now)
+            XCTAssertFalse(family.store.snapshot.orderedFacts.contains {
+                if case .journalCapability = $0.body { return true }; return false
+            })
+            let restored = try XCTUnwrap(family.store.dailyList().first)
+            XCTAssertFalse(restored.isNotNeeded)
+            let next = family.store.day.adding(days: 7, calendar: family.store.calendar)
+            XCTAssertEqual(ChoreRules.rotationOwner(choreID: chore, on: next, snapshot: family.store.snapshot)?.id,
+                           family.alek.id)
+            let invitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+            let childRepository = try HouseholdRepository(inMemory: true)
+            let child = try HouseholdStore(repository: childRepository,
+                transport: TestTransport(server: server, account: "child"), clock: { family.clock.now }, automaticSync: false)
+            try await child.redeemInvitation(invitation.qrPayload)
+            XCTAssertTrue(child.swapCandidates(for: try XCTUnwrap(child.dailyList().first)).contains { $0.0.id == family.alek.id })
+            try child.requestSwap(choreID: chore, recipientID: family.alek.id)
+            let secondID = try XCTUnwrap(child.swaps.last?.id)
+            XCTAssertNotEqual(secondID, firstID)
+            XCTAssertEqual(child.swaps.last?.status, .pending)
+            try await child.synchronize()
+            try await family.store.synchronize()
+            try accept(family, secondID)
+            XCTAssertEqual(family.store.swaps.last?.status, .accepted)
+            try await family.store.synchronize()
+            try await child.synchronize()
+            XCTAssertEqual(child.swaps.last?.status, .accepted)
+            XCTAssertEqual(child.dailyList().first?.turnOwnerID, family.alek.id)
+            let reopened = try HouseholdStore(repository: childRepository,
+                clock: { family.clock.now }, automaticSync: false)
+            XCTAssertEqual(reopened.swaps.last?.status, .accepted)
+            XCTAssertEqual(reopened.snapshot.orderedFacts, family.store.snapshot.orderedFacts)
+        }
+    }
+
     func testReleasedSwapEndpointsCannotBeOfferedOrSavedForAnotherExchange() throws {
         let family = try TestFamily()
         let zoe = try family.store.saveMember(name: "Zoe", role: .child, avatar: .star)

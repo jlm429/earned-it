@@ -317,8 +317,8 @@ enum ChoreRules {
         }
         let active: [DatedCompletion]
         if revision.mode == .alternating {
-            active = snapshot.recordedAssignments.last {
-                $0.choreID == choreID && $0.day == day && isActive($0)
+            active = owner.flatMap {
+                snapshot.alternatingCompletion(choreID: choreID, on: day, memberID: $0.id)
             }.map { [$0] } ?? []
         } else {
             var activeByMemberID: [UUID: DatedCompletion] = [:]
@@ -415,7 +415,6 @@ enum ChoreRules {
                       let ownerID = nextOwner(after: priorOwnerID, participants: revision.memberIDs,
                                               eligibleIDs: eligibleIDs) else { continue }
                 if eventDay == day { activeOwnerID = ownerID }
-                let disposition = snapshot.occurrence(choreID: choreID, on: eventDay)
                 let legacyResponsibleID = PuntRules.project(
                     scope: PuntScope(choreID: choreID, revisionID: revision.id,
                                      day: eventDay, occurrenceID: nil),
@@ -423,14 +422,11 @@ enum ChoreRules {
                 ).ownerID
                 let responsibleID = SwapRules.owner(choreID: choreID, day: eventDay,
                                                     baseOwnerID: legacyResponsibleID, swaps: exchanges)
-                let hasDone = snapshot.completions.contains {
-                    $0.choreID == choreID && $0.revisionID == revision.id
-                        && $0.day == eventDay && $0.state == .done && $0.memberID == responsibleID
-                }
-                let keepsTurn = disposition?.revisionID == revision.id
-                    && disposition?.state == .notNeeded
-                    && disposition?.alternatingSkipBehavior == .keepTurn
-                    && !hasDone
+                let hasDone = snapshot.alternatingCompletion(choreID: choreID, on: eventDay,
+                                                              memberID: responsibleID)?.state == .done
+                let disposition = snapshot.scheduledOccurrence(choreID: choreID, revisionID: revision.id,
+                                                               on: eventDay, hasDone: hasDone)
+                let keepsTurn = disposition?.alternatingSkipBehavior == .keepTurn
                 if !keepsTurn { priorOwnerID = ownerID }
             case .asNeeded:
                 enum Event {
