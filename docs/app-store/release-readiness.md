@@ -1,6 +1,6 @@
 # App Store release checklist
 
-Updated October 11, 2026 against merged `origin/main` at `5c88d45e42c671d22f745bbe78cc4f5beec88576`, plus the profile toolbar cleanup. [Shared version metadata](../../Configuration/Version.xcconfig) owns the candidate version and build, following the human-confirmed uploaded 1.0.5/build 51. See the [product introduction](../../README.md#what-it-does) for current home navigation and the [profile selection follow-up](../release-ui-polish.md#profile-selection-follow-up) for retained code awaiting review. UI polish, receipt-lost owner deletion recovery, approved punts, Activity, optional alerts, `remote-notification` background mode, and weekly Punt Stats remain integrated in source. This is a submission checklist, not a claim of Store availability or signed Production readiness. See [release evidence and limits](../final-release-readiness.md); signed two-account/device parent/child recovery and APNs checks remain open.
+Updated October 11, 2026 against merged `origin/main` at `5c88d45e42c671d22f745bbe78cc4f5beec88576`, plus the profile toolbar cleanup. [Shared version metadata](../../Configuration/Version.xcconfig) owns the candidate version and build, following the human-confirmed uploaded 1.0.5/build 51. See the [product introduction](../../README.md#what-it-does) for current features and home navigation and the [profile selection follow-up](../release-ui-polish.md#profile-selection-follow-up) for retained code awaiting review. This is a submission checklist, not a claim of Store availability or signed Production readiness. See [release evidence and limits](../final-release-readiness.md); signed two-account/device parent/child recovery and APNs checks remain open.
 
 ## Remaining release blockers
 
@@ -32,7 +32,7 @@ Updated October 11, 2026 against merged `origin/main` at `5c88d45e42c671d22f745b
 - [x] Production has no sample-family seeding, debug clocks, UI-test resets, or synthetic invitation fixtures. Tests use a separate compile-gated store. The preserved nuke checkout is outside this release work.
 - [x] Creator-only confirmed Delete All Data and retained-receipt Finish Deleting recovery are present. Authenticated deleted/exactly revoked installations have local Reset App recovery; transient failures do not enable it. The merged receipt-lost owner recovery reconstructs exact account/household/attempt proof and finalizes authenticated `deleted` authority before releasing membership. Signed recovery evidence remains required; `deleting` authority alone cannot authorize child reset.
 - [x] Historical date/archive, reassignment history, and exclusive-lifecycle regressions supersede the three queued historical followups. See the release evidence for each tested source baseline.
-- [x] Privacy/support links are wired into first-run and role UI; daily-thought copy has no named attribution. [The privacy audit](privacy-audit.md) and [content review](quotes-and-attribution.md) describe the details.
+- [x] Privacy/support links are wired into first-run and role UI. [The privacy audit](privacy-audit.md) and [content review](quotes-and-attribution.md) describe the details.
 
 ## Final device and accessibility pass
 
@@ -57,7 +57,7 @@ For the integrated notifications, check explicit contextual opt-in, denial/revoc
 - [x] App Store profile validation accepts scalar or flat string allowlists, recognizes the CloudKit service wildcard, and fails closed unless the profile authorizes Production iCloud, the Earned It container, CloudKit, and `InProcessOneTimeLinks`.
 - [x] Build products, Derived Data, Xcode user state, `.env` files, and local artifacts are ignored.
 - [x] Existing unit, service, UI, sharing, invitation, onboarding, scheduling, allowance, and business-rule tests are present.
-- [x] Attributed daily quotations were replaced with unattributed product microcopy. The remaining rights and attribution findings are documented in `quotes-and-attribution.md`.
+- [x] Application text was reviewed for attribution. The [content review](quotes-and-attribution.md#application-text) owns the current findings.
 
 Apple sources were checked October 10, 2026. Recheck at submission if requirements change.
 

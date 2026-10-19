@@ -7,9 +7,8 @@ User-visible changes to Earned It.
 ### Changed
 
 - Refreshed parent and child Today screens, onboarding, family management, settings, and history with adaptive cards, progress rings, and completion feedback. See the [design and QA report](docs/premium-redesign.md).
-- Activity now has a labeled notification switch, separate preference and iOS permission states, and an Open iOS Settings button when permission is denied. Turning alerts off clears system alerts while retaining Activity and punt requests.
-- Added child-approved punts and family Activity with optional alerts. See the [punt and activity guide](docs/punt-notifications.md) for usage and delivery limits.
-- Added compact child Punt Stats in Activity for this week and last week. See the [stats rules](docs/punt-notifications.md#child-punt-stats).
+- Activity now has a labeled notification switch, separate preference and iOS permission states, and an Open iOS Settings button when permission is denied. Turning alerts off clears system alerts while retaining Activity and turn requests.
+- Replaced one-way punts and their statistics with child-approved Swap Turns, added parent bonus awards and manual nudges, and brought child connection prompts into setup. See the [family progress and turn exchange guide](docs/family-polish.md) for behavior and the [Activity guide](docs/punt-notifications.md#communication-coverage-and-privacy) for alert privacy and delivery limits.
 - As Needed chores can be withdrawn without credit or turn advancement and made available repeatedly on the same day. Each occurrence keeps distinct history and allowance credit while streaks remain day-based.
 - Alternating As Needed completion advances exactly once per occurrence, withdrawal keeps the turn, and Skip consumes one turn without creating credit. Concurrent and offline controls converge through occurrence IDs and expected control heads.
 - Incompatible app versions stop with an update-required state. See the [journal compatibility rules](docs/shared-household-architecture.md#identity-and-sharing).

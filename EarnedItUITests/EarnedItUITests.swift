@@ -1591,12 +1591,14 @@ final class EarnedItUITests: XCTestCase {
             return element.frame.midY > top && element.frame.midY < bottom
         }
         let scroll: XCUIElement
-        if app.scrollViews.firstMatch.exists {
-            scroll = app.scrollViews.firstMatch
-        } else if app.collectionViews.firstMatch.exists {
-            scroll = app.collectionViews.firstMatch
-        } else if app.tables.firstMatch.exists {
-            scroll = app.tables.firstMatch
+        // An iPad sheet can leave its dimmed page in the accessibility tree.
+        // Prefer the foreground form so gestures scroll the presented content.
+        if let form = app.collectionViews.allElementsBoundByIndex.last(where: { $0.isHittable }) {
+            scroll = form
+        } else if let table = app.tables.allElementsBoundByIndex.last(where: { $0.isHittable }) {
+            scroll = table
+        } else if let content = app.scrollViews.allElementsBoundByIndex.last(where: { $0.isHittable }) {
+            scroll = content
         } else {
             scroll = app
         }

@@ -1,6 +1,6 @@
 # Privacy Implementation Audit
 
-Original audit: September 24, 2026. Notification findings updated October 10, 2026. Integration review on October 10, 2026 inspected merged `origin/main` at `6820fe9e6836df4c14aa0a1e2f44814cad18a098`. The 1.0.5 candidate adds informational Punt Stats derived from the same immutable family facts, with no additional CloudKit records, schema, or telemetry. Signed two-account/device notification delivery and the final archive privacy report remain human release prerequisites.
+Original audit: September 24, 2026. Notification findings updated October 10, 2026. Integration review on October 10, 2026 inspected merged `origin/main` at `6820fe9e6836df4c14aa0a1e2f44814cad18a098`. Current [family progress and turn exchange rules](../family-polish.md#compatibility-and-security) describe the new journal facts and their storage boundary. Signed two-account/device notification delivery and the final archive privacy report remain human release prerequisites.
 
 ## Implementation findings
 
@@ -25,7 +25,7 @@ Original audit: September 24, 2026. Notification findings updated October 10, 20
 `EarnedIt/PrivacyInfo.xcprivacy` declares no tracking domains and declares UserDefaults reason `CA92.1`. It declares the data types that the app retains off device through CloudKit for app functionality:
 
 - names;
-- other financial information for optional allowance amounts;
+- other financial information for optional weekly allowance amounts and bonus awards;
 - user identifiers;
 - device identifiers;
 - other user content, including household and chore data.

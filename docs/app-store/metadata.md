@@ -16,9 +16,9 @@ Earned It gives families one clear place to share chores and follow progress tog
 
 Parents can create recurring weekday chores or make a chore available only when it is needed. Assign work to every child, one child, or a group of children who alternate turns. Children see their own work and can mark it complete from their invited profile.
 
-Children can ask a sibling to cover today's alternating turn. Activity keeps requests and family updates together, with optional alerts and a compact weekly summary of accepted punts sent and covered.
+Children can ask a sibling to swap scheduled alternating turns, with an explicit agreement before responsibilities change. Activity keeps requests and family updates together, with optional alerts.
 
-Weekly views help families review progress, streaks, and missing items. Parents can optionally set an allowance amount and see whether all required work was completed. Earned It tracks eligibility only. It does not move money or record payments.
+Weekly views help families review progress, streaks, and missing items. Parents can optionally set an allowance amount, see whether all required work was completed, and record separate bonus awards. Parents can also nudge children about unfinished chores. Earned It does not move money or record payments.
 
 Family data is saved locally first and can synchronize through private/shared iCloud storage across invited iPhones and iPads. Offline changes are retained and synchronize when the app can connect again.
 
@@ -63,7 +63,7 @@ To review the core experience:
 
 Creating an invitation enables the owner's private CloudKit zone and requires an available iCloud account. Parent and child invitations are bound to a role and profile. Camera access is optional and is used only to scan an Earned It invitation QR code. Reviewers can enter the code or link instead.
 
-To review punts and weekly Punt Stats, add a second fictional child, create an alternating chore, and follow the [punt and Activity guide](../punt-notifications.md). Stats are informational and do not require chore completion. Alerts are optional; Activity remains usable with alerts disabled. Alerts depend on synchronized updates and system delivery, so instant or guaranteed background delivery is not promised.
+To review turn exchanges, bonus awards, and nudges, follow the [common usage guide](../../README.md#how-families-use-it) with fictional family data and a second child for exchanges. Detailed behavior is in the [family progress and turn exchange guide](../family-polish.md). Alerts are optional; Activity remains usable with alerts disabled. See the [Activity delivery prerequisites](../punt-notifications.md#background-delivery-and-release-prerequisites) for release verification and delivery limits.
 
 The app has no developer login credentials to supply. App Review must still receive access and resources to assess the sharing features. Confirm a workable reviewer procedure and any required private invitation/device resources before submission, accounting for the invitation's 24-hour expiration and one-time exact-profile claim. Do not place a live invitation in this repository or permanent public metadata.
 
@@ -73,7 +73,7 @@ This draft describes the integrated candidate identified by [shared version meta
 
 - Enter the rights holder's current legal name and year in App Store Connect. No legal entity is inferred in this repository.
 - Confirm commercial rights for the app icon and every screenshot overlay or font not supplied by Apple.
-- The daily thought uses unattributed product microcopy. See [quotes-and-attribution.md](quotes-and-attribution.md) for the content review.
+- See the [content review](quotes-and-attribution.md#application-text) for application copy and attribution.
 - App screenshots must use fictional family information.
 
 ## Required manual fields
