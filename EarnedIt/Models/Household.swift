@@ -218,6 +218,7 @@ struct AlternatingTurnAdvance: Codable, Equatable {
 struct JournalCapability: Codable, Equatable {
     static let occurrenceAwareChores = 2
     static let puntApprovals = 3
+    static let familyExtras = 4
 
     let minimumVersion: Int
     let recordedByMemberID: UUID
@@ -399,6 +400,10 @@ struct InvitationRevocation: Codable, Equatable {
 }
 
 enum HouseholdFactBody: Codable, Equatable {
+    case swapRequest(SwapRequest)
+    case swapDecision(SwapDecision)
+    case bonusAward(BonusAward)
+    case choreNudge(ChoreNudge)
     case puntRequest(PuntRequest)
     case puntDecision(PuntDecision)
     case household(Household)
@@ -463,6 +468,7 @@ struct HouseholdSnapshot: Equatable {
         orderedFacts.compactMap { fact in
             switch fact.body {
             case .journalCapability(let capability): return capability.minimumVersion
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge: return JournalCapability.familyExtras
             case .puntRequest, .puntDecision: return JournalCapability.puntApprovals
             default: return nil
             }
@@ -472,7 +478,7 @@ struct HouseholdSnapshot: Equatable {
     var occurrenceCapabilityIndex: Int {
         orderedFacts.firstIndex { fact in
             switch fact.body {
-            case .puntRequest, .puntDecision: return true
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge, .puntRequest, .puntDecision: return true
             case .journalCapability(let capability):
                 return capability.minimumVersion >= JournalCapability.occurrenceAwareChores
             default: return false
@@ -495,7 +501,7 @@ struct HouseholdSnapshot: Equatable {
         orderedFacts = facts.sorted(by: HouseholdFact.precedes)
         for fact in orderedFacts {
             switch fact.body {
-            case .puntRequest, .puntDecision: break
+            case .swapRequest, .swapDecision, .bonusAward, .choreNudge, .puntRequest, .puntDecision: break
             case .household(let value):
                 household = value
                 if creatorMemberID == nil { creatorMemberID = fact.authorMemberID }

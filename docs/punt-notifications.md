@@ -1,4 +1,6 @@
-# Punt approvals and family activity
+# Legacy turn approvals and family activity
+
+Current screens use [Swap Turns, bonus awards, and manual reminders](family-polish.md). This document records the earlier one-way transfer protocol and historical verification. Transfer statistics are retired. Existing transfer facts and accounting remain readable.
 
 ## User-visible behavior
 

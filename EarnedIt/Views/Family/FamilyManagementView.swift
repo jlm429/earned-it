@@ -21,9 +21,6 @@ struct FamilyManagementView: View {
                         .font(.system(.largeTitle, design: .rounded, weight: .bold))
                         .foregroundStyle(AppTheme.heroText)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Everyone has a part. Every little bit matters.")
-                        .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(24).frame(maxWidth: .infinity, alignment: .leading)
                 .background(HeroSurface())
@@ -54,6 +51,7 @@ struct FamilyManagementView: View {
                             .accessibilityLabel("Manage \(member.displayName)")
                         }
                         if member.role == .child {
+                            ChildConnectionRow(child: member)
                             let week = store.allowanceWeek(for: member.id)
                             WeeklyProgressBar(week: week,
                                 accessibilityIdentifier: "family-progress-\(member.displayName.accessibilitySlug)")

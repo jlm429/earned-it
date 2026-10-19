@@ -101,6 +101,7 @@ enum ChoreRules {
         guard let household = snapshot.household else { return [] }
         let weekday = household.calendar.component(.weekday, from: day.date(in: household.calendar))
         let choreIDs = Set(snapshot.revisions.map(\.choreID))
+        let swaps = SwapRules.project(snapshot: snapshot, today: today)
         return choreIDs.flatMap { choreID -> [DailyChore] in
             guard let revision = snapshot.configuration(choreID: choreID, on: day) else { return [] }
             let recorded = snapshot.recordedAssignments.filter { $0.choreID == choreID && $0.day == day }
@@ -223,7 +224,7 @@ enum ChoreRules {
             let scheduledMembers = occurrenceExists ? eligibleMembers(for: revision, on: day, snapshot: snapshot) : []
             let occurrence = resolveOccurrence(revision: revision, scheduledMembers: scheduledMembers,
                                                choreID: choreID, day: day, snapshot: snapshot,
-                                               calendar: household.calendar)
+                                               calendar: household.calendar, swaps: swaps)
             let disposition = snapshot.scheduledOccurrence(
                 choreID: choreID, revisionID: revision.id, on: day,
                 hasDone: occurrence.activeContributions.contains { $0.state == .done }
@@ -292,14 +293,18 @@ enum ChoreRules {
 
     private static func resolveOccurrence(revision: ChoreRevision, scheduledMembers: [FamilyMember],
                                           choreID: UUID, day: CivilDay, snapshot: HouseholdSnapshot,
-                                          calendar: Calendar) -> ResolvedOccurrence {
+                                          calendar: Calendar, swaps: [ProjectedSwap]) -> ResolvedOccurrence {
         var owner: FamilyMember?
         if revision.mode == .alternating, !scheduledMembers.isEmpty {
-            owner = alternatingOwner(choreID: choreID, on: day, snapshot: snapshot, calendar: calendar)
+            owner = alternatingOwner(choreID: choreID, on: day, snapshot: snapshot, calendar: calendar, swaps: swaps)
             if let originalOwner = owner {
                 let scope = PuntScope(choreID: choreID, revisionID: revision.id, day: day, occurrenceID: nil)
                 owner = snapshot.member(PuntRules.project(scope: scope, originalOwnerID: originalOwner.id,
                                                           snapshot: snapshot).ownerID)
+                if let currentOwner = owner {
+                    owner = snapshot.member(SwapRules.owner(choreID: choreID, day: day,
+                                                            baseOwnerID: currentOwner.id, swaps: swaps))
+                }
             }
         }
         func isActive(_ contribution: DatedCompletion) -> Bool {
@@ -346,7 +351,9 @@ enum ChoreRules {
     private static func alternatingOwner(choreID: UUID, on day: CivilDay,
                                          snapshot: HouseholdSnapshot,
                                          calendar: Calendar,
-                                         asNeededProjection: AsNeededControlProjection? = nil) -> FamilyMember? {
+                                         asNeededProjection: AsNeededControlProjection? = nil,
+                                         swaps: [ProjectedSwap]? = nil) -> FamilyMember? {
+        let exchanges = swaps ?? SwapRules.project(snapshot: snapshot, today: day)
         var revisionsByDay: [CivilDay: ChoreRevision] = [:]
         for revision in snapshot.revisions where revision.choreID == choreID && revision.effectiveDay <= day {
             revisionsByDay[revision.effectiveDay] = revision
@@ -409,11 +416,13 @@ enum ChoreRules {
                                               eligibleIDs: eligibleIDs) else { continue }
                 if eventDay == day { activeOwnerID = ownerID }
                 let disposition = snapshot.occurrence(choreID: choreID, on: eventDay)
-                let responsibleID = PuntRules.project(
+                let legacyResponsibleID = PuntRules.project(
                     scope: PuntScope(choreID: choreID, revisionID: revision.id,
                                      day: eventDay, occurrenceID: nil),
                     originalOwnerID: ownerID, snapshot: snapshot
                 ).ownerID
+                let responsibleID = SwapRules.owner(choreID: choreID, day: eventDay,
+                                                    baseOwnerID: legacyResponsibleID, swaps: exchanges)
                 let hasDone = snapshot.completions.contains {
                     $0.choreID == choreID && $0.revisionID == revision.id
                         && $0.day == eventDay && $0.state == .done && $0.memberID == responsibleID

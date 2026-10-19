@@ -350,10 +350,8 @@ final class PuntNotificationTests: XCTestCase {
         try await alek.synchronize()
         XCTAssertEqual(alek.activity.first { $0.id == requestID }?.punt?.status, .pending)
         try alek.decidePunt(requestFactID: requestID, kind: .accepted)
-        XCTAssertEqual(PuntStatsRules.summary(memberID: family.alek.id, week: .thisWeek,
-            today: alek.day, snapshot: alek.snapshot).covered, 1)
-        XCTAssertTrue(PuntStatsRules.summary(memberID: family.alek.id, week: .thisWeek,
-            today: hanna.day, snapshot: hanna.snapshot).isEmpty)
+        XCTAssertEqual(alek.activity.first { $0.id == requestID }?.punt?.status, .accepted)
+        XCTAssertEqual(hanna.activity.first { $0.id == requestID }?.punt?.status, .pending)
         try alek.setCompletion(choreID: chore, memberID: family.alek.id, date: family.clock.now, state: .done)
         try await alek.synchronize()
         try await hanna.synchronize()
@@ -365,15 +363,11 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(hanna.snapshot, alek.snapshot)
         XCTAssertEqual(family.store.snapshot, alek.snapshot)
         XCTAssertEqual(alek.pendingCount, 0)
-        let expected = PuntStatsRules.summary(memberID: family.hanna.id, week: .thisWeek,
-            today: hanna.day, snapshot: hanna.snapshot)
-        XCTAssertEqual(expected.punted, 1)
-        XCTAssertEqual(PuntStatsRules.summary(memberID: family.hanna.id, week: .thisWeek,
-            today: alek.day, snapshot: alek.snapshot), expected)
         let reopened = try HouseholdStore(repository: hannaRepository, transport: hannaTransport,
             clock: { family.clock.now }, automaticSync: false)
-        XCTAssertEqual(PuntStatsRules.summary(memberID: family.hanna.id, week: .thisWeek,
-            today: reopened.day, snapshot: reopened.snapshot), expected)
+        XCTAssertEqual(reopened.dailyList().first?.turnOwnerID, family.alek.id)
+        XCTAssertEqual(reopened.dailyList().first?.state(for: family.alek.id), .done)
+
     }
 
     func testEveryActivityUpdateBeyondFiftyCanBeDisplayedAndMarkedRead() throws {
@@ -427,7 +421,7 @@ final class PuntNotificationTests: XCTestCase {
             automaticSync: false, activityAlerts: alerts)
         await again.processActivityAlerts()
         XCTAssertEqual(alerts.delivered.count, 1)
-        let item = try XCTUnwrap(again.activity.first { $0.title == "Punt declined" })
+        let item = try XCTUnwrap(again.activity.first { $0.title == "Earlier turn request declined" })
         try again.markActivityRead(item)
         XCTAssertTrue(again.isActivityRead(item))
         XCTAssertEqual(again.activity.first { $0.id == requestID }?.punt?.status, .declined)

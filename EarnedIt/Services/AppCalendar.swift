@@ -58,6 +58,15 @@ enum AppCalendar {
         dayIdentifier(for: date, calendar: persisted)
     }
 
+    static func displayDay(_ day: CivilDay, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate("EEE MMM d y")
+        return formatter.string(from: day.date(in: calendar))
+    }
+
     static func isPersistedDay(
         _ persistedDate: Date,
         sameDayAs date: Date,

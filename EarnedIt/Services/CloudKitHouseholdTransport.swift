@@ -1428,8 +1428,8 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
               let payload = record["payload"] as? Data else {
             throw HouseholdError.malformedData
         }
-        guard formatVersion <= 3 else { throw HouseholdError.updateRequired }
-        guard (1...3).contains(formatVersion) else { throw HouseholdError.malformedData }
+        guard formatVersion <= 4 else { throw HouseholdError.updateRequired }
+        guard (1...4).contains(formatVersion) else { throw HouseholdError.malformedData }
         let fact = try JSONDecoder().decode(HouseholdFact.self, from: payload)
         guard record.recordID.recordName == fact.id.uuidString else { throw HouseholdError.malformedData }
         return fact
@@ -1448,6 +1448,7 @@ final class CloudKitHouseholdTransport: HouseholdTransport {
 
     private static func journalFormatVersion(for body: HouseholdFactBody) -> Int {
         switch body {
+        case .swapRequest, .swapDecision, .bonusAward, .choreNudge: return 4
         case .puntRequest, .puntDecision: return 3
         case .journalCapability, .asNeededOccurrence, .asNeededOccurrenceCompletion,
                 .asNeededOccurrenceResolution, .asNeededTurnAdvance,

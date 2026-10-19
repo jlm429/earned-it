@@ -38,7 +38,22 @@ struct ResponsibilityRow: View {
                 if !chore.configuration.notes.isEmpty {
                     Text(chore.configuration.notes).font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }
-                PuntControls(chore: chore, actor: actor)
+                SwapControls(chore: chore, actor: actor)
+                if actor.role == .parent && !FamilyExtrasRules.nudgeTargets(for: chore).isEmpty {
+                    Button {
+                        store.perform {
+                            try store.nudge(choreID: chore.choreID, occurrenceID: chore.occurrenceID)
+                            feedback += 1
+                        }
+                    } label: {
+                        Label { Text(store.canNudge(chore) ? "Nudge" : "Reminder saved")
+                            .fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "bell.badge") }
+                    }
+                    .frame(minHeight: 44).buttonStyle(.bordered)
+                    .disabled(!store.canNudge(chore))
+                    .accessibilityHint("Saves a reminder for children with unfinished work. Alerts depend on their notification permission and next sync.")
+                    .accessibilityIdentifier("nudge-\(chore.configuration.title.accessibilitySlug)")
+                }
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(AppTheme.secondaryText)
                 }

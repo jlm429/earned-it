@@ -94,14 +94,17 @@ struct SetupView: View {
                             .foregroundStyle(AppTheme.accent)
                         Text(store.household?.name ?? "Family").font(.headline)
                         ForEach(store.snapshot.members) { member in
-                            HStack(spacing: 12) {
-                                AvatarView(user: member, size: 40)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(member.displayName).font(.headline)
-                                    Text(member.role.title).font(.caption).foregroundStyle(AppTheme.secondaryText)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 12) {
+                                    AvatarView(user: member, size: 40)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(member.displayName).font(.headline)
+                                        Text(member.role.title).font(.caption).foregroundStyle(AppTheme.secondaryText)
+                                    }
                                 }
-                            }
                                 .accessibilityIdentifier("setup-user-\(member.displayName.accessibilitySlug)")
+                                if member.role == .child { ChildConnectionRow(child: member) }
+                            }
                         }
                         Button("Add Child") { addingChild = true }
                             .accessibilityIdentifier("setup-add-child")
@@ -120,7 +123,7 @@ struct SetupView: View {
                             .disabled(store.children.isEmpty)
                             .accessibilityIdentifier("finish-setup")
                     } footer: {
-                        Text("You can invite family members and make changes later from Manage Family.")
+                        Text("Children marked Not connected yet can join later from Manage Family. Their chores are ready now.")
                     }
                     Section("About") {
                         LegalLinksView()

@@ -7,8 +7,8 @@ struct FamilyActivityView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     static func items(from activity: [FamilyActivity]) -> [FamilyActivity] {
-        let pending = activity.filter { $0.punt?.status == .pending }
-        let other = activity.filter { $0.punt?.status != .pending }
+        let pending = activity.filter { $0.punt?.status == .pending || $0.swap?.status == .pending }
+        let other = activity.filter { $0.punt?.status != .pending && $0.swap?.status != .pending }
         return pending + other
     }
 
@@ -17,17 +17,13 @@ struct FamilyActivityView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ActivityAlertSettings()
                     if items.isEmpty {
                         ContentUnavailableView("You're all caught up", systemImage: "bubble.left.and.bubble.right",
                                                description: Text("New chore requests and family updates will appear here."))
                     }
-                    ForEach(items.filter { $0.punt?.status == .pending }) { activityCard($0) }
-                    if let member = store.selectedMember, member.role == .child {
-                        PuntStatsCard(memberID: member.id)
-                            .id(member.id)
-                    }
-                    ForEach(items.filter { $0.punt?.status != .pending }) { activityCard($0) }
+                    ForEach(items.filter { $0.punt?.status == .pending || $0.swap?.status == .pending }) { activityCard($0) }
+                    ActivityAlertSettings()
+                    ForEach(items.filter { $0.punt?.status != .pending && $0.swap?.status != .pending }) { activityCard($0) }
                 }
                 .padding()
                 .frame(maxWidth: 760)
@@ -48,7 +44,7 @@ struct FamilyActivityView: View {
     }
 
     private func activityCard(_ item: FamilyActivity) -> some View {
-        SectionCard(tint: item.punt?.status == .pending ? AppTheme.info : nil) {
+        SectionCard(tint: item.punt?.status == .pending || item.swap?.status == .pending ? AppTheme.info : nil) {
             VStack(alignment: .leading, spacing: 10) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .firstTextBaseline) {
@@ -62,7 +58,13 @@ struct FamilyActivityView: View {
                     }
                 }
                 Text(item.detail).font(.subheadline)
+                if let swap = item.swap {
+                    SwapSummary(swap: swap)
+                    swapActions(swap)
+                }
                 if let punt = item.punt {
+                    Text("Made before Swap Turns. This request changes only one turn.")
+                        .font(.caption).foregroundStyle(AppTheme.secondaryText)
                     Label(statusText(punt), systemImage: punt.status == .pending ? "clock" : "person.2")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(punt.status == .accepted ? AppTheme.success : AppTheme.info)
@@ -100,11 +102,11 @@ struct FamilyActivityView: View {
         if punt.status == .pending, let actor = store.selectedMember {
             VStack(alignment: .leading, spacing: 8) {
                 if actor.id == punt.request.recipientID {
-                    Button("Accept Punt") { decide(punt, kind: .accepted) }
+                    Button("Accept Earlier Turn Request") { decide(punt, kind: .accepted) }
                         .buttonStyle(.borderedProminent).frame(minHeight: 44)
                         .foregroundStyle(AppTheme.surface)
                         .accessibilityIdentifier("accept-punt")
-                    Button("Decline Punt") { decide(punt, kind: .declined) }
+                    Button("Decline Earlier Turn Request") { decide(punt, kind: .declined) }
                         .buttonStyle(.bordered).frame(minHeight: 44)
                         .accessibilityIdentifier("decline-punt")
                 } else if actor.id == punt.request.requesterID {
@@ -113,6 +115,25 @@ struct FamilyActivityView: View {
                 }
             }
             .disabled(store.cloudIsReadOnly || store.cloudAccessBlocked)
+        }
+    }
+
+    @ViewBuilder
+    private func swapActions(_ swap: ProjectedSwap) -> some View {
+        if swap.status == .pending, let actor = store.selectedMember, actor.role == .child {
+            VStack(alignment: .leading, spacing: 8) {
+                if actor.id == swap.request.recipientID {
+                    Button("Accept Swap") { store.perform { try store.decideSwap(requestFactID: swap.id, kind: .accepted) } }
+                        .buttonStyle(.borderedProminent).frame(minHeight: 44)
+                        .foregroundStyle(AppTheme.surface).accessibilityIdentifier("accept-swap")
+                    Button("No Thanks") { store.perform { try store.decideSwap(requestFactID: swap.id, kind: .declined) } }
+                        .buttonStyle(.bordered).frame(minHeight: 44).accessibilityIdentifier("decline-swap")
+                } else if actor.id == swap.request.requesterID {
+                    Button("Cancel Swap", role: .cancel) {
+                        store.perform { try store.decideSwap(requestFactID: swap.id, kind: .cancelled) }
+                    }.frame(minHeight: 44).accessibilityIdentifier("cancel-swap")
+                }
+            }.disabled(store.cloudIsReadOnly || store.cloudAccessBlocked)
         }
     }
 
@@ -146,7 +167,7 @@ private struct ActivityAlertSettings: View {
                 .toggleStyle(.switch)
                 .frame(minHeight: 44)
                 .disabled(isUpdating)
-                .accessibilityHint("Controls system alerts on this device. Activity and punt requests stay available.")
+                .accessibilityHint("Controls system alerts on this device. Activity and swap requests stay available.")
                 .accessibilityIdentifier("activity-alerts-toggle")
                 Text(store.activityAlertsEnabled ? "Your preference: On" : "Your preference: Off")
                     .font(.subheadline).accessibilityIdentifier("activity-alerts-preference")
