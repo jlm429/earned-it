@@ -39,6 +39,8 @@ Children check their list and mark chores complete. Parents manage the family na
 
 The refreshed Today screens highlight daily chores, weekly progress, streaks, and allowance eligibility. On iPad, daily work and weekly context appear side by side; accessibility text sizes use a single column. Parents can open a child's progress from Today or review each child in Manage Family.
 
+The parent's **Weekly progress** card starts on the current week. Swipe horizontally or use **Previous week** and **Next week** to review weeks labeled with their date range. Choose **Current week** to return, or open a child's card for the selected week's details. The [weekly history rules](docs/shared-household-architecture.md#allowance-and-history) describe the history window and how dated results are derived.
+
 For an exchange, choose **Swap Turns** on today's alternating chore, select a sibling, and review the return date before sending. The sibling chooses **Accept Swap** or **No Thanks** in **Activity**, opened from the bell.
 
 Parents can press **Nudge** beside unfinished work or open a child's progress and choose **Award Bonus**. See the [family progress and turn exchange guide](docs/family-polish.md) for eligibility, history, and exchange rules. Use Activity's **Notifications** card to turn alerts on or off; the [Activity guide](docs/punt-notifications.md#communication-coverage-and-privacy) explains privacy and delivery limits.
