@@ -83,6 +83,44 @@ enum SwapRules {
                                                memberID: member)?.state.isAccountedFor == true
     }
 
+    private static func settlementFact(for swap: ProjectedSwap, snapshot: HouseholdSnapshot) -> HouseholdFact? {
+        let request = swap.request
+        guard swap.wasAccepted, !swap.repaymentCancelled,
+              let acceptedIndex = snapshot.orderedFacts.firstIndex(where: { $0.id == swap.decisionFactID }),
+              let sourceRevision = snapshot.configuration(choreID: request.scope.choreID, on: request.scope.day),
+              let repaymentRevision = snapshot.configuration(choreID: request.scope.choreID, on: request.repaymentDay),
+              sourceRevision.mode == .alternating, repaymentRevision.mode == .alternating else { return nil }
+        var covered = false
+        var paid = false
+        for fact in snapshot.orderedFacts.dropFirst(acceptedIndex + 1) {
+            if case .choreDeletion(let deletion) = fact.body, deletion.choreID == request.scope.choreID { return nil }
+            if case .occurrenceAwareChoreDeletion(let deletion) = fact.body,
+               deletion.choreID == request.scope.choreID { return nil }
+            guard case .completion(let completion) = fact.body,
+                  completion.choreID == request.scope.choreID, completion.mode == .alternating else { continue }
+            if completion.day == request.scope.day, completion.memberID == request.recipientID,
+               completion.revisionID == sourceRevision.id { covered = completion.state.isAccountedFor }
+            if completion.day == request.repaymentDay, completion.memberID == request.requesterID,
+               completion.revisionID == repaymentRevision.id { paid = completion.state.isAccountedFor }
+            if covered && paid { return fact }
+        }
+        return nil
+    }
+
+    static func preservesSettledTurn(choreID: UUID, day: CivilDay, snapshot: HouseholdSnapshot,
+                                     swaps: [ProjectedSwap], dispositionFactID: UUID? = nil) -> Bool {
+        guard let revision = snapshot.configuration(choreID: choreID, on: day),
+              let dispositionID = dispositionFactID ?? snapshot.scheduledNotNeededFactID(
+                choreID: choreID, revisionID: revision.id, on: day),
+              let disposition = snapshot.orderedFacts.first(where: { $0.id == dispositionID }) else { return false }
+        return swaps.contains { swap in
+            guard swap.request.scope.choreID == choreID,
+                  day == swap.request.scope.day || day == swap.request.repaymentDay,
+                  let settled = settlementFact(for: swap, snapshot: snapshot) else { return false }
+            return HouseholdFact.precedes(disposition, settled)
+        }
+    }
+
     private static func repaymentAvailable(_ request: SwapRequest, snapshot: HouseholdSnapshot) -> Bool {
         guard let original = snapshot.revisions.first(where: { $0.id == request.scope.revisionID }),
               let revision = snapshot.configuration(choreID: request.scope.choreID, on: request.repaymentDay),
@@ -182,7 +220,8 @@ enum SwapRules {
                        }
                        return disposition.day == swap.request.repaymentDay
                            && isAccounted(swap.request, repayment: true, snapshot: snapshot)
-                   }) { continue }
+                   }) || preservesSettledTurn(choreID: disposition.choreID, day: disposition.day,
+                       snapshot: snapshot, swaps: result, dispositionFactID: fact.id) { continue }
                 prefix.append(fact)
                 if result.contains(where: { $0.isActive }) && affectsExchange(fact, swaps: result) {
                     // Reconcile structural changes as soon as they enter the journal, including

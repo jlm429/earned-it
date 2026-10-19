@@ -228,6 +228,7 @@ enum ChoreRules {
             let disposition = snapshot.scheduledOccurrence(
                 choreID: choreID, revisionID: revision.id, on: day,
                 hasDone: occurrence.activeContributions.contains { $0.state == .done }
+                    || SwapRules.preservesSettledTurn(choreID: choreID, day: day, snapshot: snapshot, swaps: swaps)
             )
             let notNeeded = scheduled && disposition?.state == .notNeeded
             var members = revision.mode == .alternating
@@ -424,6 +425,7 @@ enum ChoreRules {
                                                     baseOwnerID: legacyResponsibleID, swaps: exchanges)
                 let hasDone = snapshot.alternatingCompletion(choreID: choreID, on: eventDay,
                                                               memberID: responsibleID)?.state == .done
+                    || SwapRules.preservesSettledTurn(choreID: choreID, day: eventDay, snapshot: snapshot, swaps: exchanges)
                 let disposition = snapshot.scheduledOccurrence(choreID: choreID, revisionID: revision.id,
                                                                on: eventDay, hasDone: hasDone)
                 let keepsTurn = disposition?.alternatingSkipBehavior == .keepTurn

@@ -34,6 +34,10 @@ struct ChoreNudge: Codable, Equatable {
     let memberID: UUID
     let recordedByMemberID: UUID
 
+    func matches(_ chore: DailyChore) -> Bool {
+        scope.choreID == chore.choreID && scope.day == chore.day && scope.occurrenceID == chore.occurrenceID
+    }
+
     /// Independent offline reminders share a delivery receipt without sharing mutable facts.
     func activityID(householdID: UUID) -> UUID {
         let key = "nudge/\(householdID)/\(scope.choreID)/\(scope.day)/\(scope.occurrenceID?.uuidString ?? "scheduled")/\(memberID)"
@@ -62,8 +66,7 @@ enum FamilyExtrasRules {
     static func hasNudge(for chore: DailyChore, memberID: UUID, snapshot: HouseholdSnapshot) -> Bool {
         snapshot.orderedFacts.contains { fact in
             guard case .choreNudge(let value) = fact.body else { return false }
-            return value.scope.choreID == chore.choreID && value.scope.day == chore.day
-                && value.scope.occurrenceID == chore.occurrenceID && value.memberID == memberID
+            return value.matches(chore) && value.memberID == memberID
         }
     }
 }

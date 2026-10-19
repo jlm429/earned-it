@@ -640,6 +640,155 @@ final class FamilyPolishTests: XCTestCase {
         XCTAssertEqual(owner.household?.isSetupComplete, false)
     }
 
+    func testSettledSwapCorrectionsPreserveBothAssignmentsCreditAndRotationAcrossDeliveryOrders() throws {
+        for disposedRepayment in [false, true] {
+            for correctedRepayment in [false, true] {
+                for behavior in [AlternatingSkipBehavior.keepTurn, .advanceRotation] {
+                    let family = try TestFamily()
+                    let (chore, requestID) = try setupSwap(family)
+                    try accept(family, requestID)
+                    let request = try XCTUnwrap(family.store.swaps.first?.request)
+                    let day = disposedRepayment ? request.repaymentDay : request.scope.day
+                    let memberID = disposedRepayment ? family.hanna.id : family.alek.id
+                    let sequence = try XCTUnwrap(family.store.snapshot.orderedFacts.last?.sequence)
+                    let disposition = fact(family, body: .occurrence(ChoreOccurrenceDisposition(choreID: chore,
+                        revisionID: request.scope.revisionID, day: day, state: .notNeeded,
+                        alternatingSkipBehavior: behavior, recordedByMemberID: family.parent.id,
+                        assignedMemberID: memberID)), author: family.parent.id, sequence: sequence + 1)
+                    let sourceDone = fact(family, body: .completion(DatedCompletion(choreID: chore,
+                        revisionID: request.scope.revisionID, memberID: family.alek.id, day: request.scope.day,
+                        state: .done, eligibleMemberIDs: [family.alek.id], mode: .alternating,
+                        recordedByMemberID: family.alek.id)), author: family.alek.id, sequence: sequence + 2)
+                    let repaymentDone = fact(family, body: .completion(DatedCompletion(choreID: chore,
+                        revisionID: request.scope.revisionID, memberID: family.hanna.id, day: request.repaymentDay,
+                        state: .done, eligibleMemberIDs: [family.hanna.id], mode: .alternating,
+                        recordedByMemberID: family.hanna.id)), author: family.hanna.id, sequence: sequence + 3)
+                    try family.repository.commit(facts: [disposition, sourceDone, repaymentDone])
+                    family.move(to: "2026-09-21T16:00:00Z")
+                    let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+                    XCTAssertEqual(store.swaps.first?.status, .completed)
+                    try store.selectProfile(family.parent.id)
+                    let correctedDay = correctedRepayment ? request.repaymentDay : request.scope.day
+                    let correctedMember = correctedRepayment ? family.hanna.id : family.alek.id
+                    try store.setCompletion(choreID: chore, memberID: correctedMember,
+                        date: correctedDay.date(in: store.calendar), state: .missed)
+                    let all = store.snapshot.orderedFacts
+                    for delivered in [all, Array(all.reversed()), Array(all.dropFirst()) + [all[0]]] {
+                        let snapshot = HouseholdSnapshot(facts: delivered)
+                        let swap = try XCTUnwrap(SwapRules.project(snapshot: snapshot, today: store.day).first)
+                        XCTAssertEqual(swap.status, .ended)
+                        XCTAssertFalse(swap.isActive)
+                        XCTAssertFalse(swap.repaymentCancelled)
+                        for repayment in [false, true] {
+                            let endpointDay = repayment ? request.repaymentDay : request.scope.day
+                            let ownerID = repayment ? family.hanna.id : family.alek.id
+                            let state: DailyStateKind = repayment == correctedRepayment ? .missed : .done
+                            let row = try XCTUnwrap(ChoreRules.dailyList(snapshot: snapshot, day: endpointDay, today: store.day).first)
+                            XCTAssertEqual(row.turnOwnerID, ownerID)
+                            XCTAssertEqual(row.state(for: ownerID), state)
+                            XCTAssertFalse(row.isNotNeeded)
+                            let week = AllowanceService.week(childID: ownerID, containing: endpointDay.date(in: store.calendar),
+                                snapshot: snapshot, today: family.clock.now)
+                            XCTAssertEqual(week.items.first { $0.choreID == chore }?.state, state)
+                            XCTAssertEqual(week.earned, state == .done)
+                        }
+                        XCTAssertEqual(ChoreRules.rotationOwner(choreID: chore, on: store.day, snapshot: snapshot)?.id, family.hanna.id)
+                        XCTAssertEqual(ChoreRules.rotationOwner(choreID: chore,
+                            on: store.day.adding(days: 7, calendar: store.calendar), snapshot: snapshot)?.id, family.alek.id)
+                    }
+                    let retainedWeek = try XCTUnwrap(store.allowanceHistory(for: correctedMember).first {
+                        $0.items.contains { $0.choreID == chore && $0.day == correctedDay }
+                    })
+                    XCTAssertFalse(retainedWeek.earned)
+                    try store.markOccurrenceNotNeeded(choreID: chore, date: correctedDay.date(in: store.calendar),
+                                                     alternatingSkipBehavior: behavior)
+                    XCTAssertTrue(store.dailyList(on: correctedDay.date(in: store.calendar)).first?.isNotNeeded == true)
+                    XCTAssertEqual(store.swaps.first?.status, .ended)
+                    XCTAssertFalse(store.swaps.first?.repaymentCancelled == true)
+                }
+            }
+        }
+    }
+
+    func testOfflineOldRevisionNudgeRemainsActionableAndDeduplicatesAcrossTransport() async throws {
+        let server = TestCloudServer()
+        let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))
+        let chore = try family.store.saveChore(weekday: .monday, title: "Water plants", mode: .particular,
+            memberIDs: [family.hanna.id])
+        family.move(to: "2026-09-13T16:00:00Z")
+        try await family.store.connect()
+        let parentInvitation = try await family.store.createParentInvitation(name: "Other Parent", avatar: .sun)
+        let parentTransport = TestTransport(server: server, account: "other-parent")
+        let parent = try HouseholdStore(repository: HouseholdRepository(inMemory: true), transport: parentTransport,
+            clock: { family.clock.now }, automaticSync: false)
+        try await parent.redeemInvitation(parentInvitation.qrPayload)
+        let childInvitation = try await family.store.createChildInvitation(memberID: family.hanna.id)
+        let childRepository = try HouseholdRepository(inMemory: true)
+        let childTransport = TestTransport(server: server, account: "child")
+        let alerts = PolishAlerts()
+        let child = try HouseholdStore(repository: childRepository, transport: childTransport,
+            clock: { family.clock.now }, automaticSync: false, activityAlerts: alerts)
+        try await child.redeemInvitation(childInvitation.qrPayload)
+        await child.setActivityAlertsEnabled(true)
+        let baselineDeliveries = alerts.deliveries
+        try family.store.saveChore(choreID: chore, weekday: .monday, title: "Water the garden", mode: .particular,
+            memberIDs: [family.hanna.id])
+        try await family.store.synchronize()
+        family.move(to: "2026-09-14T16:00:00Z")
+        parent.refreshDate()
+        child.refreshDate()
+        let staleRow = try XCTUnwrap(parent.dailyList().first { $0.choreID == chore })
+        parentTransport.fetchError = CKError(.networkUnavailable)
+        try parent.nudge(choreID: chore, occurrenceID: staleRow.occurrenceID)
+        do { try await parent.synchronize(); XCTFail("The reminder must remain pending while offline") } catch {}
+        XCTAssertGreaterThan(parent.pendingCount, 0)
+        parentTransport.fetchError = nil
+        try await parent.synchronize()
+        try await family.store.synchronize()
+        try await child.synchronize()
+        let reminders = child.activity.filter { $0.title == "A little reminder" }
+        XCTAssertEqual(reminders.count, 1)
+        let reminderID = reminders.first?.id
+        let currentRow = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore && $0.occurrenceID == staleRow.occurrenceID })
+        XCTAssertNotEqual(currentRow.configuration.id, staleRow.configuration.id)
+        XCTAssertTrue(reminders.first?.detail.contains("Water the garden") == true)
+        XCTAssertFalse(family.store.canNudge(currentRow))
+        XCTAssertThrowsError(try family.store.nudge(choreID: chore, occurrenceID: staleRow.occurrenceID))
+        await child.processActivityAlerts()
+        XCTAssertEqual(alerts.deliveries, baselineDeliveries + 1)
+        let reopened = try HouseholdStore(repository: childRepository, transport: childTransport,
+            clock: { family.clock.now }, automaticSync: false, activityAlerts: alerts)
+        await reopened.processActivityAlerts()
+        XCTAssertEqual(alerts.deliveries, baselineDeliveries + 1)
+        XCTAssertEqual(reopened.activity.first { $0.title == "A little reminder" }?.id, reminderID)
+        let base = reopened.snapshot.orderedFacts
+        let row = try XCTUnwrap(reopened.dailyList().first { $0.choreID == chore })
+        var removed = family.hanna
+        removed.archivedFrom = reopened.day
+        let replacement = ChoreRevision(id: UUID(), householdID: row.configuration.householdID, choreID: chore,
+            weekday: .monday, effectiveDay: reopened.day, title: row.configuration.title, notes: "",
+            category: row.configuration.category, mode: .particular, memberIDs: [family.alek.id], isArchived: false)
+        let exclusions: [HouseholdFactBody] = [
+            .excuse(Excuse(memberID: family.hanna.id, day: reopened.day, isExcused: true)),
+            .member(removed), .chore(replacement),
+            .choreDeletion(ChoreDeletion(choreID: chore, day: reopened.day, recordedByMemberID: family.parent.id)),
+            .occurrence(ChoreOccurrenceDisposition(choreID: chore, revisionID: row.configuration.id,
+                day: reopened.day, state: .notNeeded, alternatingSkipBehavior: nil, recordedByMemberID: family.parent.id))
+        ]
+        for exclusion in exclusions {
+            let excluded = HouseholdSnapshot(facts: base + [fact(family, body: exclusion,
+                author: family.parent.id, sequence: (base.last?.sequence ?? 0) + 1)])
+            XCTAssertFalse(FamilyActivityRules.activity(snapshot: excluded, today: reopened.day).contains {
+                $0.title == "A little reminder" && $0.recipientIDs.contains(family.hanna.id)
+            })
+        }
+        XCTAssertFalse(FamilyActivityRules.activity(snapshot: reopened.snapshot,
+            today: reopened.day.adding(days: 1, calendar: reopened.calendar)).contains { $0.title == "A little reminder" })
+        try reopened.setCompletion(choreID: chore, occurrenceID: staleRow.occurrenceID,
+            memberID: family.hanna.id, date: family.clock.now, state: .done)
+        XCTAssertFalse(reopened.activity.contains { $0.title == "A little reminder" })
+    }
+
     func testExtrasSyncOfflineAcrossExactInvitedProfilesAndRelaunch() async throws {
         let server = TestCloudServer()
         let family = try TestFamily(transport: TestTransport(server: server, account: "owner"))

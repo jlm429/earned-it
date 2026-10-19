@@ -43,7 +43,7 @@ enum FamilyActivityRules {
             case .choreNudge(let nudge) where author?.role == .parent:
                 guard nudge.scope.day == today,
                       let chore = ChoreRules.dailyList(snapshot: snapshot, day: today, today: today).first(where: {
-                          ChoreScope($0) == nudge.scope
+                          nudge.matches($0)
                       }), FamilyExtrasRules.nudgeTargets(for: chore).contains(where: { $0.id == nudge.memberID })
                 else { return nil }
                 activityID = nudge.activityID(householdID: fact.householdID)
