@@ -988,6 +988,7 @@ private final class PolishAlerts: ActivityAlerting {
     var deliveries = 0
     var badgeCount = 0
     func permission() async -> ActivityAlertPermission { current }
+    func badgePermission() async -> ActivityAlertPermission { current }
     func requestPermission() async throws -> ActivityAlertPermission { current }
     func deliver(identifier: String) async throws { deliveries += 1 }
     func setBadgeCount(_ count: Int) async throws { badgeCount = count }

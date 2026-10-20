@@ -32,6 +32,7 @@ final class HouseholdStore {
     private var processingActivityAlerts = false
     private var requestingActivityAlertPermission = false
     private(set) var activityAlertPermission: ActivityAlertPermission = .notDetermined
+    private(set) var activityBadgePermission: ActivityAlertPermission = .notDetermined
     private(set) var snapshot = HouseholdSnapshot()
     private(set) var session: DeviceSession
     private(set) var midnightTimerRevision = UUID()
@@ -675,9 +676,12 @@ final class HouseholdStore {
         session.activityAlertsEnabled ?? (activityAlertPermission == .allowed)
     }
 
+    var activityAlertsNeedSettings: Bool {
+        activityAlertPermission == .denied || activityBadgePermission == .denied
+    }
+
     func setActivityAlertsEnabled(_ enabled: Bool) async {
         do {
-            let wasEnabled = activityAlertsEnabled
             var updated = session
             updated.activityAlertsEnabled = enabled
             // Enabling never replays this profile's existing Activity backlog.
@@ -692,9 +696,7 @@ final class HouseholdStore {
                 await activityAlerts.clear()
             } else {
                 activityAlertPermission = await activityAlerts.permission()
-                // Explicit re-enabling also requests badges on older alert-only installations.
-                if activityAlertsEnabled, activityAlertPermission == .notDetermined
-                    || (!wasEnabled && activityAlertPermission == .allowed),
+                if activityAlertsEnabled, activityAlertPermission == .notDetermined,
                    !requestingActivityAlertPermission {
                     requestingActivityAlertPermission = true
                     defer { requestingActivityAlertPermission = false }
@@ -722,6 +724,7 @@ final class HouseholdStore {
             }
         }
         activityAlertPermission = await activityAlerts.permission()
+        activityBadgePermission = await activityAlerts.badgePermission()
         guard let member = selectedMember, !cloudAccessBlocked, !familyAccessLost,
               !hasPendingAccountDataReset, !requiresAppUpdate else {
             activityAlerts.setEnabled(false)
@@ -731,7 +734,7 @@ final class HouseholdStore {
         activityAlerts.setEnabled(activityAlertsEnabled && activityAlertPermission == .allowed)
         if !activityAlertsEnabled || activityAlertPermission != .allowed {
             await activityAlerts.clear()
-        } else {
+        } else if activityBadgePermission == .allowed {
             do { try await activityAlerts.setBadgeCount(unreadActivityCount) }
             catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
         }
@@ -762,8 +765,10 @@ final class HouseholdStore {
                 + unprocessed.map { activityKey($0, memberID: member.id) }))
             try repository.commit(facts: [], session: updated)
             session = updated
-            try await activityAlerts.setBadgeCount(activityAlertsEnabled && activityAlertPermission == .allowed
-                                                   ? unreadActivityCount : 0)
+            if activityBadgePermission == .allowed {
+                try await activityAlerts.setBadgeCount(activityAlertsEnabled && activityAlertPermission == .allowed
+                                                       ? unreadActivityCount : 0)
+            }
         } catch {
             if !Task.isCancelled { errorMessage = error.localizedDescription }
         }

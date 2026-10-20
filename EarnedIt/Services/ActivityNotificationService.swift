@@ -10,6 +10,7 @@ enum ActivityAlertPermission: Equatable {
 protocol ActivityAlerting {
     func setEnabled(_ enabled: Bool)
     func permission() async -> ActivityAlertPermission
+    func badgePermission() async -> ActivityAlertPermission
     func requestPermission() async throws -> ActivityAlertPermission
     func deliver(identifier: String) async throws
     func setBadgeCount(_ count: Int) async throws
@@ -24,6 +25,7 @@ extension ActivityAlerting {
 @MainActor
 struct DisabledActivityAlerts: ActivityAlerting {
     func permission() async -> ActivityAlertPermission { .denied }
+    func badgePermission() async -> ActivityAlertPermission { .denied }
     func requestPermission() async throws -> ActivityAlertPermission { .denied }
     func deliver(identifier: String) async throws {}
     func clear() async {}
@@ -37,6 +39,7 @@ final class UITestActivityAlerts: ActivityAlerting {
 
     init(allowed: Bool) { current = allowed ? .allowed : .notDetermined }
     func permission() async -> ActivityAlertPermission { current }
+    func badgePermission() async -> ActivityAlertPermission { current }
     func requestPermission() async throws -> ActivityAlertPermission {
         current = .allowed
         return current
@@ -83,24 +86,33 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
     }
 
     @MainActor
+    func badgePermission() async -> ActivityAlertPermission {
+        let settings = await center.notificationSettings()
+        if settings.authorizationStatus == .notDetermined { return .notDetermined }
+        return settings.badgeSetting == .enabled ? .allowed : .denied
+    }
+
+    @MainActor
     func deliver(identifier: String) async throws {
+        let badgesAllowed = await badgePermission() == .allowed
         guard await permission() == .allowed, isEnabled else { return }
-        try await center.add(Self.request(identifier: identifier, badgeCount: badgeCount))
+        try await center.add(Self.request(identifier: identifier, badgeCount: badgesAllowed ? badgeCount : nil))
     }
 
     @MainActor
     func setBadgeCount(_ count: Int) async throws {
         badgeCount = isEnabled ? max(0, count) : 0
+        guard await badgePermission() == .allowed else { return }
         try await center.setBadgeCount(badgeCount)
     }
 
-    static func request(identifier: String, badgeCount: Int = 0) -> UNNotificationRequest {
+    static func request(identifier: String, badgeCount: Int? = nil) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = "Earned It"
         content.body = "New family activity. Open Earned It to review your chores and requests."
         content.sound = .default
         content.threadIdentifier = "family-activity"
-        content.badge = NSNumber(value: max(0, badgeCount))
+        content.badge = badgeCount.map { NSNumber(value: max(0, $0)) }
         return UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
     }
 
@@ -109,13 +121,15 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
         badgeCount = 0
-        try? await center.setBadgeCount(0)
+        if await badgePermission() == .allowed { try? await center.setBadgeCount(0) }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         Task { @MainActor in
-            completionHandler(isEnabled ? [.banner, .list, .sound, .badge] : [])
+            var options: UNNotificationPresentationOptions = [.banner, .list, .sound]
+            if await badgePermission() == .allowed { options.insert(.badge) }
+            completionHandler(isEnabled ? options : [])
         }
     }
 
