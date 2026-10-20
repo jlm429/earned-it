@@ -59,15 +59,41 @@ final class ActivityNavigation {
 final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationCenterDelegate {
     static let shared = AppleActivityAlerts()
     private let center = UNUserNotificationCenter.current()
+    private let readBadgePermission: @MainActor () async -> ActivityAlertPermission
+    private let writeBadgeCount: @MainActor (Int) async throws -> Void
+    private let clearNotifications: @MainActor () -> Void
     @MainActor private var isEnabled = false
     @MainActor private var badgeCount = 0
 
     @MainActor
-    func setEnabled(_ enabled: Bool) { isEnabled = enabled }
+    func setEnabled(_ enabled: Bool) {
+        isEnabled = enabled
+        if !enabled { badgeCount = 0 }
+    }
 
     override init() {
+        let center = UNUserNotificationCenter.current()
+        readBadgePermission = {
+            let settings = await center.notificationSettings()
+            if settings.authorizationStatus == .notDetermined { return .notDetermined }
+            return settings.badgeSetting == .enabled ? .allowed : .denied
+        }
+        writeBadgeCount = { try await center.setBadgeCount($0) }
+        clearNotifications = {
+            center.removeAllPendingNotificationRequests()
+            center.removeAllDeliveredNotifications()
+        }
         super.init()
         center.delegate = self
+    }
+
+    init(readBadgePermission: @escaping @MainActor () async -> ActivityAlertPermission,
+         writeBadgeCount: @escaping @MainActor (Int) async throws -> Void,
+         clearNotifications: @escaping @MainActor () -> Void) {
+        self.readBadgePermission = readBadgePermission
+        self.writeBadgeCount = writeBadgeCount
+        self.clearNotifications = clearNotifications
+        super.init()
     }
 
     @MainActor
@@ -87,9 +113,7 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
 
     @MainActor
     func badgePermission() async -> ActivityAlertPermission {
-        let settings = await center.notificationSettings()
-        if settings.authorizationStatus == .notDetermined { return .notDetermined }
-        return settings.badgeSetting == .enabled ? .allowed : .denied
+        await readBadgePermission()
     }
 
     @MainActor
@@ -102,8 +126,13 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
     @MainActor
     func setBadgeCount(_ count: Int) async throws {
         badgeCount = isEnabled ? max(0, count) : 0
+        try await updateBadgeCount()
+    }
+
+    @MainActor
+    private func updateBadgeCount() async throws {
         guard await badgePermission() == .allowed else { return }
-        try await center.setBadgeCount(badgeCount)
+        try await writeBadgeCount(badgeCount)
     }
 
     static func request(identifier: String, badgeCount: Int? = nil) -> UNNotificationRequest {
@@ -118,10 +147,9 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
 
     @MainActor
     func clear() async {
-        center.removeAllPendingNotificationRequests()
-        center.removeAllDeliveredNotifications()
+        clearNotifications()
         badgeCount = 0
-        if await badgePermission() == .allowed { try? await center.setBadgeCount(0) }
+        try? await updateBadgeCount()
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

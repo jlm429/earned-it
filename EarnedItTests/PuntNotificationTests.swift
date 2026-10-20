@@ -34,6 +34,78 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(notification.content.badge, 3)
         XCTAssertNil(AppleActivityAlerts.request(identifier: "no-badge").content.badge)
     }
+
+    func testSuspendedBadgeClearPreservesNewerNonzeroRefresh() async throws {
+        let center = TestBadgeCenter()
+        let alerts = center.makeAlerts()
+        alerts.setEnabled(true)
+        try await alerts.setBadgeCount(2)
+        let gate = TestSuspensionGate()
+        center.permissionGate = gate
+        let clearing = Task { await alerts.clear() }
+        while !gate.isWaiting { await Task.yield() }
+
+        try await alerts.setBadgeCount(5)
+        XCTAssertEqual(center.writes.last, 5)
+        gate.resume()
+        await clearing.value
+
+        XCTAssertEqual(center.clearCount, 1)
+        XCTAssertEqual(center.writes.last, 5)
+        XCTAssertFalse(center.writes.contains(0))
+    }
+
+    func testSuspendedBadgeRefreshPreservesNewerClear() async throws {
+        let center = TestBadgeCenter()
+        let alerts = center.makeAlerts()
+        alerts.setEnabled(true)
+        let gate = TestSuspensionGate()
+        center.permissionGate = gate
+        let updating = Task { try await alerts.setBadgeCount(5) }
+        while !gate.isWaiting { await Task.yield() }
+
+        await alerts.clear()
+        gate.resume()
+        try await updating.value
+
+        XCTAssertEqual(center.clearCount, 1)
+        XCTAssertEqual(center.writes.last, 0)
+        XCTAssertFalse(center.writes.contains(5))
+    }
+
+    func testSuspendedBadgeRefreshRespectsDisableAndDeniedPermissionSkipsWrites() async throws {
+        let center = TestBadgeCenter()
+        let alerts = center.makeAlerts()
+        alerts.setEnabled(true)
+        let gate = TestSuspensionGate()
+        center.permissionGate = gate
+        let updating = Task { try await alerts.setBadgeCount(5) }
+        while !gate.isWaiting { await Task.yield() }
+
+        alerts.setEnabled(false)
+        gate.resume()
+        try await updating.value
+        XCTAssertEqual(center.writes.last, 0)
+        try await alerts.setBadgeCount(8)
+        XCTAssertEqual(center.writes.last, 0)
+        XCTAssertFalse(center.writes.contains { $0 > 0 })
+
+        alerts.setEnabled(true)
+        center.currentPermission = .denied
+        let previousWrites = center.writes
+        try await alerts.setBadgeCount(7)
+        await alerts.clear()
+        XCTAssertEqual(center.writes, previousWrites)
+        let deniedPermission = await alerts.badgePermission()
+        XCTAssertEqual(deniedPermission, .denied)
+
+        center.currentPermission = .allowed
+        try await alerts.setBadgeCount(3)
+        XCTAssertEqual(center.writes.last, 3)
+        try await alerts.setBadgeCount(-1)
+        XCTAssertEqual(center.writes.last, 0)
+    }
+
     private func request(_ family: TestFamily, chore: UUID, recipient: FamilyMember) throws -> UUID {
         let row = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore && $0.isActionableOccurrence })
         try family.store.selectProfile(try XCTUnwrap(row.turnOwnerID))
@@ -758,6 +830,24 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(projection.requests.count, 1)
         XCTAssertEqual(projection.accepted?.decisionFactID, decision.id)
         XCTAssertEqual(snapshot.requiredJournalCapability, JournalCapability.puntApprovals)
+    }
+}
+
+@MainActor
+private final class TestBadgeCenter {
+    var currentPermission: ActivityAlertPermission = .allowed
+    var permissionGate: TestSuspensionGate?
+    var writes: [Int] = []
+    var clearCount = 0
+
+    func makeAlerts() -> AppleActivityAlerts {
+        AppleActivityAlerts(readBadgePermission: {
+            if let gate = self.permissionGate {
+                self.permissionGate = nil
+                await gate.wait()
+            }
+            return self.currentPermission
+        }, writeBadgeCount: { self.writes.append($0) }, clearNotifications: { self.clearCount += 1 })
     }
 }
 
