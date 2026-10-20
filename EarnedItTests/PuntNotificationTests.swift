@@ -26,12 +26,86 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(subscription.notificationInfo?.shouldSendContentAvailable, true)
         XCTAssertNil(subscription.notificationInfo?.alertBody)
         XCTAssertNil(subscription.notificationInfo?.desiredKeys)
-        let notification = AppleActivityAlerts.request(identifier: "opaque-activity-id")
+        let notification = AppleActivityAlerts.request(identifier: "opaque-activity-id", badgeCount: 3)
         XCTAssertNil(notification.trigger)
         XCTAssertEqual(notification.content.title, "Earned It")
         XCTAssertEqual(notification.content.body, "New family activity. Open Earned It to review your chores and requests.")
         XCTAssertTrue(notification.content.userInfo.isEmpty)
+        XCTAssertEqual(notification.content.badge, 3)
+        XCTAssertNil(AppleActivityAlerts.request(identifier: "no-badge").content.badge)
     }
+
+    func testSuspendedBadgeClearPreservesNewerNonzeroRefresh() async throws {
+        let center = TestBadgeCenter()
+        let alerts = center.makeAlerts()
+        alerts.setEnabled(true)
+        try await alerts.setBadgeCount(2)
+        let gate = TestSuspensionGate()
+        center.permissionGate = gate
+        let clearing = Task { await alerts.clear() }
+        while !gate.isWaiting { await Task.yield() }
+
+        try await alerts.setBadgeCount(5)
+        XCTAssertEqual(center.writes.last, 5)
+        gate.resume()
+        await clearing.value
+
+        XCTAssertEqual(center.clearCount, 1)
+        XCTAssertEqual(center.writes.last, 5)
+        XCTAssertFalse(center.writes.contains(0))
+    }
+
+    func testSuspendedBadgeRefreshPreservesNewerClear() async throws {
+        let center = TestBadgeCenter()
+        let alerts = center.makeAlerts()
+        alerts.setEnabled(true)
+        let gate = TestSuspensionGate()
+        center.permissionGate = gate
+        let updating = Task { try await alerts.setBadgeCount(5) }
+        while !gate.isWaiting { await Task.yield() }
+
+        await alerts.clear()
+        gate.resume()
+        try await updating.value
+
+        XCTAssertEqual(center.clearCount, 1)
+        XCTAssertEqual(center.writes.last, 0)
+        XCTAssertFalse(center.writes.contains(5))
+    }
+
+    func testSuspendedBadgeRefreshRespectsDisableAndDeniedPermissionSkipsWrites() async throws {
+        let center = TestBadgeCenter()
+        let alerts = center.makeAlerts()
+        alerts.setEnabled(true)
+        let gate = TestSuspensionGate()
+        center.permissionGate = gate
+        let updating = Task { try await alerts.setBadgeCount(5) }
+        while !gate.isWaiting { await Task.yield() }
+
+        alerts.setEnabled(false)
+        gate.resume()
+        try await updating.value
+        XCTAssertEqual(center.writes.last, 0)
+        try await alerts.setBadgeCount(8)
+        XCTAssertEqual(center.writes.last, 0)
+        XCTAssertFalse(center.writes.contains { $0 > 0 })
+
+        alerts.setEnabled(true)
+        center.currentPermission = .denied
+        let previousWrites = center.writes
+        try await alerts.setBadgeCount(7)
+        await alerts.clear()
+        XCTAssertEqual(center.writes, previousWrites)
+        let deniedPermission = await alerts.badgePermission()
+        XCTAssertEqual(deniedPermission, .denied)
+
+        center.currentPermission = .allowed
+        try await alerts.setBadgeCount(3)
+        XCTAssertEqual(center.writes.last, 3)
+        try await alerts.setBadgeCount(-1)
+        XCTAssertEqual(center.writes.last, 0)
+    }
+
     private func request(_ family: TestFamily, chore: UUID, recipient: FamilyMember) throws -> UUID {
         let row = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore && $0.isActionableOccurrence })
         try family.store.selectProfile(try XCTUnwrap(row.turnOwnerID))
@@ -452,7 +526,7 @@ final class PuntNotificationTests: XCTestCase {
         await reopened.setActivityAlertsEnabled(true)
         XCTAssertTrue(reopened.activityAlertsEnabled)
         XCTAssertTrue(alerts.delivered.isEmpty)
-        XCTAssertEqual(alerts.requestCount, 0, "Allowed authorization does not request permission again")
+        XCTAssertEqual(alerts.requestCount, 0, "Re-enabling must preserve existing iOS permission choices")
         try reopened.selectProfile(family.parent.id)
         _ = try reopened.saveChore(weekday: .monday, title: "On arrival", mode: .all, memberIDs: [])
         try reopened.selectProfile(family.hanna.id)
@@ -489,6 +563,60 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertFalse(alerts.enabled)
         XCTAssertEqual(alerts.requestCount, 0)
         XCTAssertFalse(store.cloudAccessBlocked)
+    }
+
+    func testExistingAlertsEnabledBadgeDisabledInstallationOffersSettingsAndRefreshesWithoutPrompt() async throws {
+        let family = try TestFamily()
+        let chore = try family.chore()
+        let alerts = TestActivityAlerts()
+        alerts.currentPermission = .allowed
+        alerts.currentBadgePermission = .denied
+        let store = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        try store.selectProfile(family.hanna.id)
+        await store.processActivityAlerts()
+        XCTAssertTrue(store.activityAlertsEnabled)
+        XCTAssertEqual(store.activityAlertPermission, .allowed)
+        XCTAssertEqual(store.activityBadgePermission, .denied)
+        XCTAssertTrue(store.activityAlertsNeedSettings)
+        let previousDeliveries = alerts.delivered.count
+        try store.selectProfile(family.parent.id)
+        try store.nudge(choreID: chore)
+        try store.selectProfile(family.hanna.id)
+        await store.processActivityAlerts()
+        XCTAssertEqual(alerts.delivered.count, previousDeliveries + 1)
+        XCTAssertGreaterThan(store.unreadActivityCount, 0)
+        XCTAssertTrue(alerts.badgeUpdates.isEmpty)
+        XCTAssertNil(store.errorMessage)
+
+        await store.processActivityAlerts()
+        await store.setActivityAlertsEnabled(false)
+        await store.setActivityAlertsEnabled(true)
+        XCTAssertEqual(alerts.currentBadgePermission, .denied)
+        XCTAssertEqual(alerts.requestCount, 0)
+        XCTAssertTrue(alerts.badgeUpdates.isEmpty)
+        XCTAssertTrue(store.activityAlertsNeedSettings)
+
+        alerts.currentBadgePermission = .allowed
+        await store.processActivityAlerts()
+        XCTAssertEqual(store.activityBadgePermission, .allowed)
+        XCTAssertFalse(store.activityAlertsNeedSettings)
+        XCTAssertEqual(alerts.badgeUpdates.last, store.unreadActivityCount)
+        XCTAssertEqual(alerts.delivered.count, previousDeliveries + 1)
+        for item in store.activity { try store.markActivityRead(item) }
+        await store.processActivityAlerts()
+        XCTAssertEqual(alerts.badgeUpdates.last, 0)
+
+        alerts.currentBadgePermission = .denied
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+            automaticSync: false, activityAlerts: alerts)
+        let badgeUpdateCount = alerts.badgeUpdates.count
+        await reopened.processActivityAlerts()
+        XCTAssertTrue(reopened.activityAlertsEnabled)
+        XCTAssertTrue(reopened.activityAlertsNeedSettings)
+        XCTAssertEqual(reopened.activityBadgePermission, .denied)
+        XCTAssertEqual(alerts.badgeUpdates.count, badgeUpdateCount)
+        XCTAssertEqual(alerts.requestCount, 0)
     }
 
     func testUndeterminedPermissionIsRequestedOnlyByExplicitEnable() async throws {
@@ -706,8 +834,28 @@ final class PuntNotificationTests: XCTestCase {
 }
 
 @MainActor
+private final class TestBadgeCenter {
+    var currentPermission: ActivityAlertPermission = .allowed
+    var permissionGate: TestSuspensionGate?
+    var writes: [Int] = []
+    var clearCount = 0
+
+    func makeAlerts() -> AppleActivityAlerts {
+        AppleActivityAlerts(readBadgePermission: {
+            if let gate = self.permissionGate {
+                self.permissionGate = nil
+                await gate.wait()
+            }
+            return self.currentPermission
+        }, writeBadgeCount: { self.writes.append($0) }, clearNotifications: { self.clearCount += 1 })
+    }
+}
+
+@MainActor
 private final class TestActivityAlerts: ActivityAlerting {
     var currentPermission: ActivityAlertPermission = .denied
+    var currentBadgePermission: ActivityAlertPermission = .allowed
+    var badgeUpdates: [Int] = []
     var delivered: [String] = []
     var clearCount = 0
     var requestCount = 0
@@ -718,6 +866,8 @@ private final class TestActivityAlerts: ActivityAlerting {
     var beforeDelivery: (() async -> Void)?
     var didDeliver: ((String) -> Void)?
     func permission() async -> ActivityAlertPermission { currentPermission }
+    func badgePermission() async -> ActivityAlertPermission { currentBadgePermission }
+    func setBadgeCount(_ count: Int) async throws { badgeUpdates.append(count) }
     func setEnabled(_ enabled: Bool) { self.enabled = enabled }
     func requestPermission() async throws -> ActivityAlertPermission {
         requestCount += 1

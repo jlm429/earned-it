@@ -32,6 +32,7 @@ final class HouseholdStore {
     private var processingActivityAlerts = false
     private var requestingActivityAlertPermission = false
     private(set) var activityAlertPermission: ActivityAlertPermission = .notDetermined
+    private(set) var activityBadgePermission: ActivityAlertPermission = .notDetermined
     private(set) var snapshot = HouseholdSnapshot()
     private(set) var session: DeviceSession
     private(set) var midnightTimerRevision = UUID()
@@ -547,7 +548,7 @@ final class HouseholdStore {
     func canNudge(_ chore: DailyChore) -> Bool {
         guard selectedMember?.role == .parent, !cloudIsReadOnly, !cloudAccessBlocked else { return false }
         return FamilyExtrasRules.nudgeTargets(for: chore).contains {
-            !FamilyExtrasRules.hasNudge(for: chore, memberID: $0.id, snapshot: snapshot)
+            !FamilyExtrasRules.hasNudge(for: chore, memberID: $0.id, snapshot: snapshot, now: clock())
         }
     }
 
@@ -558,9 +559,9 @@ final class HouseholdStore {
               let chore = dailyList().first(where: { $0.choreID == choreID && $0.occurrenceID == occurrenceID }),
               canNudge(chore) else { throw HouseholdError.nudgeUnavailable }
         for child in FamilyExtrasRules.nudgeTargets(for: chore) where
-            !FamilyExtrasRules.hasNudge(for: chore, memberID: child.id, snapshot: snapshot) {
+            !FamilyExtrasRules.hasNudge(for: chore, memberID: child.id, snapshot: snapshot, now: clock()) {
             try append(.choreNudge(ChoreNudge(scope: ChoreScope(chore), memberID: child.id,
-                                             recordedByMemberID: parent.id)))
+                                             recordedByMemberID: parent.id, sentAt: today)))
         }
     }
 
@@ -651,7 +652,7 @@ final class HouseholdStore {
 
     var unreadActivityCount: Int { activity.filter { !isActivityRead($0) }.count }
     var activityRevision: String {
-        "\(session.householdID?.uuidString ?? "")/\(selectedMember?.id.uuidString ?? "")/\(snapshot.orderedFacts.count)/\(day)/\(cloudAccessBlocked)/\(familyAccessLost)/\(activityAlertsEnabled)"
+        "\(session.householdID?.uuidString ?? "")/\(selectedMember?.id.uuidString ?? "")/\(snapshot.orderedFacts.count)/\(day)/\(cloudAccessBlocked)/\(familyAccessLost)/\(activityAlertsEnabled)/\(unreadActivityCount)"
     }
 
     private func activityKey(_ item: FamilyActivity, memberID: UUID) -> String {
@@ -673,6 +674,10 @@ final class HouseholdStore {
 
     var activityAlertsEnabled: Bool {
         session.activityAlertsEnabled ?? (activityAlertPermission == .allowed)
+    }
+
+    var activityAlertsNeedSettings: Bool {
+        activityAlertPermission == .denied || activityBadgePermission == .denied
     }
 
     func setActivityAlertsEnabled(_ enabled: Bool) async {
@@ -719,6 +724,7 @@ final class HouseholdStore {
             }
         }
         activityAlertPermission = await activityAlerts.permission()
+        activityBadgePermission = await activityAlerts.badgePermission()
         guard let member = selectedMember, !cloudAccessBlocked, !familyAccessLost,
               !hasPendingAccountDataReset, !requiresAppUpdate else {
             activityAlerts.setEnabled(false)
@@ -728,6 +734,9 @@ final class HouseholdStore {
         activityAlerts.setEnabled(activityAlertsEnabled && activityAlertPermission == .allowed)
         if !activityAlertsEnabled || activityAlertPermission != .allowed {
             await activityAlerts.clear()
+        } else if activityBadgePermission == .allowed {
+            do { try await activityAlerts.setBadgeCount(unreadActivityCount) }
+            catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
         }
         let expectedHouseholdID = session.householdID
         let unprocessed = activity.filter {
@@ -735,7 +744,8 @@ final class HouseholdStore {
         }
         guard !unprocessed.isEmpty else { return }
         let incoming = unprocessed.filter { item in
-            item.isAlertEligible && snapshot.orderedFacts.first(where: { $0.id == item.id })?.authorMemberID != member.id
+            item.isAlertEligible && !isActivityRead(item)
+                && snapshot.orderedFacts.first(where: { $0.id == item.id })?.authorMemberID != member.id
                 && (item.punt == nil || item.punt?.status == .pending)
         }
         do {
@@ -755,6 +765,10 @@ final class HouseholdStore {
                 + unprocessed.map { activityKey($0, memberID: member.id) }))
             try repository.commit(facts: [], session: updated)
             session = updated
+            if activityBadgePermission == .allowed {
+                try await activityAlerts.setBadgeCount(activityAlertsEnabled && activityAlertPermission == .allowed
+                                                       ? unreadActivityCount : 0)
+            }
         } catch {
             if !Task.isCancelled { errorMessage = error.localizedDescription }
         }
@@ -5444,6 +5458,11 @@ final class HouseholdStore {
                       snapshot.member(value.recordedByMemberID)?.role == .parent,
                       snapshot.member(value.memberID)?.role == .child, hasScope(value.scope)
                 else { throw HouseholdError.malformedData }
+                if let sentAt = value.sentAt, let calendar = snapshot.household?.calendar {
+                    guard sentAt >= value.scope.day.date(in: calendar),
+                          sentAt < value.scope.day.adding(days: 1, calendar: calendar).date(in: calendar)
+                    else { throw HouseholdError.malformedData }
+                }
             case .swapRequest(let value):
                 guard fact.authorMemberID == value.requesterID,
                       snapshot.member(value.requesterID)?.role == .child,

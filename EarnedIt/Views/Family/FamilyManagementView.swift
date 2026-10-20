@@ -69,6 +69,7 @@ struct FamilyManagementView: View {
                                         .accessibilityIdentifier("family-allowance-\(member.displayName.accessibilitySlug)")
                                 }
                             }
+                            WeeklyBonusNote(week: week).foregroundStyle(AppTheme.secondaryText)
                         }
                     }
                     .padding(.vertical, 10)

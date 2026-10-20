@@ -18,11 +18,11 @@ Earned It keeps everyday responsibilities clear. Families can organize chores, l
 - Assigns chores to every child, a particular child, or alternating children.
 - Lets children agree to swap today's alternating turn for a sibling's next scheduled turn.
 - Lets parents nudge children about unfinished chores.
-- Keeps chore requests and family updates in Activity, with optional alerts.
+- Keeps chore requests and family updates in Activity, with optional alerts and app icon badges.
 - Lets children mark their own work while parents manage the family.
 - Shows weekly progress and streaks.
 - Optionally tracks weekly allowance eligibility without moving money.
-- Records parent-awarded bonus allowance separately from weekly eligibility.
+- Supports parent-awarded [weekly bonuses](docs/family-polish.md#bonus-allowance).
 - Shares through iCloud, synchronizes automatically, and works offline.
 
 Parent and child homes stay on the bound person and do not expose Switch Profile. Store availability of the [next release](Configuration/Version.xcconfig) remains pending.

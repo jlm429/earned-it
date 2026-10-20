@@ -167,18 +167,34 @@ private struct ActivityAlertSettings: View {
                 .toggleStyle(.switch)
                 .frame(minHeight: 44)
                 .disabled(isUpdating)
-                .accessibilityHint("Controls system alerts on this device. Activity and swap requests stay available.")
+                .accessibilityHint("Controls notifications and the app icon badge when allowed in iOS Settings. Activity and swap requests stay available.")
                 .accessibilityIdentifier("activity-alerts-toggle")
                 Text(store.activityAlertsEnabled ? "Your preference: On" : "Your preference: Off")
                     .font(.subheadline).accessibilityIdentifier("activity-alerts-preference")
                 switch store.activityAlertPermission {
                 case .notDetermined:
-                    Label("iOS permission: Not requested", systemImage: "questionmark.circle")
+                    Label("iOS notifications: Not requested", systemImage: "questionmark.circle")
                         .font(.subheadline).accessibilityIdentifier("activity-alerts-undetermined")
                 case .denied:
-                    Label("iOS permission: Not allowed", systemImage: "bell.slash")
+                    Label("iOS notifications: Not allowed", systemImage: "bell.slash")
                         .font(.subheadline).accessibilityIdentifier("activity-alerts-denied")
-                    Text("Allow notifications in iOS Settings to receive alerts when your preference is on.")
+                case .allowed:
+                    Label("iOS notifications: Allowed", systemImage: "checkmark.circle")
+                        .font(.subheadline).accessibilityIdentifier("activity-alerts-allowed")
+                }
+                switch store.activityBadgePermission {
+                case .notDetermined:
+                    Label("App icon badge: Not requested", systemImage: "questionmark.circle")
+                        .font(.subheadline).accessibilityIdentifier("activity-badges-undetermined")
+                case .denied:
+                    Label("App icon badge: Not allowed", systemImage: "app.badge")
+                        .font(.subheadline).accessibilityIdentifier("activity-badges-denied")
+                case .allowed:
+                    Label("App icon badge: Allowed", systemImage: "checkmark.circle")
+                        .font(.subheadline).accessibilityIdentifier("activity-badges-allowed")
+                }
+                if store.activityAlertsNeedSettings {
+                    Text("Manage notifications and Badges in iOS Settings. Your Earned It alerts preference must also be on.")
                         .font(.footnote).foregroundStyle(AppTheme.secondaryText)
                     Button("Open iOS Settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -188,9 +204,6 @@ private struct ActivityAlertSettings: View {
                     .buttonStyle(.borderedProminent).frame(minHeight: 44)
                     .foregroundStyle(AppTheme.surface)
                     .accessibilityIdentifier("activity-alerts-settings")
-                case .allowed:
-                    Label("iOS permission: Allowed", systemImage: "checkmark.circle")
-                        .font(.subheadline).accessibilityIdentifier("activity-alerts-allowed")
                 }
                 Text("Chore requests and family updates stay in Activity, even when alerts are off or you're offline.")
                     .font(.footnote).foregroundStyle(AppTheme.secondaryText)

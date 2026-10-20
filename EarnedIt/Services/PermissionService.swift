@@ -14,7 +14,7 @@ enum HouseholdError: LocalizedError, Equatable {
         switch self {
         case .swapUnavailable: "That swap is no longer available. Refresh Activity to check your turns."
         case .invalidBonus: "Enter a bonus greater than zero and a note of up to 120 characters."
-        case .nudgeUnavailable: "There are no new reminders to send for this chore today."
+        case .nudgeUnavailable: "Nudges are available for unfinished work, with one minute between reminders."
         case .puntUnavailable: "That older turn request is no longer available. Refresh Activity to check today's responsibility."
         case .invalidAllowance: "Enter an amount from 0 to 999,999 using the currency’s decimal places, or leave it blank. Do not use grouping separators."
         case .completionLocked: "You can mark an item on its scheduled day and the following day in your family timezone. After that, check in with your parent for a correction."

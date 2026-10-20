@@ -47,6 +47,7 @@ struct AllowanceWeekCard: View {
             .font(.system(.title, design: .rounded, weight: .bold))
             .foregroundStyle(week.amount == nil ? AppTheme.secondaryText : Color.primary)
             .fixedSize(horizontal: false, vertical: true)
+            WeeklyBonusNote(week: week).foregroundStyle(AppTheme.secondaryText)
             if week.earned {
                 Label { Text("Earned It").foregroundStyle(.primary) } icon: {
                     Image(systemName: "checkmark.seal.fill").foregroundStyle(AppTheme.success)

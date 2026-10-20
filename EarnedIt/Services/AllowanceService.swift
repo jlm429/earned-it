@@ -69,8 +69,15 @@ struct AllowanceWeek: Identifiable, Equatable {
     let start: CivilDay
     let end: CivilDay
     let today: CivilDay
-    let amount: AllowanceAmount?
+    let baseAmount: AllowanceAmount?
+    let bonuses: [AllowanceAmount]
     let items: [WeeklyItem]
+    /// Keep currencies distinct. A bonus never revises the recurring allowance rate.
+    var amount: AllowanceAmount? {
+        guard let currency = baseAmount?.currencyCode ?? bonuses.first?.currencyCode else { return nil }
+        let bonus = bonuses.first { $0.currencyCode == currency }?.minorUnits ?? 0
+        return AllowanceAmount(minorUnits: (baseAmount?.minorUnits ?? 0) + bonus, currencyCode: currency)
+    }
     var id: String { "\(memberID)/\(start)" }
     var isFinished: Bool { end < today }
     var missing: [WeeklyItem] { items.filter { $0.day < today && !$0.state.isAccountedFor } }
@@ -116,8 +123,15 @@ enum AllowanceService {
                 $0.element.effectiveWeek == $1.element.effectiveWeek
                     ? $0.offset < $1.offset : $0.element.effectiveWeek < $1.element.effectiveWeek
             }?.element
-        return AllowanceWeek(memberID: childID, start: start, end: start.adding(days: 6, calendar: calendar),
-                             today: current, amount: revision?.amount, items: items)
+        let end = start.adding(days: 6, calendar: calendar)
+        let awards = FamilyExtrasRules.bonuses(memberID: childID, snapshot: snapshot)
+            .filter { start <= $0.award.day && $0.award.day <= end }
+        let bonuses = Dictionary(grouping: awards, by: { $0.award.amount.currencyCode })
+            .map { currency, awards in
+                AllowanceAmount(minorUnits: awards.reduce(0) { $0 + $1.award.amount.minorUnits }, currencyCode: currency)
+            }.sorted { $0.currencyCode < $1.currencyCode }
+        return AllowanceWeek(memberID: childID, start: start, end: end,
+                             today: current, baseAmount: revision?.amount, bonuses: bonuses, items: items)
     }
 
     /// Bounded projections, not materialized summary records or broad journal deletion.

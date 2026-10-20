@@ -15,7 +15,7 @@ struct BonusAllowanceEditor: View {
             Form {
                 Section {
                     Label("A bonus for \(child.displayName)", systemImage: "gift.fill").font(.headline)
-                    Text("Recognize an extra effort. This award is separate from regular weekly allowance.")
+                    Text("Recognize an extra effort. This bonus adds to this week only.")
                         .foregroundStyle(AppTheme.secondaryText)
                 }
                 Section("Bonus amount") {
@@ -24,7 +24,7 @@ struct BonusAllowanceEditor: View {
                     Picker("Currency", selection: $currencyCode) {
                         ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
                     }
-                    TextField("What are we celebrating? (optional)", text: $note, axis: .vertical)
+                    TextField("Reason for bonus (optional)", text: $note, axis: .vertical)
                         .accessibilityIdentifier("bonus-note")
                 }
                 Section {
@@ -83,11 +83,24 @@ struct BonusHistoryView: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-                Text("Extra awards, separate from weekly allowance. No payments are recorded.")
+                Text("Bonuses apply only to the week awarded. No payments are recorded.")
                     .font(.footnote).foregroundStyle(AppTheme.secondaryText)
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("bonus-history")
+        }
+    }
+}
+
+struct WeeklyBonusNote: View {
+    let week: AllowanceWeek
+
+    var body: some View {
+        ForEach(week.bonuses, id: \.currencyCode) { bonus in
+            Text("+\(bonus.formatted()) bonus \(week.isFinished ? "that week" : "this week")")
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("weekly-bonus-\(bonus.currencyCode)")
         }
     }
 }
