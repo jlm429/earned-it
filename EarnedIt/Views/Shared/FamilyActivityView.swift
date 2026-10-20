@@ -167,7 +167,7 @@ private struct ActivityAlertSettings: View {
                 .toggleStyle(.switch)
                 .frame(minHeight: 44)
                 .disabled(isUpdating)
-                .accessibilityHint("Controls system alerts on this device. Activity and swap requests stay available.")
+                .accessibilityHint("Controls notifications and the app icon badge on this device. Activity and swap requests stay available.")
                 .accessibilityIdentifier("activity-alerts-toggle")
                 Text(store.activityAlertsEnabled ? "Your preference: On" : "Your preference: Off")
                     .font(.subheadline).accessibilityIdentifier("activity-alerts-preference")

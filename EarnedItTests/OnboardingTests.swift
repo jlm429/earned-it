@@ -21,11 +21,16 @@ final class OnboardingTests: XCTestCase {
         XCTAssertFalse(store!.household!.isSetupComplete)
         try store!.saveMember(name: "Test Child", role: .child, avatar: .star)
         try store!.finishSetup()
+        XCTAssertTrue(store!.snapshot.invitations.isEmpty)
+        XCTAssertTrue(store!.snapshot.grants.isEmpty)
+        XCTAssertNil(store!.session.location)
         store = nil
         store = try HouseholdStore(repository: HouseholdRepository(url: url), clock: { clock.now }, automaticSync: false)
         XCTAssertTrue(store!.household!.isSetupComplete)
         XCTAssertEqual(store!.snapshot.members.count, 2)
         XCTAssertEqual(store!.selectedMember?.role, .parent)
+        XCTAssertTrue(store!.snapshot.invitations.isEmpty)
+        XCTAssertNil(store!.session.location)
     }
 
     func testNamesValidatedAndStableMemberIdentityOnRetry() throws {

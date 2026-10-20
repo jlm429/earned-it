@@ -161,7 +161,10 @@ struct ParentWeeklyProgressView: View {
     }
 
     private func allowanceLabel(_ week: AllowanceWeek) -> some View {
-        Text(week.amount?.formatted() ?? "Allowance not set")
-            .font(.subheadline.weight(.semibold)).foregroundStyle(AppTheme.secondaryText)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(week.amount?.formatted() ?? "Allowance not set")
+                .font(.subheadline.weight(.semibold))
+            WeeklyBonusNote(week: week)
+        }.foregroundStyle(AppTheme.secondaryText)
     }
 }

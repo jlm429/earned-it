@@ -4,6 +4,116 @@ import XCTest
 
 @MainActor
 final class FamilyPolishTests: XCTestCase {
+    func testNudgeCanBeSentAgainAfterShortCooldown() throws {
+        let family = try TestFamily()
+        let chore = try family.chore()
+        try family.store.nudge(choreID: chore)
+        XCTAssertThrowsError(try family.store.nudge(choreID: chore))
+        family.move(to: "2026-09-07T16:00:59Z")
+        XCTAssertFalse(family.store.canNudge(try XCTUnwrap(family.store.dailyList().first)))
+        family.move(to: "2026-09-07T16:01:00Z")
+        XCTAssertTrue(family.store.canNudge(try XCTUnwrap(family.store.dailyList().first)))
+        XCTAssertNoThrow(try family.store.nudge(choreID: chore))
+    }
+
+    func testLegacyNudgeRoundTripKeepsReceiptWithoutBlockingNewReminders() throws {
+        let family = try TestFamily()
+        let chore = try family.chore()
+        let row = try XCTUnwrap(family.store.dailyList().first)
+        let legacy = ChoreNudge(scope: ChoreScope(row), memberID: family.hanna.id,
+                                recordedByMemberID: family.parent.id)
+        let decoded = try JSONDecoder().decode(ChoreNudge.self, from: JSONEncoder().encode(legacy))
+        XCTAssertNil(decoded.sentAt)
+        XCTAssertEqual(decoded.activityID(householdID: family.store.household!.id),
+                       legacy.activityID(householdID: family.store.household!.id))
+        try family.repository.commit(facts: [fact(family, body: .choreNudge(decoded), author: family.parent.id)])
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        XCTAssertTrue(reopened.canNudge(row))
+        try reopened.nudge(choreID: chore)
+        try reopened.selectProfile(family.hanna.id)
+        XCTAssertEqual(reopened.activity.filter { $0.title == "A little reminder" }.count, 2)
+    }
+
+    func testSelectedWeekAmountIncludesOnlyItsBonuses() throws {
+        let family = try TestFamily()
+        try family.store.saveAllowance(memberID: family.hanna.id, text: "12", currencyCode: "USD")
+        let firstWeek = family.clock.now
+        try family.store.awardBonus(memberID: family.hanna.id, text: "3", currencyCode: "USD",
+                                   note: "Helping", awardID: UUID())
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).amount?.minorUnits, 1500)
+        family.move(to: "2026-09-14T04:00:00Z")
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id).amount?.minorUnits, 1200)
+        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id, containing: firstWeek).amount?.minorUnits, 1500)
+    }
+
+    func testBonusWeekBoundariesCurrenciesAndRepeatedProjectionSurviveRelaunch() throws {
+        let family = try TestFamily()
+        try family.store.saveAllowance(memberID: family.hanna.id, text: "12", currencyCode: "USD")
+        family.move(to: "2026-09-14T03:59:59Z")
+        let sunday = family.clock.now
+        let awardID = UUID()
+        for _ in 0..<2 {
+            try family.store.awardBonus(memberID: family.hanna.id, text: "3", currencyCode: "USD",
+                                       note: "Sunday", awardID: awardID)
+        }
+        family.move(to: "2026-09-14T04:00:00Z")
+        try family.store.awardBonus(memberID: family.hanna.id, text: "2", currencyCode: "USD", note: "Monday", awardID: UUID())
+        try family.store.awardBonus(memberID: family.hanna.id, text: "500", currencyCode: "JPY", note: "", awardID: UUID())
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now }, automaticSync: false)
+        for _ in 0..<3 {
+            let previous = reopened.allowanceWeek(for: family.hanna.id, containing: sunday)
+            XCTAssertEqual(previous.amount?.minorUnits, 1500)
+            XCTAssertEqual(previous.bonuses, [AllowanceAmount(minorUnits: 300, currencyCode: "USD")])
+            let current = reopened.allowanceWeek(for: family.hanna.id)
+            XCTAssertEqual(current.amount, AllowanceAmount(minorUnits: 1400, currencyCode: "USD"))
+            XCTAssertEqual(current.baseAmount?.minorUnits, 1200)
+            XCTAssertEqual(current.bonuses, [AllowanceAmount(minorUnits: 500, currencyCode: "JPY"),
+                                            AllowanceAmount(minorUnits: 200, currencyCode: "USD")])
+            XCTAssertEqual(reopened.allowanceWeek(for: family.alek.id).bonuses, [])
+        }
+        family.move(to: "2026-09-21T04:00:00Z")
+        reopened.refreshDate()
+        XCTAssertEqual(reopened.allowanceWeek(for: family.hanna.id).amount?.minorUnits, 1200)
+        XCTAssertTrue(reopened.allowanceWeek(for: family.hanna.id).bonuses.isEmpty)
+    }
+
+    func testNudgeBadgeReadCompletionRelaunchAndPreference() async throws {
+        let family = try TestFamily()
+        let chore = try family.chore()
+        let alerts = PolishAlerts()
+        let child = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+                                       automaticSync: false, activityAlerts: alerts)
+        try child.selectProfile(family.hanna.id)
+        await child.setActivityAlertsEnabled(true)
+        try family.store.nudge(choreID: chore)
+        let reopened = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+                                          automaticSync: false, activityAlerts: alerts)
+        await reopened.processActivityAlerts()
+        XCTAssertEqual(alerts.deliveries, 1)
+        XCTAssertEqual(alerts.badgeCount, reopened.unreadActivityCount)
+        for item in reopened.activity { try reopened.markActivityRead(item) }
+        await reopened.processActivityAlerts()
+        XCTAssertEqual(alerts.badgeCount, 0)
+        let again = try HouseholdStore(repository: family.repository, clock: { family.clock.now },
+                                       automaticSync: false, activityAlerts: alerts)
+        await again.processActivityAlerts()
+        XCTAssertEqual(alerts.badgeCount, 0)
+        XCTAssertEqual(alerts.deliveries, 1)
+        family.move(to: "2026-09-07T16:01:00Z")
+        again.refreshDate()
+        try again.selectProfile(family.parent.id)
+        try again.nudge(choreID: chore)
+        try again.selectProfile(family.hanna.id)
+        await again.processActivityAlerts()
+        XCTAssertEqual(alerts.deliveries, 2)
+        XCTAssertEqual(alerts.badgeCount, 1)
+        try again.setCompletion(choreID: chore, memberID: family.hanna.id, date: family.clock.now, state: .done)
+        await again.processActivityAlerts()
+        XCTAssertEqual(alerts.badgeCount, 0)
+        await again.setActivityAlertsEnabled(false)
+        XCTAssertEqual(alerts.badgeCount, 0)
+    }
+
     private func setupSwap(_ family: TestFamily) throws -> (UUID, UUID) {
         let chore = try family.chore(.alternating, ids: [family.hanna.id, family.alek.id])
         try family.store.selectProfile(family.hanna.id)
@@ -33,7 +143,11 @@ final class FamilyPolishTests: XCTestCase {
             try family.store.awardBonus(memberID: family.hanna.id, text: "2.05", currencyCode: "USD",
                                        note: "Helped a sibling", awardID: awardID)
         }
-        XCTAssertEqual(family.store.allowanceWeek(for: family.hanna.id), before)
+        let after = family.store.allowanceWeek(for: family.hanna.id)
+        XCTAssertEqual(after.amount?.minorUnits, 1439)
+        XCTAssertEqual(after.baseAmount, before.baseAmount)
+        XCTAssertEqual(after.items, before.items)
+        XCTAssertEqual(after.earned, before.earned)
         XCTAssertEqual(family.store.bonusHistory(for: family.hanna.id).map(\.award.amount.minorUnits), [205])
         family.move(to: "2026-09-21T16:00:00Z")
         try family.store.saveAllowance(memberID: family.hanna.id, text: "20", currencyCode: "USD")
@@ -761,6 +875,19 @@ final class FamilyPolishTests: XCTestCase {
         await reopened.processActivityAlerts()
         XCTAssertEqual(alerts.deliveries, baselineDeliveries + 1)
         XCTAssertEqual(reopened.activity.first { $0.title == "A little reminder" }?.id, reminderID)
+        XCTAssertEqual(alerts.badgeCount, reopened.unreadActivityCount)
+        family.move(to: "2026-09-14T16:01:00Z")
+        reopened.refreshDate()
+        try family.store.nudge(choreID: chore, occurrenceID: staleRow.occurrenceID)
+        try await family.store.synchronize()
+        try await reopened.synchronize()
+        await reopened.processActivityAlerts()
+        XCTAssertEqual(alerts.deliveries, baselineDeliveries + 2)
+        XCTAssertEqual(reopened.activity.filter { $0.title == "A little reminder" }.count, 2)
+        XCTAssertEqual(alerts.badgeCount, reopened.unreadActivityCount)
+        try await reopened.synchronize()
+        await reopened.processActivityAlerts()
+        XCTAssertEqual(alerts.deliveries, baselineDeliveries + 2)
         let base = reopened.snapshot.orderedFacts
         let row = try XCTUnwrap(reopened.dailyList().first { $0.choreID == chore })
         var removed = family.hanna
@@ -826,6 +953,8 @@ final class FamilyPolishTests: XCTestCase {
         XCTAssertEqual(hanna.snapshot, alek.snapshot)
         XCTAssertEqual(family.store.snapshot, alek.snapshot)
         XCTAssertEqual(alek.bonusHistory(for: family.alek.id).first?.award.amount.minorUnits, 350)
+        XCTAssertEqual(alek.allowanceWeek(for: family.alek.id).amount?.minorUnits, 350)
+        XCTAssertEqual(hanna.allowanceWeek(for: family.alek.id).amount, alek.allowanceWeek(for: family.alek.id).amount)
         XCTAssertFalse(hanna.activity.contains { $0.title == "A little reminder" })
         let fish = try family.store.saveChore(weekday: .monday, title: "Feed fish", mode: .particular,
             memberIDs: [family.hanna.id], schedulingMode: .asNeeded)
@@ -841,6 +970,7 @@ final class FamilyPolishTests: XCTestCase {
         XCTAssertEqual(reopened.swaps.first?.status, .accepted)
         family.move(to: "2026-09-14T16:00:00Z")
         reopened.refreshDate()
+        XCTAssertNil(reopened.allowanceWeek(for: family.alek.id).amount)
         XCTAssertEqual(reopened.dailyList().first { $0.choreID == chore }?.turnOwnerID, family.hanna.id)
         try reopened.setCompletion(choreID: chore, memberID: family.hanna.id, date: family.clock.now, state: .done)
         try await reopened.synchronize()
@@ -856,8 +986,10 @@ final class FamilyPolishTests: XCTestCase {
 private final class PolishAlerts: ActivityAlerting {
     var current: ActivityAlertPermission = .allowed
     var deliveries = 0
+    var badgeCount = 0
     func permission() async -> ActivityAlertPermission { current }
     func requestPermission() async throws -> ActivityAlertPermission { current }
     func deliver(identifier: String) async throws { deliveries += 1 }
-    func clear() async {}
+    func setBadgeCount(_ count: Int) async throws { badgeCount = count }
+    func clear() async { badgeCount = 0 }
 }

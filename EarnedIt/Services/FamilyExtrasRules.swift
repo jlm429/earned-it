@@ -33,6 +33,7 @@ struct ChoreNudge: Codable, Equatable {
     let scope: ChoreScope
     let memberID: UUID
     let recordedByMemberID: UUID
+    var sentAt: Date? = nil
 
     func matches(_ chore: DailyChore) -> Bool {
         scope.choreID == chore.choreID && scope.day == chore.day && scope.occurrenceID == chore.occurrenceID
@@ -40,7 +41,8 @@ struct ChoreNudge: Codable, Equatable {
 
     /// Independent offline reminders share a delivery receipt without sharing mutable facts.
     func activityID(householdID: UUID) -> UUID {
-        let key = "nudge/\(householdID)/\(scope.choreID)/\(scope.day)/\(scope.occurrenceID?.uuidString ?? "scheduled")/\(memberID)"
+        let window = sentAt.map { "/\(floor($0.timeIntervalSince1970 / FamilyExtrasRules.nudgeCooldown))" } ?? ""
+        let key = "nudge/\(householdID)/\(scope.choreID)/\(scope.day)/\(scope.occurrenceID?.uuidString ?? "scheduled")/\(memberID)\(window)"
         let bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
         return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
                            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
@@ -48,6 +50,7 @@ struct ChoreNudge: Codable, Equatable {
 }
 
 enum FamilyExtrasRules {
+    static let nudgeCooldown: TimeInterval = 60
     static func bonuses(memberID: UUID, snapshot: HouseholdSnapshot) -> [RecordedBonus] {
         snapshot.orderedFacts.reversed().compactMap { fact in
             guard case .bonusAward(let award) = fact.body, award.memberID == memberID,
@@ -63,10 +66,13 @@ enum FamilyExtrasRules {
         return chore.remainingMembers.filter { !chore.isExcused($0.id) }
     }
 
-    static func hasNudge(for chore: DailyChore, memberID: UUID, snapshot: HouseholdSnapshot) -> Bool {
+    static func hasNudge(for chore: DailyChore, memberID: UUID, snapshot: HouseholdSnapshot, now: Date) -> Bool {
         snapshot.orderedFacts.contains { fact in
-            guard case .choreNudge(let value) = fact.body else { return false }
-            return value.matches(chore) && value.memberID == memberID
+            guard case .choreNudge(let value) = fact.body, value.matches(chore), value.memberID == memberID,
+                  fact.authorMemberID == value.recordedByMemberID,
+                  snapshot.member(value.recordedByMemberID)?.role == .parent,
+                  let sentAt = value.sentAt else { return false }
+            return now.timeIntervalSince(sentAt) < nudgeCooldown
         }
     }
 }

@@ -12,11 +12,13 @@ protocol ActivityAlerting {
     func permission() async -> ActivityAlertPermission
     func requestPermission() async throws -> ActivityAlertPermission
     func deliver(identifier: String) async throws
+    func setBadgeCount(_ count: Int) async throws
     func clear() async
 }
 
 extension ActivityAlerting {
     func setEnabled(_ enabled: Bool) {}
+    func setBadgeCount(_ count: Int) async throws {}
 }
 
 @MainActor
@@ -55,6 +57,7 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
     static let shared = AppleActivityAlerts()
     private let center = UNUserNotificationCenter.current()
     @MainActor private var isEnabled = false
+    @MainActor private var badgeCount = 0
 
     @MainActor
     func setEnabled(_ enabled: Bool) { isEnabled = enabled }
@@ -75,22 +78,29 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
 
     @MainActor
     func requestPermission() async throws -> ActivityAlertPermission {
-        _ = try await center.requestAuthorization(options: [.alert, .sound])
+        _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
         return await permission()
     }
 
     @MainActor
     func deliver(identifier: String) async throws {
         guard await permission() == .allowed, isEnabled else { return }
-        try await center.add(Self.request(identifier: identifier))
+        try await center.add(Self.request(identifier: identifier, badgeCount: badgeCount))
     }
 
-    static func request(identifier: String) -> UNNotificationRequest {
+    @MainActor
+    func setBadgeCount(_ count: Int) async throws {
+        badgeCount = isEnabled ? max(0, count) : 0
+        try await center.setBadgeCount(badgeCount)
+    }
+
+    static func request(identifier: String, badgeCount: Int = 0) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = "Earned It"
         content.body = "New family activity. Open Earned It to review your chores and requests."
         content.sound = .default
         content.threadIdentifier = "family-activity"
+        content.badge = NSNumber(value: max(0, badgeCount))
         return UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
     }
 
@@ -98,12 +108,14 @@ final class AppleActivityAlerts: NSObject, ActivityAlerting, UNUserNotificationC
     func clear() async {
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
+        badgeCount = 0
+        try? await center.setBadgeCount(0)
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         Task { @MainActor in
-            completionHandler(isEnabled ? [.banner, .list, .sound] : [])
+            completionHandler(isEnabled ? [.banner, .list, .sound, .badge] : [])
         }
     }
 

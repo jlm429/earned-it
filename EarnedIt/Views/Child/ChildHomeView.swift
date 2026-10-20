@@ -102,6 +102,7 @@ struct ChildHomeView: View {
                 .foregroundStyle(AppTheme.heroText).fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel(current.amount?.weeklyAllowanceAccessibilityLabel ?? "Weekly allowance not set")
                 .accessibilityIdentifier("child-weekly-allowance-value")
+            WeeklyBonusNote(week: current).foregroundStyle(AppTheme.heroSecondary)
             Text(current.amount == nil ? "Allowance not set" : "Weekly allowance")
                 .font(.subheadline).foregroundStyle(AppTheme.heroSecondary)
         }

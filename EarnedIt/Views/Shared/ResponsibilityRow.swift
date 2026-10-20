@@ -40,19 +40,21 @@ struct ResponsibilityRow: View {
                 }
                 SwapControls(chore: chore, actor: actor)
                 if actor.role == .parent && !FamilyExtrasRules.nudgeTargets(for: chore).isEmpty {
-                    Button {
-                        store.perform {
-                            try store.nudge(choreID: chore.choreID, occurrenceID: chore.occurrenceID)
-                            feedback += 1
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Button {
+                            store.perform {
+                                try store.nudge(choreID: chore.choreID, occurrenceID: chore.occurrenceID)
+                                feedback += 1
+                            }
+                        } label: {
+                            Label { Text(store.canNudge(chore) ? "Nudge" : "Nudge again soon")
+                                .fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "bell.badge") }
                         }
-                    } label: {
-                        Label { Text(store.canNudge(chore) ? "Nudge" : "Reminder saved")
-                            .fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "bell.badge") }
+                        .frame(minHeight: 44).buttonStyle(.bordered)
+                        .disabled(!store.canNudge(chore))
+                        .accessibilityHint("Reminds children with unfinished work through Activity and enabled device notifications after sync. You can nudge again after one minute.")
+                        .accessibilityIdentifier("nudge-\(chore.configuration.title.accessibilitySlug)")
                     }
-                    .frame(minHeight: 44).buttonStyle(.bordered)
-                    .disabled(!store.canNudge(chore))
-                    .accessibilityHint("Saves a reminder for children with unfinished work. Alerts depend on their notification permission and next sync.")
-                    .accessibilityIdentifier("nudge-\(chore.configuration.title.accessibilitySlug)")
                 }
                 if chore.eligibleMembers.isEmpty {
                     Text("No eligible children for this date.").font(.subheadline).foregroundStyle(AppTheme.secondaryText)

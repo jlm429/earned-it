@@ -26,11 +26,12 @@ final class PuntNotificationTests: XCTestCase {
         XCTAssertEqual(subscription.notificationInfo?.shouldSendContentAvailable, true)
         XCTAssertNil(subscription.notificationInfo?.alertBody)
         XCTAssertNil(subscription.notificationInfo?.desiredKeys)
-        let notification = AppleActivityAlerts.request(identifier: "opaque-activity-id")
+        let notification = AppleActivityAlerts.request(identifier: "opaque-activity-id", badgeCount: 3)
         XCTAssertNil(notification.trigger)
         XCTAssertEqual(notification.content.title, "Earned It")
         XCTAssertEqual(notification.content.body, "New family activity. Open Earned It to review your chores and requests.")
         XCTAssertTrue(notification.content.userInfo.isEmpty)
+        XCTAssertEqual(notification.content.badge, 3)
     }
     private func request(_ family: TestFamily, chore: UUID, recipient: FamilyMember) throws -> UUID {
         let row = try XCTUnwrap(family.store.dailyList().first { $0.choreID == chore && $0.isActionableOccurrence })
@@ -452,7 +453,7 @@ final class PuntNotificationTests: XCTestCase {
         await reopened.setActivityAlertsEnabled(true)
         XCTAssertTrue(reopened.activityAlertsEnabled)
         XCTAssertTrue(alerts.delivered.isEmpty)
-        XCTAssertEqual(alerts.requestCount, 0, "Allowed authorization does not request permission again")
+        XCTAssertEqual(alerts.requestCount, 1, "Explicit re-enabling requests the full alert and badge options")
         try reopened.selectProfile(family.parent.id)
         _ = try reopened.saveChore(weekday: .monday, title: "On arrival", mode: .all, memberIDs: [])
         try reopened.selectProfile(family.hanna.id)

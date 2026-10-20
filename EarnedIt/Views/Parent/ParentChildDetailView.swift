@@ -70,9 +70,9 @@ struct ParentChildDetailView: View {
                 if store.snapshot.isActive(child, on: store.day) {
                     SectionCard {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Current weekly allowance").font(.headline)
-                            Text(store.allowanceWeek(for: child.id).amount?.formatted() ?? "Not set")
-                                .accessibilityLabel(store.allowanceWeek(for: child.id).amount?.weeklyAllowanceAccessibilityLabel ?? "Weekly allowance not set")
+                            Text("Base weekly allowance").font(.headline)
+                            Text(store.allowanceWeek(for: child.id).baseAmount?.formatted() ?? "Not set")
+                                .accessibilityLabel(store.allowanceWeek(for: child.id).baseAmount?.weeklyAllowanceAccessibilityLabel ?? "Weekly allowance not set")
                                 .accessibilityIdentifier("current-weekly-allowance-value")
                             Button("Edit Weekly Allowance") { editingAllowance = true }
                                 .buttonStyle(.bordered).controlSize(.large)
@@ -107,7 +107,7 @@ struct ParentChildDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $awardingBonus) { BonusAllowanceEditor(child: child) }
         .sheet(isPresented: $editingAllowance) {
-            AllowanceEditorView(child: child, amount: store.allowanceWeek(for: child.id).amount)
+            AllowanceEditorView(child: child, amount: store.allowanceWeek(for: child.id).baseAmount)
         }
         .accessibilityIdentifier("parent-child-detail")
     }
