@@ -8,7 +8,7 @@ User-visible changes to Earned It.
 
 - Parents can swipe weekly progress back through six previous weeks, return to the current week, and open the selected week’s details. Historical counts and allowance amounts use the retained dated journal.
 - Refreshed parent and child Today screens, onboarding, family management, settings, and history with adaptive cards, progress rings, and completion feedback. See the [design and QA report](docs/premium-redesign.md).
-- Activity now has a labeled notification switch, separate preference and iOS permission states, and an Open iOS Settings button when permission is denied. Turning alerts off clears system alerts while retaining Activity and turn requests.
+- Activity now has a labeled notification switch and app icon badges. See the [Activity guide](docs/punt-notifications.md#communication-coverage-and-privacy) for preference and permission controls.
 - Replaced one-way punts and their statistics with child-approved Swap Turns, added parent bonus awards and manual nudges, and brought child connection prompts into setup. See the [family progress and turn exchange guide](docs/family-polish.md) for behavior and the [Activity guide](docs/punt-notifications.md#communication-coverage-and-privacy) for alert privacy and delivery limits.
 - As Needed chores can be withdrawn without credit or turn advancement and made available repeatedly on the same day. Each occurrence keeps distinct history and allowance credit while streaks remain day-based.
 - Alternating As Needed completion advances exactly once per occurrence, withdrawal keeps the turn, and Skip consumes one turn without creating credit. Concurrent and offline controls converge through occurrence IDs and expected control heads.
